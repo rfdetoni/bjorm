@@ -10,7 +10,15 @@ public interface EntityMapper<T> extends RowMapper<T> {
     default void bindUpsert(PreparedStatement ps,T entity) throws SQLException { bindInsert(ps, entity); }
     /** Runs before INSERT and UPSERT; generated POJO mappers can assign UUID v7 here. */
     default void prepareInsert(T entity) {}
+    /** Return the insertable instance (records are copied; mutable POJOs are filled in-place). */
+    default T materializeInsert(T entity) { prepareInsert(entity); return entity; }
+    /** Reconstitute immutable records when the database returns an identity column. */
+    default T withGeneratedId(ResultSet keys, T entity) throws SQLException { acceptGeneratedId(keys, entity); return entity; }
+    /** Immutable entity instances need a return value when their key must be generated. */
+    default boolean immutable() { return false; }
     default java.util.List<ChildRelation<T>> children() { return java.util.List.of(); }
+    /** Replace immutable record's @Children collection with persisted child copies. */
+    default T withChildren(T entity,String relation,java.util.List<?> children) { return entity; }
     String selectSql();
     String deleteSql();
     String selectAllSql();

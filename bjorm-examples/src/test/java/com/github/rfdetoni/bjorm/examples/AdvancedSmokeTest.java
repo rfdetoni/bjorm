@@ -93,7 +93,7 @@ public final class AdvancedSmokeTest {
     }
     public static void main(String[] args){
         JdbcSpy spy=new JdbcSpy();
-        Bjorm db=Bjorm.open(spy.dataSource(),Product_BjormMapper.INSTANCE,Identity_BjormMapper.INSTANCE,User_BjormMapper.INSTANCE,JsonDocument_BjormMapper.INSTANCE);
+        Bjorm db=Bjorm.open(spy.dataSource(),Product_BjormMapper.INSTANCE,Identity_BjormMapper.INSTANCE,User_BjormMapper.INSTANCE,JsonDocument_BjormMapper.INSTANCE,AutoUuidRecord_BjormMapper.INSTANCE,AutoStringRecord_BjormMapper.INSTANCE,AutoLongRecord_BjormMapper.INSTANCE,AutoIntRecord_BjormMapper.INSTANCE,AutoUuidPojo_BjormMapper.INSTANCE,AutoParentRecord_BjormMapper.INSTANCE,AutoChildRecord_BjormMapper.INSTANCE);
         Bjorm discovered=Bjorm.open(spy.dataSource());
         check(discovered.find(Product.class,spy.id)!=null,"generated mapper service discovery");
         Product p=new Product();p.setId(spy.id);p.setName("Pencil");p.setPrice(new BigDecimal("12.50"));p.setStatus(Status.ACTIVE);
@@ -150,13 +150,36 @@ public final class AdvancedSmokeTest {
         } catch(IllegalArgumentException expected) {
             check(expected.getMessage().contains("cartesian"),"cartesian join rejected");
         }
+        AutoUuidPojo freshPojo=new AutoUuidPojo();freshPojo.setLabel("auto-pojo");db.insert(freshPojo);
+        check(freshPojo.getId()!=null && freshPojo.getId().version()==7,"@Id UUID POJO generated without flags");
+        AutoUuidRecord record=new AutoUuidRecord(null,"auto-record");
+        try {db.insert(record);throw new AssertionError("immutable @Id requires returning API");}
+        catch(IllegalArgumentException expected){check(expected.getMessage().contains("insertReturning"),"record failure message");}
+        AutoUuidRecord persisted=db.insertReturning(record);
+        check(record.id()==null && persisted.id()!=null && persisted.id().version()==7,"record copy generated automatically");
+        check(persisted.insert(db).id().equals(persisted.id()),"ActiveRecord returns ID-bearing immutable record");
+        check(db.upsertReturning(new AutoUuidRecord(null,"upsert")).id()!=null,"record upsert generates id");
+        var batch=db.batchInsertReturning(List.of(new AutoUuidRecord(null,"B1"),new AutoUuidRecord(null,"B2")));
+        check(batch.size()==2 && batch.get(0).id().version()==7 && !batch.get(0).id().equals(batch.get(1).id()),"record batch generates unique IDs");
+        String textId=db.insertReturning(new AutoStringRecord(null,"string")).id();
+        check(java.util.UUID.fromString(textId).version()==7,"String @Id uses UUID v7 text");
+        AutoLongRecord numeric=db.insertReturning(new AutoLongRecord(null,"long"));
+        check(numeric.id()==42L,"Long record receives generated DB key");
+        AutoIntRecord integer=db.insertReturning(new AutoIntRecord(0,"int"));
+        check(integer.id()==42,"int record receives generated DB key");
+        check(db.batchInsertReturning(List.of(new AutoLongRecord(null,"L1"))).getFirst().id()==42L,"numeric record batch identities");
+        var nested=db.insertReturning(new AutoParentRecord(null,"record-parent",
+            List.of(new AutoChildRecord(null,null,"record-child"))));
+        check(nested.id().version()==7 && nested.children().getFirst().id().version()==7 &&
+            nested.children().getFirst().parentId().equals(nested.id()),"immutable graph parent and child IDs/FK assigned");
         Identity identity=new Identity();identity.setLabel("ok");db.insert(identity);
         check(identity.getId()==42L,"JDBC generated key populated");
         check(spy.last().sql().equals("INSERT INTO identities (label) VALUES (?)"),"generated ID omitted from INSERT");
         int before=spy.connections.get();
+        int previousCommits=spy.commits.get();
         db.tx(tx->{tx.batchInsert(List.of(p,p));tx.batchUpdate(List.of(p,p));new ProductQueries_Bjorm(tx).rename("hi",spy.id);});
         check(spy.connections.get()==before+1,"batch and generated repo share transaction connection");
-        check(spy.commits.get()==1,"batch committed");
+        check(spy.commits.get()==previousCommits+1,"batch committed");
         before=spy.calls.size();
         db.forEach(Product.class, Product_.status.eq(Status.ACTIVE), item->check(item.getName().equals("Pencil"),"forEach row"));
         check(spy.calls.size()==before+1,"forEach executed single query");

@@ -49,6 +49,9 @@ public final class EntityProcessor extends AbstractProcessor {
         return true;
     }
     private record Col(String property,String column,String type,String read,String write,boolean id,boolean version,boolean generated,boolean json,boolean uuidV7) {}
+    private static boolean isNumericId(String type) {return Set.of("int","long","java.lang.Integer","java.lang.Long").contains(type);}
+    private static boolean autoUuid(Id id,String type) {return id!=null && !id.assigned() && (id.uuidV7() || ( !id.generated() && Set.of("java.util.UUID","java.lang.String").contains(type)));}
+    private static boolean databaseId(Id id,String type) {return id!=null && !id.assigned() && (id.generated() || isNumericId(type));}
     private record Relation(String property,String mappedBy,String childType,String getter,String childGetter,String childSetter,boolean childRecord) {}
     private void entity(TypeElement entity) throws IOException {
         if(!generated.add(entity.getQualifiedName()+"#entity"))return;
@@ -64,7 +67,7 @@ public final class EntityProcessor extends AbstractProcessor {
                 String prop=c.getSimpleName().toString();
                 if(c.getAnnotation(Children.class)!=null) {relations.add(relation(c,"value."+prop+"()"));continue;}
                 Id idAnn=c.getAnnotation(Id.class);
-                cols.add(new Col(prop,colName(c,prop),c.asType().toString(),"value."+prop+"()","",idAnn!=null,c.getAnnotation(Version.class)!=null,idAnn!=null&&idAnn.generated(),c.getAnnotation(Json.class)!=null,idAnn!=null&&idAnn.uuidV7()));
+                cols.add(new Col(prop,colName(c,prop),c.asType().toString(),"value."+prop+"()","",idAnn!=null,c.getAnnotation(Version.class)!=null,databaseId(idAnn,c.asType().toString()),c.getAnnotation(Json.class)!=null,autoUuid(idAnn,c.asType().toString())));
             }
         } else {
             boolean constructor=false;
@@ -81,10 +84,16 @@ public final class EntityProcessor extends AbstractProcessor {
                 String setter="set"+suff;
                 if(getter==null||!hasSetter(entity,setter,type)) {error(el,"POJO needs public getter and setter for "+prop);return;}
                 Id idAnn=el.getAnnotation(Id.class);
-                cols.add(new Col(prop,colName(el,prop),type,"value."+getter+"()","value."+setter,cAnnotated(el,Id.class),cAnnotated(el,Version.class),idAnn!=null&&idAnn.generated(),el.getAnnotation(Json.class)!=null,idAnn!=null&&idAnn.uuidV7()));
+                cols.add(new Col(prop,colName(el,prop),type,"value."+getter+"()","value."+setter,cAnnotated(el,Id.class),cAnnotated(el,Version.class),databaseId(idAnn,type),el.getAnnotation(Json.class)!=null,autoUuid(idAnn,type)));
             }
         }
         if(cols.isEmpty()){error(entity,"@Table requires mapped properties");return;}
+        for(Element el:record ? entity.getRecordComponents() : entity.getEnclosedElements()) {
+            Id ann=el.getAnnotation(Id.class);
+            if(ann!=null && ann.assigned() && (ann.generated()||ann.uuidV7())) {
+                error(el,"@Id assigned=true cannot be combined with generated=true or uuidV7=true");return;
+            }
+        }
         int id=-1,ver=-1;
         Set<String> seen=new HashSet<>();
         for(int i=0;i<cols.size();i++){
@@ -92,8 +101,8 @@ public final class EntityProcessor extends AbstractProcessor {
             if(!identifier(c.column())||!seen.add(c.column())){error(entity,"Invalid/duplicate column: "+c.column());return;}
             if(!supported(c.type())) {error(entity,"Unsupported JDBC property: "+c.type());return;}
             if(c.json() && (!c.type().equals("java.lang.String") || c.id() || c.version())){error(entity,"@Json requires a non-ID String column");return;}
-            if(c.generated() && (!c.id() || record)){error(entity,"Generated IDs require @Id on a mutable POJO");return;}
-            if(c.uuidV7() && (!c.id()||record||c.generated()||!c.type().equals("java.util.UUID"))){error(entity,"@Id(uuidV7=true) needs a mutable UUID field without generated=true");return;}
+            if(c.generated() && (!c.id() || !isNumericId(c.type()))){error(entity,"Database-generated IDs require numeric @Id (int/long/Integer/Long)");return;}
+            if(c.uuidV7() && (!c.id()||c.generated()||!Set.of("java.util.UUID","java.lang.String").contains(c.type()))){error(entity,"UUID v7 requires a UUID or String @Id");return;}
             if(c.id()){if(id>=0){error(entity,"Exactly one @Id required");return;}id=i;}
             if(c.version()){if(ver>=0||c.id()||!Set.of("int","long","java.lang.Integer","java.lang.Long").contains(c.type())){error(entity,"@Version must annotate one integer/long non-id field");return;}ver=i;}
         }
@@ -185,10 +194,23 @@ public final class EntityProcessor extends AbstractProcessor {
             w.write("public String qualifiedColumns(String alias){return "+String.join("+\", \"+",cols.stream().map(c->"alias+\"."+c.column()+"\"").toList())+";}\n");
             w.write("public boolean optimisticLocking(){return "+(version>=0)+";}\n");
             w.write("public boolean generatedId(){return "+cols.get(id).generated()+";}\n");
+            w.write("public boolean immutable(){return "+record+";}\n");
             if(upsert!=null)w.write("public String upsertSql(){return \""+upsert+"\";}\n");
-            if(cols.get(id).uuidV7())w.write("public void prepareInsert("+clazz+" value){if("+cols.get(id).read()+"==null)"+cols.get(id).write()+"(com.github.rfdetoni.bjorm.UuidV7.next());}\n");
+            if(cols.get(id).uuidV7()) {
+                String expression=cols.get(id).type().equals("java.lang.String")?"com.github.rfdetoni.bjorm.UuidV7.next().toString()":"com.github.rfdetoni.bjorm.UuidV7.next()";
+                if(record)w.write("public "+clazz+" materializeInsert("+clazz+" value){if(value."+cols.get(id).property()+"()!=null)return value;return new "+clazz+"("+recordArguments(entity,cols.get(id).property(),expression)+");}\n");
+                else w.write("public void prepareInsert("+clazz+" value){if("+cols.get(id).read()+"==null)"+cols.get(id).write()+"("+expression+");}\n");
+            }
             if(!relations.isEmpty()) {
                 w.write("public java.util.List<com.github.rfdetoni.bjorm.ChildRelation<"+clazz+">> children(){return RELATIONS;}\n");
+                w.write("public "+clazz+" withChildren("+clazz+" value,String relation,java.util.List<?> children){switch(relation){\n");
+                for(Relation rr:relations){
+                    if(record) w.write("case \""+rr.property()+"\":return new "+clazz+"("+recordArguments(entity,rr.property(),"(java.util.List<"+rr.childType()+">)(java.util.List<?>)children")+");\n");
+                    else if(hasSetter(entity,"set"+Character.toUpperCase(rr.property().charAt(0))+rr.property().substring(1),"java.util.List<"+rr.childType()+">") || hasSetter(entity,"set"+Character.toUpperCase(rr.property().charAt(0))+rr.property().substring(1),"java.util.Collection<"+rr.childType()+">")) {
+                        w.write("case \""+rr.property()+"\":value.set"+Character.toUpperCase(rr.property().charAt(0))+rr.property().substring(1)+"((java.util.List<"+rr.childType()+">)(java.util.List<?>)children);break;\n");
+                    }
+                }
+                w.write("default:break;}return value;}\n");
                 w.write("private static final java.util.List<com.github.rfdetoni.bjorm.ChildRelation<"+clazz+">> RELATIONS=java.util.List.of(\n");
                 for(int ri=0;ri<relations.size();ri++) {
                     Relation r=relations.get(ri);
@@ -197,17 +219,25 @@ public final class EntityProcessor extends AbstractProcessor {
                     w.write((ri>0?",\n":"")+"new com.github.rfdetoni.bjorm.ChildRelation<"+clazz+">(){\n");
                     w.write("public Class<?> childType(){return "+r.childType()+".class;}\n");
                     w.write("public String mappedBy(){return \""+r.mappedBy()+"\";}\n");
+                    w.write("public String property(){return \""+r.property()+"\";}\n");
                     w.write("public Iterable<?> children("+clazz+" value){return "+r.getter()+";}\n");
                     w.write("public void attach(Object id,Object child){"+r.childType()+" value=("+r.childType()+")child;\n");
                     w.write("if("+getForeign+"!=null && !java.util.Objects.equals("+getForeign+",id))throw new IllegalArgumentException(\"Foreign key conflicts with parent ID\");\n");
-                    if(r.childRecord())w.write("if(!java.util.Objects.equals("+getForeign+",id))throw new IllegalArgumentException(\"Record child must declare the parent ID\");\n");
+                    if(r.childRecord())w.write("if(!java.util.Objects.equals("+getForeign+",id))throw new IllegalArgumentException(\"Record child requires attached()\");\n");
                     else w.write("value."+r.childSetter()+"(("+r.childGetter()+")id);\n");
-                    w.write("}\n}");
+                    w.write("}\n");
+                    if(r.childRecord())w.write("public Object attached(Object id,Object child){"+r.childType()+" value=("+r.childType()+")child;"+
+                        "if(value."+r.mappedBy()+"()!=null && !value."+r.mappedBy()+"().equals(id))throw new IllegalArgumentException(\"Foreign key conflicts with parent ID\");"+
+                        "return new "+r.childType()+"("+recordArguments(child,r.mappedBy(),"("+r.childGetter()+")id")+");}\n");
+                    w.write("}");
                 }
                 w.write(");\n");
             }
 
-            if(cols.get(id).generated())w.write("public void acceptGeneratedId(java.sql.ResultSet rs,"+clazz+" value) throws java.sql.SQLException {"+cols.get(id).write()+"("+reader(1,cols.get(id).type())+");}\n");
+            if(cols.get(id).generated()) {
+                if(record)w.write("public "+clazz+" withGeneratedId(java.sql.ResultSet rs,"+clazz+" value) throws java.sql.SQLException {return new "+clazz+"("+recordArguments(entity,cols.get(id).property(),reader(1,cols.get(id).type()))+");}\n");
+                else w.write("public void acceptGeneratedId(java.sql.ResultSet rs,"+clazz+" value) throws java.sql.SQLException {"+cols.get(id).write()+"("+reader(1,cols.get(id).type())+");}\n");
+            }
             for(var e:List.of(new String[]{"insertSql",insert},new String[]{"updateSql",update},new String[]{"deleteSql",delete},new String[]{"selectSql",select+" WHERE "+cols.get(id).column()+" = ?"},new String[]{"selectAllSql",select}))
                 w.write("public String "+e[0]+"(){return \""+e[1]+"\";}\n");
             w.write("public void bindInsert(java.sql.PreparedStatement ps,"+clazz+" value) throws java.sql.SQLException {\n");
@@ -222,6 +252,7 @@ public final class EntityProcessor extends AbstractProcessor {
             if(version>=0)w.write(setter(2,cols.get(version).read(),cols.get(version).type())+"\n");
             w.write("}\npublic void bindId(java.sql.PreparedStatement ps,int index,Object id) throws java.sql.SQLException {ps.setObject(index,id);}\n");
             w.write("public Object id("+clazz+" value){return "+cols.get(id).read()+";}\n");
+            w.write("public String idProperty(){return \""+cols.get(id).property()+"\";}\n");
             w.write("public "+clazz+" read(java.sql.ResultSet rs) throws java.sql.SQLException {\n");
             if(record){
                 List<String> args=new ArrayList<>();int offset=1;
@@ -234,6 +265,14 @@ public final class EntityProcessor extends AbstractProcessor {
             else {w.write(clazz+" value = new "+clazz+"();\n");for(int i=0;i<cols.size();i++)w.write(cols.get(i).write()+"("+reader(i+1,cols.get(i).type())+");\n");w.write("return value;\n");}
             w.write("}\n}\n");
         }
+    }
+    private String recordArguments(TypeElement entity,String replacementProperty,String replacement) {
+        List<String> args=new ArrayList<>();
+        for(RecordComponentElement c:entity.getRecordComponents()) {
+            String name=c.getSimpleName().toString();
+            args.add(name.equals(replacementProperty)?replacement:"value."+name+"()");
+        }
+        return String.join(", ",args);
     }
     private void generatePaths(TypeElement entity,List<Col> cols)throws IOException {
         String clazz=entity.getSimpleName().toString();

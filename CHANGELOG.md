@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.8-SNAPSHOT
+
+- Infer automatic `@Id` strategies from Java type: UUID v7 for UUID/String and JDBC identity for int/long and wrappers. Use `assigned=true` to opt out.
+- Add `insertReturning`, `upsertReturning` and `batchInsertReturning` to return immutable records with generated IDs; POJO IDs are assigned in-place.
+- Generate record constructors and immutable child foreign-key wiring at compile time, including nested parent/child graphs.
+- Add POJO, record, batch, identity and immutable graph regression checks, plus disposable PostgreSQL integration coverage.
+
 ## 0.3.7-SNAPSHOT
 
 - Add optional Spring Data `Pageable`, `Page<T>` and count-free `Slice<T>` integration via `BjormPages`.

@@ -1,6 +1,6 @@
 # BJORM — Bare Metal Java ORM
 
-**Experimental 0.3.7-SNAPSHOT** — a minimal, compile-time-assisted relational mapper for Java 25. Zero Spring/JPA/Hibernate dependencies in the core; SQL and JDBC remain visible and under application control.
+**Experimental 0.3.8-SNAPSHOT** — a minimal, compile-time-assisted relational mapper for Java 25. Zero Spring/JPA/Hibernate dependencies in the core; SQL and JDBC remain visible and under application control.
 
 > Early-stage source implementation. **Not production-ready**. It is not published to Maven Central. See [architecture and acceptance status](ARCHITECTURE.md).
 
@@ -133,7 +133,12 @@ The processor converts named parameters into JDBC `?` and generates positional b
 ## Performance-oriented features
 
 - POJOs and public records; String, UUID, primitive/wrapper numeric/boolean, BigDecimal, supported `java.time` types and Java enums.
-- `@Id(generated=true)` on mutable POJOs uses JDBC `RETURN_GENERATED_KEYS` (batch generated IDs deliberately not supported).
+- `@Id` on `UUID` automatically creates UUID v7, and `@Id` on `String` creates its RFC UUID v7 text representation when null.
+- `@Id` on `int`, `long`, `Integer` or `Long` uses the database identity column (`GENERATED ... AS IDENTITY`) and JDBC generated keys. Identity inserts omit the ID column.
+- Explicit caller-managed identifiers use `@Id(assigned=true)`; `@Id(generated=true)` and `@Id(uuidV7=true)` remain available for explicit intent.
+- For immutable Java `record`s, use `db.insertReturning(record)` / `db.upsertReturning(record)` / `db.batchInsertReturning(records)` to receive new instances with generated IDs. The void `insert(record)` intentionally refuses a missing ID.
+- For POJOs, `db.insert(pojo)` assigns client-generated IDs via the public setter. `batchInsert(pojos)` also fills automatic client-side IDs. Batch inserts for database-generated numeric IDs use `batchInsertReturning` (individual inserts for generated keys).
+- All ID generation and record reconstruction are emitted at compile time; no entity reflection on the critical JDBC path.
 - `@Version` on int/long columns uses `UPDATE ... SET version = version+1 WHERE id=? AND version=?` and conditional delete. **Re-read the entity after successful updates:** versions are not mutated automatically, especially on records.
 - `db.batchInsert` and `batchUpdate` use up to 256 rows per JDBC batch within one transaction; version-controlled unknown batch counts are rejected instead of assuming successful locking.
 - `db.forEach` runs in an explicit transaction with fetch size 128 for PostgreSQL streaming. `db.scan(sql, binder, generatedProjectionMapper, consumer)` streams native projections. Resources close before the scan returns. Do not keep row cursors outside the callback.
@@ -176,7 +181,7 @@ The canonical development branch is **`main`**. All code changes should be pushe
 
 - **CI** (`.github/workflows/build.yml`): compiles the Maven reactor on JDK 25 and runs critical checks.
 - **Snapshot publication** (`publish-snapshot.yml`): on every push to `main`, validates the project and deploys `bjorm-core`, `bjorm-processor`, `bjorm-spring-boot` plus their parent POM to **GitHub Packages**. Examples and benchmarks are not published.
-- **Stable release** (`release.yml`): manually dispatch from `main` with a version matching the currently committed snapshot (e.g., `0.3.3` for `0.3.3-SNAPSHOT`). The workflow updates every POM, verifies, commits and tags `v0.3.3`, deploys Maven artifacts, then moves `main` to `0.3.7-SNAPSHOT`. All publication uses the workflow's `GITHUB_TOKEN` and no custom credentials are required in the repository.
+- **Stable release** (`release.yml`): manually dispatch from `main` with a version matching the currently committed snapshot (e.g., `0.3.3` for `0.3.3-SNAPSHOT`). The workflow updates every POM, verifies, commits and tags `v0.3.3`, deploys Maven artifacts, then moves `main` to `0.3.8-SNAPSHOT`. All publication uses the workflow's `GITHUB_TOKEN` and no custom credentials are required in the repository.
 
 ### Release procedure
 
@@ -212,7 +217,22 @@ For consumers outside GitHub Actions, GitHub Packages may require authenticated 
 
 ## UUID v7, upsert and nested persistence (PostgreSQL)
 
-Use `@Id(uuidV7 = true)` on a **mutable `UUID` POJO field**, with a public getter and setter. BJORM assigns the ID before binding the INSERT/UPSERT. Immutable records can call `UuidV7.next()` explicitly when constructed; records cannot have their ID mutated.
+`@Id` automatically infers its ID strategy from the Java type. For `UUID`, BJORM generates RFC 9562 UUID v7; for `String`, it generates UUID v7 text; for numeric IDs (`int`, `long` and their wrappers), the database must define an identity column and BJORM retrieves it using JDBC generated keys.
+
+A mutable POJO receives a generated ID through its setter; a Java `record` is immutable, so use `insertReturning(...)` to receive a new record instance. The original record is never modified.
+
+```java
+@Table("users")
+public record User(@Id UUID id, String name) {}
+User saved = db.insertReturning(new User(null, "Alice")); // saved.id().version() == 7
+
+@Table("legacy_numbers")
+public record Numbered(@Id Long id, String name) {}
+Numbered savedNumber = db.insertReturning(new Numbered(null, "Example"));
+// PostgreSQL: id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY
+```
+
+For manually assigned IDs use `@Id(assigned=true)`. Client-generated identifiers preserve explicit non-null IDs rather than replacing them. For batches of immutable entities use `batchInsertReturning`, which returns a new list with populated IDs. Numeric identity batches use per-row inserts to recover their keys reliably.
 
 ```java
 @Table("orders")
@@ -239,7 +259,8 @@ db.delete(order);     // one transaction: delete persisted children, then parent
 ```
 
 - Child relations are explicit `@Children(mappedBy="childForeignKeyJavaProperty")` lists/collections. Only mapped columns are persisted; relationship collections are **not** automatically loaded on SELECT.
-- The parent ID must be available when inserting children. Record children must already carry the correct immutable FK. IDs generated by the database and UUID v7 on mutable POJOs are supported for parent and child inserts.
+- The parent ID is generated before saving children. Record children with null foreign keys are copied with the parent's ID; `insertReturning` returns the updated graph containing new record IDs. Conflicting non-null foreign keys are rejected.
+- All graph writes run in a single transaction; use `insertReturning` when an immutable root entity lacks its ID.
 - `upsert` is PostgreSQL native and matches on the primary key; it **does not** delete existing children omitted from the supplied collection. With `@Version`, the conflict branch rejects stale versions.
 - Cascade deletion resolves persisted children by foreign key even if the in-memory collection is empty, and deletes descendants before their parents. Use DB foreign keys for referential integrity. This is **not** JPA orphan removal or lazy loading.
 - Every graph is committed or rolled back atomically. Cyclic/repeated in-memory entities are rejected; this API has no identity map, no transparent retry, and no global context.

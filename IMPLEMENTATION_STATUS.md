@@ -52,3 +52,5 @@ This is a new codebase derived from the *requirements* and concepts of WORM. It 
 ## 0.3.6-SNAPSHOT
 
 UUID v7, native upsert and explicit recursive `@Children` graph persistence/deletion implemented. Critical smoke and PostgreSQL integration tests prepared. PostgreSQL integration must pass on CI; no claim about performance improvement without benchmark evidence.
+
+- Automatic @Id inference and immutable record-return APIs implemented; Java 21 `scripts/verify.sh` covers generated SQL, binding, batch and record graph logic. Java 25 + PostgreSQL CI remains authoritative for real database identities and transaction behavior.

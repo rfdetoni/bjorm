@@ -3,6 +3,12 @@ import java.util.*;
 /** Common entry points for database and explicit transaction; generated repositories use this contract. */
 public interface Operations {
     <T> void insert(T entity);
+    /** Persist and return the entity with its generated ID; required for immutable records. */
+    <T> T insertReturning(T entity);
+    /** Return generated record IDs after a batch; numeric database identity uses per-row inserts. */
+    <T> List<T> batchInsertReturning(List<T> entities);
+    /** Return an ID-bearing record after a PostgreSQL upsert. */
+    <T> T upsertReturning(T entity);
     <T> int update(T entity);
     /** Atomic PostgreSQL insert-or-update by primary key. */
     <T> int upsert(T entity);

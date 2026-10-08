@@ -73,3 +73,7 @@ GitHub repository: `rfdetoni/bjorm`. GitHub Actions performs Java 25 validation 
 - PostgreSQL primary-key `ON CONFLICT DO UPDATE` generated at compile time, with `@Version` predicate on conflict.
 - Generated `@Children(mappedBy="foreignKeyJavaProperty")` metadata. Parent inserts and upserts recurse in dependency order, assigning child FKs after parent ID assignment. Deletion looks up persisted descendants by FK and removes them before the parent. Operations are atomic in one JDBC transaction.
 - No automatic relationship loading, orphan reconciliation, implicit global session or reflection-based relationship discovery; implicit cascades without `@Children` remain out of scope.
+
+## Automatic identifier generation (0.3.8)
+
+The annotation processor determines `@Id` behavior from declared Java types without runtime reflection: UUID and String receive UUID v7 if null; int/long and boxed variants require an IDENTITY column in the database and use generated keys. `@Id(assigned=true)` disables inference. A Java record is immutable and must be persisted with `insertReturning` when its ID is absent; the mapper creates a new record with its assigned ID. Cascades rebuild record child foreign keys and return the persisted graph.
