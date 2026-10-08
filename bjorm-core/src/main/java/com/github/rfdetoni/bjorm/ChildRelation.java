@@ -4,6 +4,8 @@ package com.github.rfdetoni.bjorm;
 public interface ChildRelation<P> {
     Class<?> childType();
     String mappedBy();
+    /** Compile-time join type chosen for this collection. */
+    default JoinType joinType() {return JoinType.LEFT;}
     Iterable<?> children(P parent);
     /** Attach/verify child FK before saving, without a dynamic property lookup. */
     void attach(Object parentId, Object child);

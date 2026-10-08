@@ -52,7 +52,7 @@ public final class EntityProcessor extends AbstractProcessor {
     private static boolean isNumericId(String type) {return Set.of("int","long","java.lang.Integer","java.lang.Long").contains(type);}
     private static boolean autoUuid(Id id,String type) {return id!=null && !id.assigned() && (id.uuidV7() || ( !id.generated() && Set.of("java.util.UUID","java.lang.String").contains(type)));}
     private static boolean databaseId(Id id,String type) {return id!=null && !id.assigned() && (id.generated() || isNumericId(type));}
-    private record Relation(String property,String mappedBy,String childType,String getter,String childGetter,String childSetter,boolean childRecord) {}
+    private record Relation(String property,String mappedBy,String childType,String getter,String childGetter,String childSetter,boolean childRecord,JoinType joinType) {}
     private void entity(TypeElement entity) throws IOException {
         if(!generated.add(entity.getQualifiedName()+"#entity"))return;
         if(entity.getNestingKind().isNested() || !entity.getModifiers().contains(Modifier.PUBLIC)) {error(entity,"@Table requires public top-level type");return;}
@@ -143,7 +143,7 @@ public final class EntityProcessor extends AbstractProcessor {
             }
         }
         if(childPropertyType==null)throw new IllegalArgumentException("@Children unmapped child property: "+mappedBy);
-        return new Relation(field.getSimpleName().toString(),mappedBy,child.getQualifiedName().toString(),getter,childPropertyType,childSetter,record);
+        return new Relation(field.getSimpleName().toString(),mappedBy,child.getQualifiedName().toString(),getter,childPropertyType,childSetter,record,ann.type());
     }
     private static boolean cAnnotated(Element el,Class<? extends java.lang.annotation.Annotation> ann){return el.getAnnotation(ann)!=null;}
     private String findGetter(TypeElement entity,String suff,String type){
@@ -225,6 +225,7 @@ public final class EntityProcessor extends AbstractProcessor {
                     w.write((ri>0?",\n":"")+"new com.github.rfdetoni.bjorm.ChildRelation<"+clazz+">(){\n");
                     w.write("public Class<?> childType(){return "+r.childType()+".class;}\n");
                     w.write("public String mappedBy(){return \""+r.mappedBy()+"\";}\n");
+                    w.write("public com.github.rfdetoni.bjorm.JoinType joinType(){return com.github.rfdetoni.bjorm.JoinType."+r.joinType().name()+";}\n");
                     w.write("public String property(){return \""+r.property()+"\";}\n");
                     w.write("public Iterable<?> children("+clazz+" value){return "+r.getter()+";}\n");
                     w.write("public void attach(Object id,Object child){"+r.childType()+" value=("+r.childType()+")child;\n");

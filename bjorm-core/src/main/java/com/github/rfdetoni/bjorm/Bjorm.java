@@ -319,7 +319,10 @@ public final class Bjorm implements Operations {
             query.bind(ps);
             try(ResultSet rs=ps.executeQuery()) {
                 ArrayList<T> result=new ArrayList<>();
-                while(rs.next()){checkRows(result.size()+1);result.add(m.read(rs));}
+                while(rs.next()){
+                    if(query.hasRightOrFullJoin() && rs.getObject(m.idColumnIndex())==null)continue;
+                    checkRows(result.size()+1);result.add(m.read(rs));
+                }
                 return result;
             }
         }
@@ -339,13 +342,14 @@ public final class Bjorm implements Operations {
     }
     @SuppressWarnings("unchecked")
     private <T> void readGraph(Connection c,Select<T> query,Consumer<T> emit,boolean bounded) throws SQLException {
-        if (query.hasJoins()) throw new IllegalArgumentException(
-            "Entity graph JOIN cannot be combined with explicit joins; use a root query and generated @Children metadata");
         EntityMapper<T> root=mapper(query.type());
         ArrayList<GraphSlot> slots=new ArrayList<>();
         ArrayList<List<Integer>> paths=new ArrayList<>();
         collectGraphPaths((EntityMapper<Object>)root,0,new ArrayList<>(),new HashSet<>(),slots,paths);
         String rootSql=query.sql(root,type->mapper(type));
+        // Multiple matching explicit joins cannot multiply roots before eager expansion.
+        // LIMIT/OFFSET on such joins remains rejected by Select.sql().
+        if(query.hasJoins())rootSql="SELECT DISTINCT * FROM ("+rootSql+") bjorm_unique_roots";
         int rootColumns=root.columnCount();
         StringBuilder sql=new StringBuilder("WITH roots AS (").append(rootSql).append(") ");
         for(int branch=0;branch<paths.size();branch++) {
@@ -362,7 +366,7 @@ public final class Bjorm implements Operations {
                 GraphSlot slot=slots.get(i);
                 EntityMapper<Object> parent=slot.parent==0?(EntityMapper<Object>)root:slots.get(slot.parent-1).mapper;
                 String parentAlias=slot.parent==0?"r":slots.get(slot.parent-1).alias;
-                sql.append(" LEFT JOIN ").append(slot.mapper.table()).append(' ').append(slot.alias)
+                sql.append(' ').append(slot.relation.joinType().sql()).append(' ').append(slot.mapper.table()).append(' ').append(slot.alias)
                    .append(" ON ").append(slot.alias).append('.').append(slot.mapper.columnFor(slot.relation.mappedBy()))
                    .append(" = ").append(parentAlias).append('.').append(parent.columnFor(parent.idProperty()));
             }
@@ -387,6 +391,8 @@ public final class Bjorm implements Operations {
                 int groupRows=0;
                 while(rs.next()) {
                     Object id=rs.getObject(root.idColumnIndex());
+                    // RIGHT/FULL outer rows without a root cannot materialize a parent entity.
+                    if(id==null)continue;
                     if(current==null || !Objects.equals(lastId,id)) {
                         if(current!=null)emit.accept((T)finishGraph(current,slots));
                         current=new GraphNode((EntityMapper<Object>)root,root.read(rs));
@@ -490,7 +496,10 @@ public final class Bjorm implements Operations {
         try(PreparedStatement ps=prepare(c,sql)) {
             query.bind(ps);
             try(ResultSet rs=ps.executeQuery()) {
-                return rs.next()?Optional.ofNullable(projection.read(rs)):Optional.empty();
+                if(!rs.next())return Optional.empty();
+                if(properties==null && query.hasRightOrFullJoin() &&
+                    rs.getObject(m.idColumnIndex())==null)return Optional.empty();
+                return Optional.ofNullable(projection.read(rs));
             }
         }
     }

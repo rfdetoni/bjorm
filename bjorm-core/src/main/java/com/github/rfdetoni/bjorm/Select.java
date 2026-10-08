@@ -7,7 +7,21 @@ import java.util.regex.Pattern;
 
 /** Small, mutable single-use typed query builder. Explicit SQL joins; no implicit entity graph traversal. */
 public final class Select<T> {
-    private record Join(Class<?> type,String alias,SqlPredicate on,boolean left) {}
+    private record Join(Class<?> type,String alias,SqlPredicate on,JoinType joinType) {}
+    /** QueryDSL-style JOIN...ON builder; enforces a bound ON expression. */
+    public static final class JoinOnStep<T> {
+        private final Select<T> query;
+        private final Class<?> type;
+        private final String alias;
+        private final JoinType joinType;
+        private JoinOnStep(Select<T> query,Class<?> type,String alias,JoinType joinType) {
+            this.query=query;this.type=Objects.requireNonNull(type);
+            this.alias=identifier(alias);this.joinType=Objects.requireNonNull(joinType);
+        }
+        public Select<T> on(SqlPredicate predicate) {
+            return query.addJoin(type,alias,Objects.requireNonNull(predicate),joinType);
+        }
+    }
     private static final Pattern JOIN_KEYS = Pattern.compile(
         "([A-Za-z_][A-Za-z_0-9]*)\\.[A-Za-z_][A-Za-z_0-9]*\\s*=\\s*([A-Za-z_][A-Za-z_0-9]*)\\.[A-Za-z_][A-Za-z_0-9]*");
     private final Operations db;
@@ -20,10 +34,22 @@ public final class Select<T> {
     private Long offset;
     Select(Operations db,Class<T> type){this.db=Objects.requireNonNull(db);this.type=Objects.requireNonNull(type);}
     public Select<T> as(String value){this.alias=identifier(value);return this;}
-    public Select<T> join(Class<?> type,String alias,SqlPredicate on){return addJoin(type,alias,on,false);}
-    public Select<T> leftJoin(Class<?> type,String alias,SqlPredicate on){return addJoin(type,alias,on,true);}
-    private Select<T> addJoin(Class<?> type,String alias,SqlPredicate on,boolean left){
-        joins.add(new Join(Objects.requireNonNull(type),identifier(alias),Objects.requireNonNull(on),left));return this;
+    public JoinOnStep<T> join(Class<?> type,String alias) {return new JoinOnStep<>(this,type,alias,JoinType.INNER);}
+    public JoinOnStep<T> innerJoin(Class<?> type,String alias) {return join(type,alias);}
+    public JoinOnStep<T> leftJoin(Class<?> type,String alias) {return new JoinOnStep<>(this,type,alias,JoinType.LEFT);}
+    public JoinOnStep<T> rightJoin(Class<?> type,String alias) {return new JoinOnStep<>(this,type,alias,JoinType.RIGHT);}
+    public JoinOnStep<T> fullJoin(Class<?> type,String alias) {return new JoinOnStep<>(this,type,alias,JoinType.FULL);}
+    public JoinOnStep<T> outerJoin(Class<?> type,String alias) {return fullJoin(type,alias);}
+    public JoinOnStep<T> fullOuterJoin(Class<?> type,String alias) {return fullJoin(type,alias);}
+    public Select<T> join(Class<?> type,String alias,SqlPredicate on) {return join(type,alias).on(on);}
+    public Select<T> innerJoin(Class<?> type,String alias,SqlPredicate on) {return join(type,alias).on(on);}
+    public Select<T> leftJoin(Class<?> type,String alias,SqlPredicate on) {return leftJoin(type,alias).on(on);}
+    public Select<T> rightJoin(Class<?> type,String alias,SqlPredicate on) {return rightJoin(type,alias).on(on);}
+    public Select<T> fullJoin(Class<?> type,String alias,SqlPredicate on) {return fullJoin(type,alias).on(on);}
+    public Select<T> outerJoin(Class<?> type,String alias,SqlPredicate on) {return fullJoin(type,alias).on(on);}
+    public Select<T> fullOuterJoin(Class<?> type,String alias,SqlPredicate on) {return fullJoin(type,alias).on(on);}
+    private Select<T> addJoin(Class<?> type,String alias,SqlPredicate on,JoinType joinType){
+        joins.add(new Join(Objects.requireNonNull(type),identifier(alias),Objects.requireNonNull(on),joinType));return this;
     }
     private static String identifier(String value){
         if(value==null||!value.matches("[A-Za-z_][A-Za-z_0-9]*"))throw new IllegalArgumentException("Invalid SQL alias: "+value);
@@ -41,6 +67,7 @@ public final class Select<T> {
     public Optional<T> first(){limit(1);return db.first(this);}
     Operations operations(){return db;}
     boolean hasJoins(){return !joins.isEmpty();}
+    boolean hasRightOrFullJoin(){return joins.stream().anyMatch(j -> j.joinType()==JoinType.RIGHT || j.joinType()==JoinType.FULL);}
     List<SqlOrder> sorting(){return List.copyOf(orders);}
 
 
@@ -82,7 +109,7 @@ public final class Select<T> {
                 }
                 if(!linked) throw new IllegalArgumentException("JOIN ON must relate indexed/mapped columns of two distinct table aliases; cartesian joins are not supported");
                 EntityMapper<?> target=lookup.apply(join.type);
-                sql.append(join.left?" LEFT JOIN ":" INNER JOIN ").append(target.table()).append(" ").append(join.alias)
+                sql.append(" ").append(join.joinType.sql()).append(" ").append(target.table()).append(" ").append(join.alias)
                         .append(" ON ").append(join.on.sql());
             }
         }

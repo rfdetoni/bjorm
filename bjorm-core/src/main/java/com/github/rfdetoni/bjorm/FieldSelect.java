@@ -25,6 +25,24 @@ public final class FieldSelect<T> {
     public FieldSelect<T> as(String alias){query.as(alias);return this;}
     public FieldSelect<T> join(Class<?> type,String alias,SqlPredicate on){query.join(type,alias,on);return this;}
     public FieldSelect<T> leftJoin(Class<?> type,String alias,SqlPredicate on){query.leftJoin(type,alias,on);return this;}
+    public FieldSelect<T> innerJoin(Class<?> type,String alias,SqlPredicate on){query.innerJoin(type,alias,on);return this;}
+    public FieldSelect<T> rightJoin(Class<?> type,String alias,SqlPredicate on){query.rightJoin(type,alias,on);return this;}
+    public FieldSelect<T> fullJoin(Class<?> type,String alias,SqlPredicate on){query.fullJoin(type,alias,on);return this;}
+    public FieldSelect<T> outerJoin(Class<?> type,String alias,SqlPredicate on){query.outerJoin(type,alias,on);return this;}
+    public FieldSelect<T> fullOuterJoin(Class<?> type,String alias,SqlPredicate on){query.fullJoin(type,alias,on);return this;}
+    public FieldJoinOnStep<T> join(Class<?> type,String alias){return new FieldJoinOnStep<>(this,query.join(type,alias));}
+    public FieldJoinOnStep<T> innerJoin(Class<?> type,String alias){return join(type,alias);}
+    public FieldJoinOnStep<T> leftJoin(Class<?> type,String alias){return new FieldJoinOnStep<>(this,query.leftJoin(type,alias));}
+    public FieldJoinOnStep<T> rightJoin(Class<?> type,String alias){return new FieldJoinOnStep<>(this,query.rightJoin(type,alias));}
+    public FieldJoinOnStep<T> fullJoin(Class<?> type,String alias){return new FieldJoinOnStep<>(this,query.fullJoin(type,alias));}
+    public FieldJoinOnStep<T> outerJoin(Class<?> type,String alias){return fullJoin(type,alias);}
+    public FieldJoinOnStep<T> fullOuterJoin(Class<?> type,String alias){return fullJoin(type,alias);}
+    public static final class FieldJoinOnStep<T> {
+        private final FieldSelect<T> fields;
+        private final Select.JoinOnStep<T> join;
+        private FieldJoinOnStep(FieldSelect<T> fields,Select.JoinOnStep<T> join){this.fields=fields;this.join=join;}
+        public FieldSelect<T> on(SqlPredicate predicate){join.on(predicate);return fields;}
+    }
 
     public List<Map<String,Object>> fetch(){return query.operations().fieldRows(query,properties);}
     public Optional<Map<String,Object>> first(){query.limit(1);return query.operations().fieldOne(query,properties);}

@@ -6,4 +6,8 @@ import java.lang.annotation.*;
  * Child @Table type must expose a scalar FK Java property named mappedBy. */
 @Retention(RetentionPolicy.SOURCE)
 @Target({ElementType.FIELD, ElementType.RECORD_COMPONENT})
-public @interface Children { String mappedBy(); }
+public @interface Children {
+    String mappedBy();
+    /** Default eager join strategy; LEFT preserves roots with no children. */
+    JoinType type() default JoinType.LEFT;
+}
