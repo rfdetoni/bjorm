@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.13-SNAPSHOT
+
+- Fix MySQL typed DSL predicate binding: use SqlDialect.bindValue for WHERE parameters, not raw PreparedStatement.setObject(UUID).
+- Guard the MySQL CHAR(36) UUID predicate in JDBC-spy tests; require the real MySQL 8.4 CI job to pass before claiming dialect parity.
+
+
 ## 0.3.12-SNAPSHOT
 
 - Introduce a minimal `SqlDialect` SPI with PostgreSQL and MySQL 8.4 implementations, without driver dependencies in the core.

@@ -44,6 +44,8 @@ public final class DialectSmokeTest {
         mysql.insertReturning(new ItUser(id,"Ana",15));
         check(p.sql.startsWith("INSERT INTO bjorm_it_users"),"MySQL insert SQL");
         check(id.toString().equals(p.binds.get(1)),"MySQL UUID should use CHAR(36) text");
+        mysql.select(ItUser.class).where(ItUser_.id.eq(id)).fetch();
+        check(id.toString().equals(p.binds.get(1)),"MySQL UUID in typed WHERE predicate must bind as CHAR(36) text");
         mysql.upsertReturning(new ItUser(id,"Bia",16));
         check(p.sql.contains(" AS bjorm_new ON DUPLICATE KEY UPDATE "),"MySQL native upsert alias");
         mysql.insertReturning(new ItDocument(null,"{\"ok\":true}"));

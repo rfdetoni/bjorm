@@ -134,7 +134,7 @@ public final class Select<T> {
     int bind(PreparedStatement ps,int start,SqlDialect dialect) throws SQLException {
         int i=start;
         for(Join join:joins)for(Object value:join.on.params())dialect.bindValue(ps,i++,value);
-        if(predicate!=null)for(Object value:predicate.params())ps.setObject(i++,value);
+        if(predicate!=null)for(Object value:predicate.params())dialect.bindValue(ps,i++,value);
         if(limit!=null)ps.setInt(i++,limit);
         if(offset!=null)ps.setLong(i++,offset);
         return i;
