@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.4-SNAPSHOT
+
+- Generate direct PreparedStatement.setBigDecimal for BigDecimal values instead of setObject.
+- Align JMH manual mapper with generated primitive NULL checks; add wasNull support to the test ResultSet.
+- Preserve JDBC core simplicity; only introduce runtime optimizations after controlled performance measurements.
+
 ## 0.3.3-SNAPSHOT
 
 - Move Java API, annotation processor, generated classes, SPI registrations and Spring adapter from `dev.bjorm` to `com.github.rfdetoni.bjorm`.

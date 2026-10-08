@@ -1,4 +1,4 @@
-# BJORM implementation status — 0.3.3-SNAPSHOT
+# BJORM implementation status — 0.3.4-SNAPSHOT
 
 This is a new codebase derived from the *requirements* and concepts of WORM. It is not a copy of WORM and intentionally has no backward compatibility.
 
@@ -37,13 +37,13 @@ This is a new codebase derived from the *requirements* and concepts of WORM. It 
 `rfdetoni/bjorm` is the origin and `main` is the publication branch. Maven GitHub Packages publishing requires successful GitHub Actions execution; this document does not assert release success.
 
 
-## Release automation (0.3.3-SNAPSHOT)
+## Release automation (0.3.4-SNAPSHOT)
 
 - Configured GitHub Packages Maven `distributionManagement` for the reactor.
 - `main` snapshot deployments and workflow-dispatched stable release with version bump are added but **not executed on GitHub**. They require valid source on `main`, a successful JDK 25 build and permissions.
 - GitHub Actions/JDK25/Maven integration has not been verified in this environment.
 
-## Namespace migration (0.3.3-SNAPSHOT)
+## Namespace migration (0.3.4-SNAPSHOT)
 
 - Maven groupId, Java packages, generated classes, ServiceLoader and Spring adapter use `com.github.rfdetoni.bjorm`.
 - `javax.sql` belongs to Java SE `java.sql` and `javax.annotation.processing` belongs to Java SE `java.compiler`; these do not require Jakarta EE.

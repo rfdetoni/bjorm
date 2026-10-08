@@ -20,9 +20,11 @@ public class JdbcMappingBenchmark {
     private ResultSet result;
     @Setup(Level.Trial)public void setup(){
         result=(ResultSet)java.lang.reflect.Proxy.newProxyInstance(getClass().getClassLoader(),new Class[]{ResultSet.class},(p,m,a)->switch(m.getName()){
-            case "getObject"->ID;case "getString"->"ITEM";case "getInt"->42;default->throw new UnsupportedOperationException(m.getName());
+            case "getObject"->ID;case "getString"->"ITEM";case "getInt"->42;
+            case "wasNull"->false;
+            default->throw new UnsupportedOperationException(m.getName());
         });
     }
     @Benchmark public void generated(Blackhole bh)throws SQLException{bh.consume(GENERATED.read(result));}
-    @Benchmark public void manual(Blackhole bh)throws SQLException{bh.consume(new BenchItem(result.getObject(1,UUID.class),result.getString(2),result.getInt(3)));}
+    @Benchmark public void manual(Blackhole bh)throws SQLException{bh.consume(new BenchItem(result.getObject(1,UUID.class),result.getString(2),JdbcValues.requiredInt(result,3)));}
 }

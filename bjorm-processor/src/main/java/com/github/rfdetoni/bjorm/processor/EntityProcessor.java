@@ -289,6 +289,7 @@ public final class EntityProcessor extends AbstractProcessor {
         case "double"->"ps.setDouble("+i+","+access+");";
         case "boolean"->"ps.setBoolean("+i+","+access+");";
         case "java.lang.String"->"ps.setString("+i+","+access+");";
+        case "java.math.BigDecimal"->"ps.setBigDecimal("+i+","+access+");";
         default -> {TypeElement e=elements.getTypeElement(type);
             yield "ps.setObject("+i+","+(e!=null&&e.getKind()==ElementKind.ENUM?"("+access+"==null?null:"+access+".name())":access)+");";}
     };}
