@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.14-SNAPSHOT
+
+- Upgrade optional `bjorm-spring-boot` dependency management from Spring Boot 4.0.3 to latest stable 4.1.1; preserve Spring-free core and automatic DataSource/transaction integration.
+- Align the complete Maven reactor to 0.3.14-SNAPSHOT and validate against a Spring Boot 4.1.1 demo with `@Transactional` commit/rollback and PostgreSQL HTTP smoke tests.
+
 ## 0.3.13-SNAPSHOT
 
 - Fix MySQL typed DSL predicate binding: use SqlDialect.bindValue for WHERE parameters, not raw PreparedStatement.setObject(UUID).

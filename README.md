@@ -348,3 +348,7 @@ In Spring Boot 4: set `bjorm.dialect: mysql` (default: `postgresql`).
   the dialect does not automatically rewrite arbitrary SQL.
 - Extra dialect implementations can implement `SqlDialect`; verify the
   target JDBC driver's binding and SQL semantics using integration tests.
+
+## Spring Boot integration
+
+The optional `bjorm-spring-boot` adapter targets **Spring Boot 4.1.1** (stable) and uses Spring's JDBC transaction-aware DataSource so `@Transactional` works with the same connection. No Spring dependencies are added to `bjorm-core`. Integration is exercised in `bjorm-demo` against PostgreSQL, including commit and rollback. Configure `bjorm.dialect` to select the SQL dialect.

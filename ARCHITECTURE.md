@@ -53,7 +53,7 @@ Bare Metal Java ORM. Java 25, PostgreSQL-first, direct JDBC, compile-time genera
 
 1. Compile full Maven reactor with JDK 25, including optional Spring/JMH dependencies, then run Java 25 CI gates.
 2. Run PostgreSQL integration in an **isolated disposable DB**, with CRUD/null/JSON/version/batch/generation concurrency and actual transaction semantics.
-3. Run actual Spring Boot 4.0.x application integration to verify injection and `@Transactional` enlistment.
+3. Run actual Spring Boot 4.1.1 application integration to verify injection and `@Transactional` enlistment.
 4. Add JDBC driver matrix and typed compatibility checks for date/time, nullable JSON, generated key behavior.
 5. Validate the new selected-property queries against real PostgreSQL and add keyset helpers only if motivated by concrete use cases; avoid generic AST/proxy frameworks.
 6. Run reproducible JMH and full-database benchmarks versus equivalent manual JDBC + WORM; report alloc/op, CPU, throughput, latency p50/p95/p99.

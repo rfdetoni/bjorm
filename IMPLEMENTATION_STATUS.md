@@ -64,3 +64,5 @@ UUID v7, native upsert and explicit recursive `@Children` graph persistence/dele
 - Explicit filtering joins and eager graph expansion share one SQL with root deduplication.
 - Pagination that can multiply roots is blocked; RIGHT/FULL unmatched child-only rows are not parent entities.
 - Java smoke/SQL-shape and opt-in PostgreSQL coverage added.
+
+- Spring Boot adapter BOM upgraded to 4.1.1 in 0.3.14-SNAPSHOT; the consumer's real PostgreSQL `@Transactional` test validates integration and cannot be inferred from a Java-only smoke run.
