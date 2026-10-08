@@ -1,5 +1,7 @@
 package com.github.rfdetoni.bjorm;
 import java.lang.annotation.*;
-/** Maps a String containing JSON to a dialect-native JSON column via a bound placeholder. */
+/** Typed JSON column. Strings need no codec; structured fields use user-provided codecs. */
 @Retention(RetentionPolicy.SOURCE) @Target({ElementType.RECORD_COMPONENT,ElementType.FIELD})
-public @interface Json {}
+public @interface Json {
+    Class<? extends JsonCodec<?>> codec() default JsonStringCodec.class;
+}

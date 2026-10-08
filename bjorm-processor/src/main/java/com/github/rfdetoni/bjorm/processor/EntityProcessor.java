@@ -48,7 +48,7 @@ public final class EntityProcessor extends AbstractProcessor {
         }
         return true;
     }
-    private record Col(String property,String column,String type,String read,String write,boolean id,boolean version,boolean generated,boolean json,boolean uuidV7) {}
+    private record Col(String property,String column,String type,String read,String write,boolean id,boolean version,boolean generated,boolean json,boolean uuidV7,String jsonCodec) {}
     private static boolean isNumericId(String type) {return Set.of("int","long","java.lang.Integer","java.lang.Long").contains(type);}
     private static boolean autoUuid(Id id,String type) {return id!=null && !id.assigned() && (id.uuidV7() || ( !id.generated() && Set.of("java.util.UUID","java.lang.String").contains(type)));}
     private static boolean databaseId(Id id,String type) {return id!=null && !id.assigned() && (id.generated() || isNumericId(type));}
@@ -67,7 +67,7 @@ public final class EntityProcessor extends AbstractProcessor {
                 String prop=c.getSimpleName().toString();
                 if(c.getAnnotation(Children.class)!=null) {relations.add(relation(c,"value."+prop+"()"));continue;}
                 Id idAnn=c.getAnnotation(Id.class);
-                cols.add(new Col(prop,colName(c,prop),c.asType().toString(),"value."+prop+"()","",idAnn!=null,c.getAnnotation(Version.class)!=null,databaseId(idAnn,c.asType().toString()),c.getAnnotation(Json.class)!=null,autoUuid(idAnn,c.asType().toString())));
+                cols.add(new Col(prop,colName(c,prop),c.asType().toString(),"value."+prop+"()","",idAnn!=null,c.getAnnotation(Version.class)!=null,databaseId(idAnn,c.asType().toString()),c.getAnnotation(Json.class)!=null,autoUuid(idAnn,c.asType().toString()),jsonCodec(c)));
             }
         } else {
             boolean constructor=false;
@@ -84,7 +84,7 @@ public final class EntityProcessor extends AbstractProcessor {
                 String setter="set"+suff;
                 if(getter==null||!hasSetter(entity,setter,type)) {error(el,"POJO needs public getter and setter for "+prop);return;}
                 Id idAnn=el.getAnnotation(Id.class);
-                cols.add(new Col(prop,colName(el,prop),type,"value."+getter+"()","value."+setter,cAnnotated(el,Id.class),cAnnotated(el,Version.class),databaseId(idAnn,type),el.getAnnotation(Json.class)!=null,autoUuid(idAnn,type)));
+                cols.add(new Col(prop,colName(el,prop),type,"value."+getter+"()","value."+setter,cAnnotated(el,Id.class),cAnnotated(el,Version.class),databaseId(idAnn,type),el.getAnnotation(Json.class)!=null,autoUuid(idAnn,type),jsonCodec(el)));
             }
         }
         if(cols.isEmpty()){error(entity,"@Table requires mapped properties");return;}
@@ -99,8 +99,12 @@ public final class EntityProcessor extends AbstractProcessor {
         for(int i=0;i<cols.size();i++){
             Col c=cols.get(i);
             if(!identifier(c.column())||!seen.add(c.column())){error(entity,"Invalid/duplicate column: "+c.column());return;}
-            if(!supported(c.type())) {error(entity,"Unsupported JDBC property: "+c.type());return;}
-            if(c.json() && (!c.type().equals("java.lang.String") || c.id() || c.version())){error(entity,"@Json requires a non-ID String column");return;}
+            if(!c.json() && !supported(c.type())) {error(entity,"Unsupported JDBC property: "+c.type());return;}
+            if(c.json() && (c.id() || c.version())){error(entity,"@Json cannot annotate ID or version columns");return;}
+            if(c.json() && !c.type().equals("java.lang.String") &&
+               c.jsonCodec().equals("com.github.rfdetoni.bjorm.JsonStringCodec")) {
+                error(entity,"Typed @Json property "+c.property()+" requires an explicit JsonCodec");return;
+            }
             if(c.generated() && (!c.id() || !isNumericId(c.type()))){error(entity,"Database-generated IDs require numeric @Id (int/long/Integer/Long)");return;}
             if(c.uuidV7() && (!c.id()||c.generated()||!Set.of("java.util.UUID","java.lang.String").contains(c.type()))){error(entity,"UUID v7 requires a UUID or String @Id");return;}
             if(c.id()){if(id>=0){error(entity,"Exactly one @Id required");return;}id=i;}
@@ -176,6 +180,25 @@ public final class EntityProcessor extends AbstractProcessor {
         return false;
     }
     private String colName(Element el,String fallback){Column ann=el.getAnnotation(Column.class);return ann!=null?ann.value():fallback;}
+    private String jsonCodec(Element element) {
+        Json annotation=element.getAnnotation(Json.class);
+        if(annotation==null)return null;
+        try{return annotation.codec().getCanonicalName();}
+        catch(MirroredTypeException e){return e.getTypeMirror().toString();}
+    }
+    private boolean typedJson(Col col) {
+        return col.json()&&!col.jsonCodec().equals("com.github.rfdetoni.bjorm.JsonStringCodec");
+    }
+    private String readColumn(Col col,String index,int ordinal) {
+        return typedJson(col)
+            ?"com.github.rfdetoni.bjorm.JsonValues.read(rs,"+index+",JSON_"+ordinal+")"
+            :reader(123456789,col.type()).replace("123456789",index);
+    }
+    private String writeColumn(Col col,int param,int ordinal,String dialect) {
+        return typedJson(col)
+            ?"ps.setString("+param+",com.github.rfdetoni.bjorm.JsonValues.write("+col.read()+",JSON_"+ordinal+"));"
+            :setter(param,col.read(),col.type(),dialect);
+    }
     private void generateMapper(TypeElement entity,String table,List<Col> cols,int id,int version,boolean record,List<Relation> relations) throws IOException {
         String clazz=entity.getSimpleName().toString(),pkg=packageOf(entity),mapper=clazz+"_BjormMapper";
         String fields=String.join(", ",cols.stream().map(Col::column).toList());
@@ -202,12 +225,21 @@ public final class EntityProcessor extends AbstractProcessor {
             w.write("package "+pkg+";\npublic final class "+mapper+" implements com.github.rfdetoni.bjorm.EntityMapper<"+clazz+"> {\n");
             w.write("public static final "+mapper+" INSTANCE = new "+mapper+"();\npublic "+mapper+"(){}\n");
             w.write("public Class<"+clazz+"> type(){return "+clazz+".class;}\n");
+            for(int i=0;i<cols.size();i++) {
+                Col col=cols.get(i);
+                if(typedJson(col))
+                    w.write("private static final com.github.rfdetoni.bjorm.JsonCodec<"+col.type()+"> JSON_"+i+
+                        " = new "+col.jsonCodec()+"();\n");
+            }
             w.write("public String table(){return \""+table+"\";}\n");
             w.write("public String columnFor(String property){return switch(property){\n");
             for(Col c:cols)w.write("case \""+c.property()+"\" -> \""+c.column()+"\";\n");
             w.write("default -> throw new IllegalArgumentException(\"Unknown mapped property: \"+property);};}\n");
             w.write("public Object readProperty(java.sql.ResultSet rs,int index,String property) throws java.sql.SQLException {return switch(property){\n");
-            for(Col c:cols)w.write("case \""+c.property()+"\" -> "+reader(123456789,c.type()).replace("123456789","index")+";\n");
+            for(int i=0;i<cols.size();i++) {
+                Col col=cols.get(i);
+                w.write("case \""+col.property()+"\" -> "+readColumn(col,"index",i)+";\n");
+            }
             w.write("default -> throw new IllegalArgumentException(\"Unknown mapped property: \"+property);};}\n");
 
             w.write("public String qualifiedColumns(String alias){return "+String.join("+\", \"+",cols.stream().map(c->"alias+\"."+c.column()+"\"").toList())+";}\n");
@@ -272,11 +304,13 @@ public final class EntityProcessor extends AbstractProcessor {
                 w.write("public String "+e[0]+"(){return \""+e[1]+"\";}\n");
             w.write("public void bindInsert(java.sql.PreparedStatement ps,"+clazz+" value) throws java.sql.SQLException {bindInsert(ps,value,com.github.rfdetoni.bjorm.SqlDialects.POSTGRESQL);}\n");
             w.write("public void bindInsert(java.sql.PreparedStatement ps,"+clazz+" value,com.github.rfdetoni.bjorm.SqlDialect dialect) throws java.sql.SQLException {\n");
-            int insIndex=1;for(Col c:cols)if(!c.generated())w.write(setter(insIndex++,c.read(),c.type(),"dialect")+"\n");
+            int insIndex=1;for(int j=0;j<cols.size();j++)if(!cols.get(j).generated())
+                w.write(writeColumn(cols.get(j),insIndex++,j,"dialect")+"\n");
             w.write("}\npublic void bindUpdate(java.sql.PreparedStatement ps,"+clazz+" value) throws java.sql.SQLException {bindUpdate(ps,value,com.github.rfdetoni.bjorm.SqlDialects.POSTGRESQL);}\n");
             w.write("public void bindUpdate(java.sql.PreparedStatement ps,"+clazz+" value,com.github.rfdetoni.bjorm.SqlDialect dialect) throws java.sql.SQLException {\n");
             int index=1;
-            for(int i=0;i<cols.size();i++)if(i!=id&&i!=version)w.write(setter(index++,cols.get(i).read(),cols.get(i).type(),"dialect")+"\n");
+            for(int i=0;i<cols.size();i++)if(i!=id&&i!=version)
+                w.write(writeColumn(cols.get(i),index++,i,"dialect")+"\n");
             w.write(setter(index++,cols.get(id).read(),cols.get(id).type(),"dialect")+"\n");
             if(version>=0)w.write(setter(index++,cols.get(version).read(),cols.get(version).type(),"dialect")+"\n");
             w.write("}\npublic void bindDelete(java.sql.PreparedStatement ps,"+clazz+" value) throws java.sql.SQLException {bindDelete(ps,value,com.github.rfdetoni.bjorm.SqlDialects.POSTGRESQL);}\n");
@@ -293,11 +327,11 @@ public final class EntityProcessor extends AbstractProcessor {
                 List<String> args=new ArrayList<>();int offset=1;
                 for(RecordComponentElement component:entity.getRecordComponents()){
                     if(component.getAnnotation(Children.class)!=null)args.add("java.util.List.of()");
-                    else args.add(reader(123456789,component.asType().toString()).replace("123456789","(offset+"+(offset++-1)+")"));
+                    else {int n=offset++-1;args.add(readColumn(cols.get(n),"(offset+"+n+")",n));}
                 }
                 w.write("return new "+clazz+"("+String.join(", ",args)+");\n");
             }
-            else {w.write(clazz+" value = new "+clazz+"();\n");for(int i=0;i<cols.size();i++)w.write(cols.get(i).write()+"("+reader(123456789,cols.get(i).type()).replace("123456789","(offset+"+i+")")+");\n");w.write("return value;\n");}
+            else {w.write(clazz+" value = new "+clazz+"();\n");for(int i=0;i<cols.size();i++)w.write(cols.get(i).write()+"("+readColumn(cols.get(i),"(offset+"+i+")",i)+");\n");w.write("return value;\n");}
             w.write("}\n}\n");
         }
     }
