@@ -192,6 +192,12 @@ public final class EntityProcessor extends AbstractProcessor {
             w.write("default -> throw new IllegalArgumentException(\"Unknown mapped property: \"+property);};}\n");
 
             w.write("public String qualifiedColumns(String alias){return "+String.join("+\", \"+",cols.stream().map(c->"alias+\"."+c.column()+"\"").toList())+";}\n");
+
+            w.write("public int columnCount(){return "+cols.size()+";}\n");
+            w.write("public int idColumnIndex(){return "+(id+1)+";}\n");
+            w.write("public int columnIndex(String sqlColumn){return switch(sqlColumn){\n");
+            for(int i=0;i<cols.size();i++)w.write("case \""+cols.get(i).column()+"\" -> "+(i+1)+";\n");
+            w.write("default -> throw new IllegalArgumentException(\"Unknown mapped column: \"+sqlColumn);};}\n");
             w.write("public boolean optimisticLocking(){return "+(version>=0)+";}\n");
             w.write("public boolean generatedId(){return "+cols.get(id).generated()+";}\n");
             w.write("public boolean immutable(){return "+record+";}\n");
@@ -253,16 +259,17 @@ public final class EntityProcessor extends AbstractProcessor {
             w.write("}\npublic void bindId(java.sql.PreparedStatement ps,int index,Object id) throws java.sql.SQLException {ps.setObject(index,id);}\n");
             w.write("public Object id("+clazz+" value){return "+cols.get(id).read()+";}\n");
             w.write("public String idProperty(){return \""+cols.get(id).property()+"\";}\n");
-            w.write("public "+clazz+" read(java.sql.ResultSet rs) throws java.sql.SQLException {\n");
+            w.write("public "+clazz+" read(java.sql.ResultSet rs) throws java.sql.SQLException {return readAt(rs,1); }\n");
+            w.write("public "+clazz+" readAt(java.sql.ResultSet rs,int offset) throws java.sql.SQLException {\n");
             if(record){
                 List<String> args=new ArrayList<>();int offset=1;
                 for(RecordComponentElement component:entity.getRecordComponents()){
                     if(component.getAnnotation(Children.class)!=null)args.add("java.util.List.of()");
-                    else args.add(reader(offset++,component.asType().toString()));
+                    else args.add(reader(123456789,component.asType().toString()).replace("123456789","(offset+"+(offset++-1)+")"));
                 }
                 w.write("return new "+clazz+"("+String.join(", ",args)+");\n");
             }
-            else {w.write(clazz+" value = new "+clazz+"();\n");for(int i=0;i<cols.size();i++)w.write(cols.get(i).write()+"("+reader(i+1,cols.get(i).type())+");\n");w.write("return value;\n");}
+            else {w.write(clazz+" value = new "+clazz+"();\n");for(int i=0;i<cols.size();i++)w.write(cols.get(i).write()+"("+reader(123456789,cols.get(i).type()).replace("123456789","(offset+"+i+")")+");\n");w.write("return value;\n");}
             w.write("}\n}\n");
         }
     }

@@ -63,7 +63,7 @@ public final class AdvancedSmokeTest {
                     yield result(new Object[]{id,"Pencil"});
                 }
                 case "getGeneratedKeys"->result(new Object[]{42L});
-                case "close","clearParameters","setFetchSize"->null;
+                case "close","clearParameters","setFetchSize","setQueryTimeout"->null;
                 default->throw new UnsupportedOperationException("PreparedStatement."+m.getName());
             });
         }

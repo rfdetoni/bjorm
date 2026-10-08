@@ -19,6 +19,15 @@ public interface EntityMapper<T> extends RowMapper<T> {
     default java.util.List<ChildRelation<T>> children() { return java.util.List.of(); }
     /** Replace immutable record's @Children collection with persisted child copies. */
     default T withChildren(T entity,String relation,java.util.List<?> children) { return entity; }
+    /** Generated positional mapper for joined rows, at 1-based JDBC column offset. */
+    default T readAt(ResultSet rs, int offset) throws SQLException {
+        if (offset != 1) throw new UnsupportedOperationException("Joined row reader not generated");
+        return read(rs);
+    }
+    /** Exact count/position of persistent SQL columns, excluding @Children. */
+    default int columnCount() { throw new UnsupportedOperationException("Column count not generated"); }
+    default int idColumnIndex() { throw new UnsupportedOperationException("ID column index not generated"); }
+    default int columnIndex(String sqlColumn) { throw new UnsupportedOperationException("Column index not generated"); }
     String selectSql();
     String deleteSql();
     String selectAllSql();

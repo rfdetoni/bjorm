@@ -9,9 +9,11 @@ import java.util.function.Function;
 /** Explicit, immutable instance-owned mapper registry, no globally scoped context. */
 public final class Bjorm implements Operations {
     private final DataSource dataSource;
+    private final BjormOptions options;
     private final Map<Class<?>, EntityMapper<?>> mappers;
-    private Bjorm(DataSource dataSource, EntityMapper<?>... registered) {
+    private Bjorm(DataSource dataSource,BjormOptions options,EntityMapper<?>... registered) {
         this.dataSource = Objects.requireNonNull(dataSource, "dataSource");
+        this.options = Objects.requireNonNull(options, "options");
         Map<Class<?>, EntityMapper<?>> byType = new HashMap<>();
         for(EntityMapper<?> m : registered) if(byType.putIfAbsent(m.type(), m)!=null)
             throw new IllegalArgumentException("Duplicate mapper: " + m.type());
@@ -21,10 +23,33 @@ public final class Bjorm implements Operations {
     public static Bjorm open(DataSource dataSource) {
         ArrayList<EntityMapper<?>> discovered=new ArrayList<>();
         for(EntityMapper<?> mapper:ServiceLoader.load(EntityMapper.class))discovered.add(mapper);
-        return new Bjorm(dataSource,discovered.toArray(EntityMapper<?>[]::new));
+        return new Bjorm(dataSource,BjormOptions.defaults(),discovered.toArray(EntityMapper<?>[]::new));
     }
     /** Explicit registration avoids discovery and works with custom mapper implementations. */
-    public static Bjorm open(DataSource dataSource, EntityMapper<?>... mappers) {return new Bjorm(dataSource,mappers);}
+    public static Bjorm open(DataSource dataSource,BjormOptions options) {
+        ArrayList<EntityMapper<?>> discovered=new ArrayList<>();
+        for(EntityMapper<?> mapper:ServiceLoader.load(EntityMapper.class))discovered.add(mapper);
+        return new Bjorm(dataSource,options,discovered.toArray(EntityMapper<?>[]::new));
+    }
+    public static Bjorm open(DataSource dataSource, EntityMapper<?>... mappers) {return new Bjorm(dataSource,BjormOptions.defaults(),mappers);}
+    public static Bjorm open(DataSource source,BjormOptions options,EntityMapper<?>... mappers) {
+        return new Bjorm(source,options,mappers);
+    }
+    private PreparedStatement prepare(Connection c,String sql) throws SQLException {
+        PreparedStatement ps=c.prepareStatement(sql);
+        try {if(options.queryTimeoutSeconds()>0)ps.setQueryTimeout(options.queryTimeoutSeconds());return ps;}
+        catch(SQLException|RuntimeException e){try{ps.close();}catch(SQLException ex){e.addSuppressed(ex);}throw e;}
+    }
+    private PreparedStatement prepare(Connection c,String sql,String[] keyColumns) throws SQLException {
+        PreparedStatement ps=c.prepareStatement(sql,keyColumns);
+        try {if(options.queryTimeoutSeconds()>0)ps.setQueryTimeout(options.queryTimeoutSeconds());return ps;}
+        catch(SQLException|RuntimeException e){try{ps.close();}catch(SQLException ex){e.addSuppressed(ex);}throw e;}
+    }
+    private void checkRows(int count) {
+        if(count>options.maxBufferedRows())throw new IllegalStateException(
+            "Query exceeded maxBufferedRows="+options.maxBufferedRows()+"; use a paged query or forEach/scan");
+    }
+    public BjormOptions options(){return options;}
     @SuppressWarnings("unchecked")
     private <T> EntityMapper<T> mapper(Class<?> type) {
         EntityMapper<?> mapper = mappers.get(type);
@@ -78,7 +103,7 @@ public final class Bjorm implements Operations {
         return withConnection(c -> {
             EntityMapper<T> m = mapper(type);
             String sql = "SELECT COUNT(*) FROM " + m.table() + (where == null ? "" : " WHERE " + where.sql());
-            try (PreparedStatement ps = c.prepareStatement(sql)) {
+            try (PreparedStatement ps = prepare(c,sql)) {
                 if (where != null) {
                     int i = 1;
                     for (Object value : where.params()) ps.setObject(i++, value);
@@ -111,7 +136,7 @@ public final class Bjorm implements Operations {
         return mapper(entity.getClass()).id(entity);
     }
     public <T> List<T> list(Select<T> query) {return withConnection(c->list(c,query));}
-    public <T> Optional<T> first(Select<T> query) {query.limit(1);return withConnection(c->first(c,query,null,mapper(query.type())));}
+    public <T> Optional<T> first(Select<T> query) {query.limit(1);return withConnection(c->{if(!mapper(query.type()).children().isEmpty()){List<T> values=list(c,query);return values.stream().findFirst();}return first(c,query,null,mapper(query.type()));});}
     public <T> List<Map<String,Object>> fieldRows(Select<T> query,String[] properties) {
         return withConnection(c->{EntityMapper<T> m=mapper(query.type());return project(c,query,properties,rowProperties(m,properties));});
     }
@@ -179,7 +204,7 @@ public final class Bjorm implements Operations {
     private <T> T insert(Connection c,T entity) throws SQLException {
         EntityMapper<T> m=mapper(entity.getClass());
         T prepared=m.materializeInsert(entity);
-        try(PreparedStatement ps=m.generatedId()?c.prepareStatement(m.insertSql(),new String[]{m.columnFor(m.idProperty())}):c.prepareStatement(m.insertSql())) {
+        try(PreparedStatement ps=m.generatedId()?prepare(c,m.insertSql(),new String[]{m.columnFor(m.idProperty())}):prepare(c,m.insertSql())) {
             m.bindInsert(ps,prepared);
             if(ps.executeUpdate()!=1)throw new SQLException("Insert affected unexpected number of rows");
             if(m.generatedId())try(ResultSet keys=ps.getGeneratedKeys()) {
@@ -194,7 +219,7 @@ public final class Bjorm implements Operations {
         if(m.generatedId()) throw new IllegalArgumentException("Upsert requires an application-assigned primary key");
         entity=m.materializeInsert(entity);
         if(m.id(entity)==null) throw new IllegalArgumentException("Upsert requires non-null ID");
-        try(PreparedStatement ps=c.prepareStatement(m.upsertSql())) {
+        try(PreparedStatement ps=prepare(c,m.upsertSql())) {
             m.bindUpsert(ps,entity);
             int changed=ps.executeUpdate();
             if(m.optimisticLocking() && changed==0) throw new OptimisticLockException("Stale upsert: "+m.type().getName());
@@ -230,14 +255,14 @@ public final class Bjorm implements Operations {
         for(ChildRelation<T> relation:m.children()) {
             EntityMapper<Object> childMapper=mapper(relation.childType());
             String fk=childMapper.columnFor(relation.mappedBy());
-            if(childMapper.children().isEmpty()) {
-                try(PreparedStatement ps=c.prepareStatement("DELETE FROM "+childMapper.table()+" WHERE "+fk+" = ?")) {
+            if(childMapper.children().isEmpty() && !childMapper.optimisticLocking()) {
+                try(PreparedStatement ps=prepare(c,"DELETE FROM "+childMapper.table()+" WHERE "+fk+" = ?")) {
                     childMapper.bindId(ps,1,id);
                     ps.executeUpdate();
                 }
             } else {
                 // Descendants must be removed before the child: do not depend on loaded collections.
-                try(PreparedStatement ps=c.prepareStatement("SELECT "+childMapper.qualifiedColumns("c")+" FROM "+childMapper.table()+" c WHERE c."+fk+" = ?")) {
+                try(PreparedStatement ps=prepare(c,"SELECT "+childMapper.qualifiedColumns("c")+" FROM "+childMapper.table()+" c WHERE c."+fk+" = ?")) {
                     childMapper.bindId(ps,1,id);
                     try(ResultSet rs=ps.executeQuery()) {
                         while(rs.next())removeGraph(c,childMapper.read(rs),visited);
@@ -249,7 +274,7 @@ public final class Bjorm implements Operations {
     }
     private <T> int update(Connection c,T entity) throws SQLException {
         EntityMapper<T> m=mapper(entity.getClass());
-        try(PreparedStatement ps=c.prepareStatement(m.updateSql())) {
+        try(PreparedStatement ps=prepare(c,m.updateSql())) {
             m.bindUpdate(ps,entity);
             int count=ps.executeUpdate();
             if(m.optimisticLocking() && count==0)throw new OptimisticLockException("Stale update: " + m.type().getName());
@@ -258,7 +283,7 @@ public final class Bjorm implements Operations {
     }
     private <T> int delete(Connection c,T entity) throws SQLException {
         EntityMapper<T> m=mapper(entity.getClass());
-        try(PreparedStatement ps=c.prepareStatement(m.deleteSql())) {
+        try(PreparedStatement ps=prepare(c,m.deleteSql())) {
             m.bindDelete(ps,entity);
             int count=ps.executeUpdate();
             if(m.optimisticLocking() && count==0)throw new OptimisticLockException("Stale delete: " + m.type().getName());
@@ -267,19 +292,158 @@ public final class Bjorm implements Operations {
     }
     private <T> T find(Connection c,Class<T> type,Object id) throws SQLException {
         EntityMapper<T> m=mapper(type);
-        try(PreparedStatement ps=c.prepareStatement(m.selectSql())) {
+        if (!m.children().isEmpty()) {
+            List<T> values = list(c,new Select<>(this,type).where(new SqlPredicate(
+                m.columnFor(m.idProperty())+" = ?",Collections.singletonList(id))).limit(1));
+            return values.isEmpty() ? null : values.getFirst();
+        }
+        try(PreparedStatement ps=prepare(c,m.selectSql())) {
             m.bindId(ps,1,id);
             try(ResultSet rs=ps.executeQuery()) {return rs.next()?m.read(rs):null;}
         }
     }
     private <T> List<T> list(Connection c,Select<T> query) throws SQLException {
         EntityMapper<T> m=mapper(query.type());
-        try(PreparedStatement ps=c.prepareStatement(query.sql(m,type->mapper(type)))) {
+        if (!m.children().isEmpty()) {
+            ArrayList<T> rows=new ArrayList<>();
+            readGraph(c,query,rows::add,true);
+            return rows;
+        }
+        try(PreparedStatement ps=prepare(c,query.sql(m,type->mapper(type)))) {
             query.bind(ps);
             try(ResultSet rs=ps.executeQuery()) {
                 ArrayList<T> result=new ArrayList<>();
-                while(rs.next())result.add(m.read(rs));
+                while(rs.next()){checkRows(result.size()+1);result.add(m.read(rs));}
                 return result;
+            }
+        }
+    }
+    /**
+     * Eager entity graphs: one SQL statement. Multiple sibling collections are
+     * UNION ALL branches (not simultaneous sibling JOINs, which multiply rows).
+     * LIMIT/OFFSET apply inside the root CTE, BEFORE expanding child rows.
+     */
+    private record GraphSlot(EntityMapper<Object> mapper,ChildRelation<Object> relation,
+                             int parent,int offset,String alias) {}
+    private static final class GraphNode {
+        final EntityMapper<Object> mapper;
+        Object value;
+        final Map<Integer,LinkedHashMap<Object,GraphNode>> children=new HashMap<>();
+        GraphNode(EntityMapper<Object> mapper,Object value){this.mapper=mapper;this.value=value;}
+    }
+    @SuppressWarnings("unchecked")
+    private <T> void readGraph(Connection c,Select<T> query,Consumer<T> emit,boolean bounded) throws SQLException {
+        if (query.hasJoins()) throw new IllegalArgumentException(
+            "Entity graph JOIN cannot be combined with explicit joins; use a root query and generated @Children metadata");
+        EntityMapper<T> root=mapper(query.type());
+        ArrayList<GraphSlot> slots=new ArrayList<>();
+        ArrayList<List<Integer>> paths=new ArrayList<>();
+        collectGraphPaths((EntityMapper<Object>)root,0,new ArrayList<>(),new HashSet<>(),slots,paths);
+        String rootSql=query.sql(root,type->mapper(type));
+        int rootColumns=root.columnCount();
+        StringBuilder sql=new StringBuilder("WITH roots AS (").append(rootSql).append(") ");
+        for(int branch=0;branch<paths.size();branch++) {
+            if(branch>0)sql.append(" UNION ALL ");
+            List<Integer> path=paths.get(branch);
+            sql.append("SELECT ").append(root.qualifiedColumns("r")).append(", ").append(branch);
+            for(int i=0;i<slots.size();i++) {
+                GraphSlot slot=slots.get(i);
+                if(path.contains(i)) sql.append(", ").append(slot.mapper.qualifiedColumns(slot.alias));
+                else for(int col=0;col<slot.mapper.columnCount();col++)sql.append(", NULL");
+            }
+            sql.append(" FROM roots r");
+            for(int i:path) {
+                GraphSlot slot=slots.get(i);
+                EntityMapper<Object> parent=slot.parent==0?(EntityMapper<Object>)root:slots.get(slot.parent-1).mapper;
+                String parentAlias=slot.parent==0?"r":slots.get(slot.parent-1).alias;
+                sql.append(" LEFT JOIN ").append(slot.mapper.table()).append(' ').append(slot.alias)
+                   .append(" ON ").append(slot.alias).append('.').append(slot.mapper.columnFor(slot.relation.mappedBy()))
+                   .append(" = ").append(parentAlias).append('.').append(parent.columnFor(parent.idProperty()));
+            }
+        }
+        // Keep all rows belonging to a root contiguous so one root at a time can be emitted.
+        for(SqlOrder order:query.sorting()) {
+            String column=order.column();
+            int dot=column.lastIndexOf('.');
+            if(dot>=0)column=column.substring(dot+1);
+            sql.append(query.sorting().getFirst()==order?" ORDER BY ":", ")
+               .append(root.columnIndex(column)).append(order.descending()?" DESC":" ASC");
+        }
+        sql.append(query.sorting().isEmpty()?" ORDER BY ":", ").append(root.idColumnIndex());
+        try(PreparedStatement ps=prepare(c,sql.toString())) {
+            ps.setFetchSize(options.fetchSize());
+            query.bind(ps);
+            try(ResultSet rs=ps.executeQuery()) {
+                Object lastId=null;
+                GraphNode current=null;
+                int fetchedRows=0;
+                int groupRows=0;
+                while(rs.next()) {
+                    Object id=rs.getObject(root.idColumnIndex());
+                    if(current==null || !Objects.equals(lastId,id)) {
+                        if(current!=null)emit.accept((T)finishGraph(current,slots));
+                        current=new GraphNode((EntityMapper<Object>)root,root.read(rs));
+                        lastId=id;
+                        groupRows=0;
+                    }
+                    checkRows(++groupRows); // one root may still have an enormous collection
+                    ++fetchedRows;
+                    if(bounded)checkRows(fetchedRows);
+                    List<Integer> path=paths.get(rs.getInt(rootColumns+1));
+                    GraphNode cursor=current;
+                    for(int slotIndex:path) {
+                        GraphSlot slot=slots.get(slotIndex);
+                        Object childId=rs.getObject(slot.offset+slot.mapper.idColumnIndex()-1);
+                        if(childId==null)break;
+                        LinkedHashMap<Object,GraphNode> byId=cursor.children.computeIfAbsent(slotIndex,k->new LinkedHashMap<>());
+                        GraphNode child=byId.get(childId);
+                        if(child==null) {
+                            child=new GraphNode(slot.mapper,slot.mapper.readAt(rs,slot.offset));
+                            byId.put(childId,child);
+                        }
+                        cursor=child;
+                    }
+                }
+                if(current!=null)emit.accept((T)finishGraph(current,slots));
+            }
+        }
+    }
+    private Object finishGraph(GraphNode node,List<GraphSlot> slots) {
+        Object value=node.value;
+        // Attach all mapped child relations, including empty collections on LEFT JOIN misses.
+        for(ChildRelation<Object> relation:node.mapper.children()) {
+            int slotIndex=-1;
+            for(int i=0;i<slots.size();i++)if(slots.get(i).relation==relation){slotIndex=i;break;}
+            if(slotIndex<0)throw new IllegalStateException("Missing compiled child graph slot");
+            LinkedHashMap<Object,GraphNode> related=node.children.get(slotIndex);
+            ArrayList<Object> values=new ArrayList<>(related==null?0:related.size());
+            if(related!=null)for(GraphNode child:related.values())values.add(finishGraph(child,slots));
+            value=node.mapper.withChildren(value,relation.property(),values);
+        }
+        return value;
+    }
+    @SuppressWarnings("unchecked")
+    private void collectGraphPaths(EntityMapper<Object> parent,int parentSlot,List<Integer> path,
+                                   Set<Class<?>> ancestors,List<GraphSlot> slots,List<List<Integer>> paths) {
+        if(!ancestors.add(parent.type()))throw new IllegalArgumentException(
+            "Recursive @Children type cycle not supported for one-query graph loading: "+parent.type());
+        if(parent.children().isEmpty())paths.add(List.copyOf(path));
+        for(ChildRelation<Object> relation:parent.children()) {
+            EntityMapper<Object> child=(EntityMapper<Object>)mapper(relation.childType());
+            int index=slots.size();
+            int offset=2; // root count is added after constructing all slots below
+            slots.add(new GraphSlot(child,relation,parentSlot,offset,"c"+index));
+            ArrayList<Integer> next=new ArrayList<>(path);next.add(index);
+            collectGraphPaths(child,index+1,next,ancestors,slots,paths);
+        }
+        ancestors.remove(parent.type());
+        // set physical SQL field offsets once, after all slots are known (called by top level)
+        if(parentSlot==0) {
+            int offset=mapper(parent.type()).columnCount()+2;
+            for(int i=0;i<slots.size();i++) {
+                GraphSlot slot=slots.get(i);
+                slots.set(i,new GraphSlot(slot.mapper,slot.relation,slot.parent,offset,slot.alias));
+                offset+=slot.mapper.columnCount();
             }
         }
     }
@@ -302,11 +466,11 @@ public final class Bjorm implements Operations {
         Objects.requireNonNull(projection);
         EntityMapper<T> m=mapper(query.type());
         String sql=query.sql(m,type->mapper(type),properties);
-        try(PreparedStatement ps=c.prepareStatement(sql)) {
+        try(PreparedStatement ps=prepare(c,sql)) {
             query.bind(ps);
             try(ResultSet rs=ps.executeQuery()){
                 ArrayList<P> rows=new ArrayList<>();
-                while(rs.next())rows.add(projection.read(rs));
+                while(rs.next()){checkRows(rows.size()+1);rows.add(projection.read(rs));}
                 return rows;
             }
         }
@@ -315,7 +479,7 @@ public final class Bjorm implements Operations {
         Objects.requireNonNull(projection);
         EntityMapper<T> m=mapper(query.type());
         String sql=query.sql(m,type->mapper(type),properties);
-        try(PreparedStatement ps=c.prepareStatement(sql)) {
+        try(PreparedStatement ps=prepare(c,sql)) {
             query.bind(ps);
             try(ResultSet rs=ps.executeQuery()) {
                 return rs.next()?Optional.ofNullable(projection.read(rs)):Optional.empty();
@@ -323,33 +487,34 @@ public final class Bjorm implements Operations {
         }
     }
     private <T> List<T> query(Connection c,String sql,StatementBinder binder,RowMapper<T> mapper) throws SQLException {
-        try(PreparedStatement ps=c.prepareStatement(sql)) {
+        try(PreparedStatement ps=prepare(c,sql)) {
             Objects.requireNonNull(binder).bind(ps);
-            try(ResultSet rs=ps.executeQuery()) {ArrayList<T> result=new ArrayList<>();while(rs.next())result.add(mapper.read(rs));return result;}
+            try(ResultSet rs=ps.executeQuery()) {ArrayList<T> result=new ArrayList<>();while(rs.next()){checkRows(result.size()+1);result.add(mapper.read(rs));}return result;}
         }
     }
     private <T> T one(Connection c,String sql,StatementBinder binder,RowMapper<T> mapper) throws SQLException {
-        try(PreparedStatement ps=c.prepareStatement(sql)) {
+        try(PreparedStatement ps=prepare(c,sql)) {
             Objects.requireNonNull(binder).bind(ps);
             try(ResultSet rs=ps.executeQuery()) {return rs.next()?mapper.read(rs):null;}
         }
     }
     private int execute(Connection c,String sql,StatementBinder binder) throws SQLException {
-        try(PreparedStatement ps=c.prepareStatement(sql)) {Objects.requireNonNull(binder).bind(ps);return ps.executeUpdate();}
+        try(PreparedStatement ps=prepare(c,sql)) {Objects.requireNonNull(binder).bind(ps);return ps.executeUpdate();}
     }
     private <T> void forEach(Connection c,Select<T> query,Consumer<T> consumer) throws SQLException {
         Objects.requireNonNull(consumer);
         EntityMapper<T> m=mapper(query.type());
-        try(PreparedStatement ps=c.prepareStatement(query.sql(m,type->mapper(type)))) {
-            ps.setFetchSize(128);
+        if (!m.children().isEmpty()) {readGraph(c,query,consumer,false);return;}
+        try(PreparedStatement ps=prepare(c,query.sql(m,type->mapper(type)))) {
+            ps.setFetchSize(options.fetchSize());
             query.bind(ps);
             try(ResultSet rs=ps.executeQuery()){while(rs.next())consumer.accept(m.read(rs));}
         }
     }
     private <T> void scan(Connection c,String sql,StatementBinder binder,RowMapper<T> mapper,Consumer<T> consumer) throws SQLException {
         Objects.requireNonNull(consumer);
-        try(PreparedStatement ps=c.prepareStatement(sql)) {
-            ps.setFetchSize(128);
+        try(PreparedStatement ps=prepare(c,sql)) {
+            ps.setFetchSize(options.fetchSize());
             Objects.requireNonNull(binder).bind(ps);
             try(ResultSet rs=ps.executeQuery()){while(rs.next())consumer.accept(mapper.read(rs));}
         }
@@ -361,7 +526,7 @@ public final class Bjorm implements Operations {
         T first=Objects.requireNonNull(entities.getFirst());
         EntityMapper<T> m=mapper(first.getClass());
         if(!updating && m.generatedId())throw new IllegalArgumentException("Batch generated ids not yet supported; use insert()");
-        try(PreparedStatement ps=c.prepareStatement(updating?m.updateSql():m.insertSql())) {
+        try(PreparedStatement ps=prepare(c,updating?m.updateSql():m.insertSql())) {
             int pending=0;
             for(T entity:entities) {
                 if(entity==null||entity.getClass()!=first.getClass())throw new IllegalArgumentException("Batch requires entities of one exact type");
@@ -403,7 +568,7 @@ public final class Bjorm implements Operations {
         public <T> T find(Class<T> type,Object id) {return use(c->Bjorm.this.find(c,type,id));}
         public <T> List<T> list(Class<T> type,SqlPredicate where) {return list(select(type).whereNullable(where));}
         public <T> List<T> list(Select<T> query) {return use(c->Bjorm.this.list(c,query));}
-        public <T> Optional<T> first(Select<T> query) {query.limit(1);return use(c->Bjorm.this.first(c,query,null,mapper(query.type())));}
+        public <T> Optional<T> first(Select<T> query) {query.limit(1);return use(c->{if(!mapper(query.type()).children().isEmpty()){List<T> values=Bjorm.this.list(c,query);return values.stream().findFirst();}return Bjorm.this.first(c,query,null,mapper(query.type()));});}
         public <T> List<Map<String,Object>> fieldRows(Select<T> query,String[] properties) {
             return use(c->{EntityMapper<T> m=mapper(query.type());return Bjorm.this.project(c,query,properties,rowProperties(m,properties));});
         }

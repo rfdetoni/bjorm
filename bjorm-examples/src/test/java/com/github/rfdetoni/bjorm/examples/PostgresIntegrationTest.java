@@ -35,6 +35,7 @@ public final class PostgresIntegrationTest {
             st.execute("CREATE TABLE bjorm_it_orders (id uuid PRIMARY KEY, description text)");
             // FK RESTRICT: cascade here is implemented by BJORM, not delegated to PostgreSQL.
             st.execute("CREATE TABLE bjorm_it_order_lines (id uuid PRIMARY KEY, orderId uuid NOT NULL REFERENCES bjorm_it_orders(id), sku text)");
+            st.execute("CREATE TABLE bjorm_it_order_notes (id uuid PRIMARY KEY, orderId uuid NOT NULL REFERENCES bjorm_it_orders(id), note text, version integer NOT NULL DEFAULT 0)");
             st.execute("CREATE TABLE bjorm_it_auto_uuid (id uuid PRIMARY KEY, label text)");
             st.execute("CREATE TABLE bjorm_it_auto_string (id text PRIMARY KEY, label text)");
             st.execute("CREATE TABLE bjorm_it_auto_long (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, label text)");
@@ -42,7 +43,7 @@ public final class PostgresIntegrationTest {
             st.execute("CREATE TABLE bjorm_it_record_parents (id uuid PRIMARY KEY, label text)");
             st.execute("CREATE TABLE bjorm_it_record_children (id uuid PRIMARY KEY, parentId uuid NOT NULL REFERENCES bjorm_it_record_parents(id), label text)");
         }
-        Bjorm db=Bjorm.open(ds,ItUser_BjormMapper.INSTANCE,ItProduct_BjormMapper.INSTANCE,ItDocument_BjormMapper.INSTANCE,ItOrder_BjormMapper.INSTANCE,ItOrderLine_BjormMapper.INSTANCE,AutoUuidRecord_BjormMapper.INSTANCE,AutoStringRecord_BjormMapper.INSTANCE,AutoLongRecord_BjormMapper.INSTANCE,AutoIntRecord_BjormMapper.INSTANCE,AutoUuidPojo_BjormMapper.INSTANCE,AutoParentRecord_BjormMapper.INSTANCE,AutoChildRecord_BjormMapper.INSTANCE);
+        Bjorm db=Bjorm.open(ds,ItUser_BjormMapper.INSTANCE,ItProduct_BjormMapper.INSTANCE,ItDocument_BjormMapper.INSTANCE,ItOrder_BjormMapper.INSTANCE,ItOrderLine_BjormMapper.INSTANCE,ItOrderNote_BjormMapper.INSTANCE,AutoUuidRecord_BjormMapper.INSTANCE,AutoStringRecord_BjormMapper.INSTANCE,AutoLongRecord_BjormMapper.INSTANCE,AutoIntRecord_BjormMapper.INSTANCE,AutoUuidPojo_BjormMapper.INSTANCE,AutoParentRecord_BjormMapper.INSTANCE,AutoChildRecord_BjormMapper.INSTANCE);
         UUID id=UUID.randomUUID();ItUser alice=new ItUser(id,"BJORM",34);
         try {
             AutoUuidPojo pojo=new AutoUuidPojo();pojo.setLabel("pojo");db.insert(pojo);
@@ -59,6 +60,8 @@ public final class PostgresIntegrationTest {
             AutoParentRecord root=db.insertReturning(new AutoParentRecord(null,"root",List.of(new AutoChildRecord(null,null,"child"))));
             check(root.id()!=null && root.children().getFirst().parentId().equals(root.id()) && root.children().getFirst().id()!=null,"immutable graph IDs/FK");
             check(db.list(AutoChildRecord.class,AutoChildRecord_.parentId.eq(root.id())).size()==1,"immutable children persisted");
+            check(db.find(AutoParentRecord.class,root.id()).children().size()==1,
+                  "record graph JOIN returns reconstructed immutable child list");
             check(db.delete(root)==1,"record graph delete");
             check(db.list(AutoChildRecord.class,AutoChildRecord_.parentId.eq(root.id())).isEmpty(),"record graph cascade delete");
             db.insert(alice);
@@ -103,11 +106,23 @@ public final class PostgresIntegrationTest {
             ItOrderLine line = new ItOrderLine();
             line.setSku("SKU-1");
             order.getLines().add(line);
+            ItOrderNote note=new ItOrderNote();note.setNote("Note 1");
+            order.getNotes().add(note);
             db.insert(order);
             check(order.getId() != null && order.getId().version() == 7 && order.getId().variant() == 2, "native UUID v7 parent");
             check(line.getId() != null && line.getId().version() == 7, "native UUID v7 child");
             check(order.getId().equals(line.getOrderId()), "child FK assigned after parent ID generation");
             check(db.list(ItOrderLine.class, ItOrderLine_.orderId.eq(order.getId())).size() == 1, "child saved within parent transaction");
+            ItOrder fromJoin=db.find(ItOrder.class,order.getId());
+            check(fromJoin.getLines().size()==1 && fromJoin.getNotes().size()==1, "single SQL graph JOIN loads siblings");
+            check(fromJoin.getLines().getFirst().getId().equals(line.getId()) &&
+                  fromJoin.getNotes().getFirst().getId().equals(note.getId()), "joined children mapped without duplicates");
+            check(db.select(ItOrder.class).orderBy(ItOrder_.description.asc()).limit(1).fetch().getFirst().getNotes().size()==1,
+                  "paginated graph joins children AFTER paging root");
+            check(db.list(ItOrder.class,ItOrder_.description.eq("First order")).getFirst().getNotes().size()==1,
+                  "list loads child graphs eagerly");
+            check(db.findOne(ItOrder.class,ItOrder_.description.eq("First order")).orElseThrow().getLines().size()==1,
+                  "first loads child graphs eagerly");
             order.setDescription("Updated order");
             line.setSku("SKU-2");
             check(db.upsert(order) == 1, "native PostgreSQL upsert");
@@ -116,6 +131,7 @@ public final class PostgresIntegrationTest {
             // The loaded parent has no in-memory child collection. Deletion discovers children in the DB.
             check(db.delete(db.find(ItOrder.class, order.getId())) == 1, "delete parent graph");
             check(db.list(ItOrderLine.class, ItOrderLine_.orderId.eq(order.getId())).isEmpty(), "cascade deletion from DB, not in-memory list");
+            check(db.list(ItOrderNote.class,ItOrderNote_.orderId.eq(order.getId())).isEmpty(), "versioned child cascade deletion");
             ItOrder bad = new ItOrder();
             bad.setDescription("Must roll back");
             ItOrderLine conflict = new ItOrderLine();
@@ -135,6 +151,7 @@ public final class PostgresIntegrationTest {
                 st.execute("DROP TABLE IF EXISTS bjorm_it_auto_string");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_auto_uuid");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_order_lines");
+                st.execute("DROP TABLE IF EXISTS bjorm_it_order_notes");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_orders");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_users");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_products");

@@ -40,6 +40,9 @@ public final class Select<T> {
     /** Fetch one mapped entity, using SQL LIMIT 1. */
     public Optional<T> first(){limit(1);return db.first(this);}
     Operations operations(){return db;}
+    boolean hasJoins(){return !joins.isEmpty();}
+    List<SqlOrder> sorting(){return List.copyOf(orders);}
+
 
     Class<T> type(){return type;}
     String sql(EntityMapper<T> base,Function<Class<?>,EntityMapper<?>> lookup){
@@ -92,8 +95,9 @@ public final class Select<T> {
         if(offset!=null){if(limit==null)throw new IllegalStateException("offset requires limit");sql.append(" OFFSET ?");}
         return sql.toString();
     }
-    int bind(PreparedStatement ps) throws SQLException {
-        int i=1;
+    int bind(PreparedStatement ps) throws SQLException { return bind(ps,1); }
+    int bind(PreparedStatement ps,int start) throws SQLException {
+        int i=start;
         for(Join join:joins)for(Object value:join.on.params())ps.setObject(i++,value);
         if(predicate!=null)for(Object value:predicate.params())ps.setObject(i++,value);
         if(limit!=null)ps.setInt(i++,limit);
