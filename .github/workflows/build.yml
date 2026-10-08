@@ -18,6 +18,8 @@ jobs:
           distribution: temurin
           java-version: '25'
           cache: maven
+      - name: Install annotation processor for Maven plugin resolution
+        run: mvn -B -ntp -pl bjorm-core,bjorm-processor -am -DskipTests install
       - name: Build Maven reactor
         run: mvn -B -ntp clean verify
       - name: Run generated-code and critical behavioral checks
@@ -53,6 +55,7 @@ jobs:
           cache: maven
       - name: Build and obtain PostgreSQL JDBC driver
         run: |
+          mvn -B -ntp -pl bjorm-core,bjorm-processor -am -DskipTests install
           mvn -B -ntp -pl bjorm-examples -am verify
           mvn -B -ntp org.apache.maven.plugins:maven-dependency-plugin:3.8.1:copy \
             -Dartifact=org.postgresql:postgresql:42.7.7 \

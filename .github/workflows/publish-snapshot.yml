@@ -32,6 +32,7 @@ jobs:
           python3 scripts/release_version.py check-snapshot
       - name: Validate project before publishing
         run: |
+          mvn -B -ntp -pl bjorm-core,bjorm-processor -am -DskipTests install
           mvn -B -ntp clean verify
           bash scripts/verify.sh
       - name: Publish library snapshots to GitHub Packages

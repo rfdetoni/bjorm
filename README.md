@@ -1,6 +1,6 @@
 # BJORM — Bare Metal Java ORM
 
-**Experimental 0.3.4-SNAPSHOT** — a minimal, compile-time-assisted relational mapper for Java 25. Zero Spring/JPA/Hibernate dependencies in the core; SQL and JDBC remain visible and under application control.
+**Experimental 0.3.5-SNAPSHOT** — a minimal, compile-time-assisted relational mapper for Java 25. Zero Spring/JPA/Hibernate dependencies in the core; SQL and JDBC remain visible and under application control.
 
 > Early-stage source implementation. **Not production-ready**. It is not published to Maven Central. See [architecture and acceptance status](ARCHITECTURE.md).
 
@@ -17,6 +17,7 @@
 Requires JDK **25** and Maven 3.9+:
 
 ```shell
+mvn -B -ntp -pl bjorm-core,bjorm-processor -am -DskipTests install
 mvn -B clean verify
 ./scripts/verify.sh
 ```

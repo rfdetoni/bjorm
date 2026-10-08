@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Stable version to release (example: 0.3.3, must match current SNAPSHOT)'
+        description: 'Stable version to release (example: 0.3.5, must match current SNAPSHOT)'
         required: true
         type: string
 
@@ -52,6 +52,7 @@ jobs:
           python3 scripts/release_version.py check-release "$RELEASE_VERSION"
       - name: Verify release
         run: |
+          mvn -B -ntp -pl bjorm-core,bjorm-processor -am -DskipTests install
           mvn -B -ntp clean verify
           bash scripts/verify.sh
       - name: Commit and tag release on main

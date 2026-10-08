@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.5-SNAPSHOT
+
+- Accept typed BigDecimal binds in the critical JDBC spy smoke test.
+- Install the processor/core artifacts before Maven reactor verification in build, PostgreSQL integration and release workflows: annotationProcessorPaths resolves from Maven repositories rather than the current reactor.
+- Preserve the typed BigDecimal mapper and matched JMH mapping benchmark added previously.
+
 ## 0.3.4-SNAPSHOT
 
 - Generate direct PreparedStatement.setBigDecimal for BigDecimal values instead of setObject.
