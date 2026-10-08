@@ -48,7 +48,8 @@ public final class EntityProcessor extends AbstractProcessor {
         }
         return true;
     }
-    private record Col(String property,String column,String type,String read,String write,boolean id,boolean version,boolean generated,boolean json) {}
+    private record Col(String property,String column,String type,String read,String write,boolean id,boolean version,boolean generated,boolean json,boolean uuidV7) {}
+    private record Relation(String property,String mappedBy,String childType,String getter,String childGetter,String childSetter,boolean childRecord) {}
     private void entity(TypeElement entity) throws IOException {
         if(!generated.add(entity.getQualifiedName()+"#entity"))return;
         if(entity.getNestingKind().isNested() || !entity.getModifiers().contains(Modifier.PUBLIC)) {error(entity,"@Table requires public top-level type");return;}
@@ -57,10 +58,13 @@ public final class EntityProcessor extends AbstractProcessor {
         String table=entity.getAnnotation(Table.class).value();
         if(!identifier(table)){error(entity,"Invalid table identifier: "+table);return;}
         List<Col> cols=new ArrayList<>();
+        List<Relation> relations=new ArrayList<>();
         if(record){
             for(RecordComponentElement c:entity.getRecordComponents()){
                 String prop=c.getSimpleName().toString();
-                cols.add(new Col(prop,colName(c,prop),c.asType().toString(),"value."+prop+"()","",c.getAnnotation(Id.class)!=null,c.getAnnotation(Version.class)!=null,c.getAnnotation(Id.class)!=null&&c.getAnnotation(Id.class).generated(),c.getAnnotation(Json.class)!=null));
+                if(c.getAnnotation(Children.class)!=null) {relations.add(relation(c,"value."+prop+"()"));continue;}
+                Id idAnn=c.getAnnotation(Id.class);
+                cols.add(new Col(prop,colName(c,prop),c.asType().toString(),"value."+prop+"()","",idAnn!=null,c.getAnnotation(Version.class)!=null,idAnn!=null&&idAnn.generated(),c.getAnnotation(Json.class)!=null,idAnn!=null&&idAnn.uuidV7()));
             }
         } else {
             boolean constructor=false;
@@ -70,9 +74,14 @@ public final class EntityProcessor extends AbstractProcessor {
                 String prop=el.getSimpleName().toString(),type=el.asType().toString();
                 String suff=Character.toUpperCase(prop.charAt(0))+prop.substring(1);
                 String getter=findGetter(entity,suff,type);
+                if(el.getAnnotation(Children.class)!=null) {
+                    if(getter==null) {error(el,"@Children needs public getter for "+prop);return;}
+                    relations.add(relation(el,"value."+getter+"()"));continue;
+                }
                 String setter="set"+suff;
                 if(getter==null||!hasSetter(entity,setter,type)) {error(el,"POJO needs public getter and setter for "+prop);return;}
-                cols.add(new Col(prop,colName(el,prop),type,"value."+getter+"()","value."+setter,cAnnotated(el,Id.class),cAnnotated(el,Version.class),el.getAnnotation(Id.class)!=null&&el.getAnnotation(Id.class).generated(),el.getAnnotation(Json.class)!=null));
+                Id idAnn=el.getAnnotation(Id.class);
+                cols.add(new Col(prop,colName(el,prop),type,"value."+getter+"()","value."+setter,cAnnotated(el,Id.class),cAnnotated(el,Version.class),idAnn!=null&&idAnn.generated(),el.getAnnotation(Json.class)!=null,idAnn!=null&&idAnn.uuidV7()));
             }
         }
         if(cols.isEmpty()){error(entity,"@Table requires mapped properties");return;}
@@ -84,14 +93,48 @@ public final class EntityProcessor extends AbstractProcessor {
             if(!supported(c.type())) {error(entity,"Unsupported JDBC property: "+c.type());return;}
             if(c.json() && (!c.type().equals("java.lang.String") || c.id() || c.version())){error(entity,"@Json requires a non-ID String column");return;}
             if(c.generated() && (!c.id() || record)){error(entity,"Generated IDs require @Id on a mutable POJO");return;}
+            if(c.uuidV7() && (!c.id()||record||c.generated()||!c.type().equals("java.util.UUID"))){error(entity,"@Id(uuidV7=true) needs a mutable UUID field without generated=true");return;}
             if(c.id()){if(id>=0){error(entity,"Exactly one @Id required");return;}id=i;}
             if(c.version()){if(ver>=0||c.id()||!Set.of("int","long","java.lang.Integer","java.lang.Long").contains(c.type())){error(entity,"@Version must annotate one integer/long non-id field");return;}ver=i;}
         }
         if(id<0){error(entity,"Missing @Id");return;}
         if(cols.size()==1){error(entity,"Entity needs a non-id property");return;}
-        generateMapper(entity,table,cols,id,ver,record);
+        for(Relation r:relations) {
+            TypeElement child=elements.getTypeElement(r.childType());
+            if(child==null||child.getAnnotation(Table.class)==null) {error(entity,"@Children target must be a @Table entity: "+r.childType());return;}
+            if(!r.childGetter().equals(cols.get(id).type())) {error(entity,"@Children mappedBy property must have the same type as parent ID: "+r.mappedBy());return;}
+        }
+        generateMapper(entity,table,cols,id,ver,record,relations);
         mapperServices.add(packageOf(entity)+"."+entity.getSimpleName()+"_BjormMapper");
         generatePaths(entity,cols);
+    }
+    private Relation relation(Element field,String getter) {
+        Children ann=field.getAnnotation(Children.class);
+        String mappedBy=ann.mappedBy();
+        if(!identifier(mappedBy))throw new IllegalArgumentException("Invalid @Children mappedBy: "+mappedBy);
+        if(!(field.asType() instanceof DeclaredType dt) || dt.getTypeArguments().size()!=1)
+            throw new IllegalArgumentException("@Children requires java.util.List<Child> or Collection<Child>");
+        String raw=((TypeElement)dt.asElement()).getQualifiedName().toString();
+        if(!raw.equals("java.util.List") && !raw.equals("java.util.Collection"))
+            throw new IllegalArgumentException("@Children requires List or Collection, not "+raw);
+        TypeMirror elemType=dt.getTypeArguments().getFirst();
+        if(!(elemType instanceof DeclaredType childType))throw new IllegalArgumentException("@Children type must be a concrete entity");
+        TypeElement child=(TypeElement)childType.asElement();
+        String childPropertyType=null, childGetter=null, childSetter=null;
+        boolean record=child.getKind()==ElementKind.RECORD;
+        for(Element property:record ? child.getRecordComponents():child.getEnclosedElements()) {
+            if(property.getSimpleName().contentEquals(mappedBy) && (record||property.getKind()==ElementKind.FIELD)) {
+                childPropertyType=property.asType().toString();
+                String cap=Character.toUpperCase(mappedBy.charAt(0))+mappedBy.substring(1);
+                childGetter=record?mappedBy:findGetter(child,cap,childPropertyType);
+                childSetter=record?null:"set"+cap;
+                if(childGetter==null||(!record&&!hasSetter(child,childSetter,childPropertyType)))
+                    throw new IllegalArgumentException("@Children child FK needs public getter and setter: "+mappedBy);
+                break;
+            }
+        }
+        if(childPropertyType==null)throw new IllegalArgumentException("@Children unmapped child property: "+mappedBy);
+        return new Relation(field.getSimpleName().toString(),mappedBy,child.getQualifiedName().toString(),getter,childPropertyType,childSetter,record);
     }
     private static boolean cAnnotated(Element el,Class<? extends java.lang.annotation.Annotation> ann){return el.getAnnotation(ann)!=null;}
     private String findGetter(TypeElement entity,String suff,String type){
@@ -105,7 +148,7 @@ public final class EntityProcessor extends AbstractProcessor {
         return false;
     }
     private String colName(Element el,String fallback){Column ann=el.getAnnotation(Column.class);return ann!=null?ann.value():fallback;}
-    private void generateMapper(TypeElement entity,String table,List<Col> cols,int id,int version,boolean record) throws IOException {
+    private void generateMapper(TypeElement entity,String table,List<Col> cols,int id,int version,boolean record,List<Relation> relations) throws IOException {
         String clazz=entity.getSimpleName().toString(),pkg=packageOf(entity),mapper=clazz+"_BjormMapper";
         String fields=String.join(", ",cols.stream().map(Col::column).toList());
         List<Col> insertCols=cols.stream().filter(c->!c.generated()).toList();
@@ -116,6 +159,17 @@ public final class EntityProcessor extends AbstractProcessor {
         String update="UPDATE "+table+" SET "+String.join(", ",assignments)+" WHERE "+where;
         String delete="DELETE FROM "+table+" WHERE "+where;
         String select="SELECT "+fields+" FROM "+table;
+        String upsert=null;
+        if(!cols.get(id).generated()) {
+            List<String> updateSet=new ArrayList<>();
+            for(int i=0;i<cols.size();i++)if(i!=id) {
+                Col c=cols.get(i);
+                updateSet.add(c.column()+" = "+(i==version?table+"."+c.column()+" + 1":"EXCLUDED."+c.column()));
+            }
+            upsert=insert+" ON CONFLICT ("+cols.get(id).column()+") DO UPDATE SET "+String.join(", ",updateSet)
+                +(version<0?"":" WHERE "+table+"."+cols.get(version).column()+" = EXCLUDED."+cols.get(version).column());
+        }
+
         try(Writer w=file(pkg,mapper,entity)){
             w.write("package "+pkg+";\npublic final class "+mapper+" implements com.github.rfdetoni.bjorm.EntityMapper<"+clazz+"> {\n");
             w.write("public static final "+mapper+" INSTANCE = new "+mapper+"();\npublic "+mapper+"(){}\n");
@@ -131,6 +185,28 @@ public final class EntityProcessor extends AbstractProcessor {
             w.write("public String qualifiedColumns(String alias){return "+String.join("+\", \"+",cols.stream().map(c->"alias+\"."+c.column()+"\"").toList())+";}\n");
             w.write("public boolean optimisticLocking(){return "+(version>=0)+";}\n");
             w.write("public boolean generatedId(){return "+cols.get(id).generated()+";}\n");
+            if(upsert!=null)w.write("public String upsertSql(){return \""+upsert+"\";}\n");
+            if(cols.get(id).uuidV7())w.write("public void prepareInsert("+clazz+" value){if("+cols.get(id).read()+"==null)"+cols.get(id).write()+"(com.github.rfdetoni.bjorm.UuidV7.next());}\n");
+            if(!relations.isEmpty()) {
+                w.write("public java.util.List<com.github.rfdetoni.bjorm.ChildRelation<"+clazz+">> children(){return RELATIONS;}\n");
+                w.write("private static final java.util.List<com.github.rfdetoni.bjorm.ChildRelation<"+clazz+">> RELATIONS=java.util.List.of(\n");
+                for(int ri=0;ri<relations.size();ri++) {
+                    Relation r=relations.get(ri);
+                    TypeElement child=elements.getTypeElement(r.childType());
+                    String getForeign=r.childRecord()?"value."+r.mappedBy()+"()":"value."+findGetter(child,Character.toUpperCase(r.mappedBy().charAt(0))+r.mappedBy().substring(1),r.childGetter())+"()";
+                    w.write((ri>0?",\n":"")+"new com.github.rfdetoni.bjorm.ChildRelation<"+clazz+">(){\n");
+                    w.write("public Class<?> childType(){return "+r.childType()+".class;}\n");
+                    w.write("public String mappedBy(){return \""+r.mappedBy()+"\";}\n");
+                    w.write("public Iterable<?> children("+clazz+" value){return "+r.getter()+";}\n");
+                    w.write("public void attach(Object id,Object child){"+r.childType()+" value=("+r.childType()+")child;\n");
+                    w.write("if("+getForeign+"!=null && !java.util.Objects.equals("+getForeign+",id))throw new IllegalArgumentException(\"Foreign key conflicts with parent ID\");\n");
+                    if(r.childRecord())w.write("if(!java.util.Objects.equals("+getForeign+",id))throw new IllegalArgumentException(\"Record child must declare the parent ID\");\n");
+                    else w.write("value."+r.childSetter()+"(("+r.childGetter()+")id);\n");
+                    w.write("}\n}");
+                }
+                w.write(");\n");
+            }
+
             if(cols.get(id).generated())w.write("public void acceptGeneratedId(java.sql.ResultSet rs,"+clazz+" value) throws java.sql.SQLException {"+cols.get(id).write()+"("+reader(1,cols.get(id).type())+");}\n");
             for(var e:List.of(new String[]{"insertSql",insert},new String[]{"updateSql",update},new String[]{"deleteSql",delete},new String[]{"selectSql",select+" WHERE "+cols.get(id).column()+" = ?"},new String[]{"selectAllSql",select}))
                 w.write("public String "+e[0]+"(){return \""+e[1]+"\";}\n");
@@ -147,7 +223,14 @@ public final class EntityProcessor extends AbstractProcessor {
             w.write("}\npublic void bindId(java.sql.PreparedStatement ps,int index,Object id) throws java.sql.SQLException {ps.setObject(index,id);}\n");
             w.write("public Object id("+clazz+" value){return "+cols.get(id).read()+";}\n");
             w.write("public "+clazz+" read(java.sql.ResultSet rs) throws java.sql.SQLException {\n");
-            if(record){List<String> args=new ArrayList<>();for(int i=0;i<cols.size();i++)args.add(reader(i+1,cols.get(i).type()));w.write("return new "+clazz+"("+String.join(", ",args)+");\n");}
+            if(record){
+                List<String> args=new ArrayList<>();int offset=1;
+                for(RecordComponentElement component:entity.getRecordComponents()){
+                    if(component.getAnnotation(Children.class)!=null)args.add("java.util.List.of()");
+                    else args.add(reader(offset++,component.asType().toString()));
+                }
+                w.write("return new "+clazz+"("+String.join(", ",args)+");\n");
+            }
             else {w.write(clazz+" value = new "+clazz+"();\n");for(int i=0;i<cols.size();i++)w.write(cols.get(i).write()+"("+reader(i+1,cols.get(i).type())+");\n");w.write("return value;\n");}
             w.write("}\n}\n");
         }

@@ -1,28 +1,31 @@
 # Changelog
 
+## 0.3.6-SNAPSHOT
+
+- Native RFC 9562 UUID v7 generation through `UuidV7.next()` and compile-time `@Id(uuidV7=true)` on mutable entity IDs.
+- PostgreSQL `INSERT ... ON CONFLICT DO UPDATE` generated per entity, including version-aware conflict detection.
+- `@Children(mappedBy="...")` generates FK wiring for recursive parent-first inserts/upserts and database-backed child-first deletion in one JDBC transaction.
+- Validate parent/child foreign-key integrity, rollback on failure, null children and cycle detection without reflection or global mutable state.
+- Add a PostgreSQL integration scenario covering UUID v7, upsert, cascade deletion of unloaded children and atomic rollback.
+
 ## 0.3.5-SNAPSHOT
 
-- Accept typed BigDecimal binds in the critical JDBC spy smoke test.
-- Install the processor/core artifacts before Maven reactor verification in build, PostgreSQL integration and release workflows: annotationProcessorPaths resolves from Maven repositories rather than the current reactor.
-- Preserve the typed BigDecimal mapper and matched JMH mapping benchmark added previously.
+- Preserve direct `setBigDecimal` mapping and critical JDBC spy smoke checks.
+- Install generated processor/core artifacts before Maven reactor verification in Java 25 build and release workflows.
 
 ## 0.3.4-SNAPSHOT
 
-- Generate direct PreparedStatement.setBigDecimal for BigDecimal values instead of setObject.
-- Align JMH manual mapper with generated primitive NULL checks; add wasNull support to the test ResultSet.
-- Preserve JDBC core simplicity; only introduce runtime optimizations after controlled performance measurements.
+- Generate direct `PreparedStatement.setBigDecimal` instead of generic `setObject` for BigDecimal fields, aligning the compiled JDBC binding with handwritten JDBC.
+- Treat transaction benchmark parity as a separate demonstration concern; no caches or extra runtime layers introduced without evidence.
+- Fix the JMH ResultSet stub (`wasNull`) and give the handwritten mapping the same non-null primitive checks as generated code.
 
 ## 0.3.3-SNAPSHOT
 
-- Move Java API, annotation processor, generated classes, SPI registrations and Spring adapter from `dev.bjorm` to `com.github.rfdetoni.bjorm`.
-- Align Maven groupId across all modules and bump to `0.3.3-SNAPSHOT`.
-- Document Java SE `javax.sql` / `javax.annotation.processing` compatibility; add SPI namespace verification.
-- Keep GitHub Packages Maven snapshot and stable release automation.
-
-- Add Maven GitHub Packages snapshot publication on `main`.
-- Add stable release workflow with reactor version update, tag, Maven deploy, and next development snapshot bump.
-- Align all modules on the current development snapshot; add release guards and publication documentation.
-
+- Move Java API, processor, generated symbols, ServiceLoader registration and Spring adapter from `dev.bjorm` to `com.github.rfdetoni.bjorm`.
+- Align Maven parent, module dependencies and annotation processor paths with groupId `com.github.rfdetoni.bjorm`.
+- Update processor registration, Spring auto-configuration metadata, verification scripts, consumer documentation and the release version to `0.3.3-SNAPSHOT`; no backwards compatibility shim.
+- Document why JDK JDBC and annotation processing still use `javax.sql` and `javax.annotation.processing`.
+- Keep GitHub Packages snapshot and stable release workflows, with Maven reactor version checks.
 
 ## 0.3.1-SNAPSHOT (unreleased)
 

@@ -36,9 +36,22 @@ public final class Bjorm implements Operations {
         try(Connection c=dataSource.getConnection()) {return work.run(c);}
         catch(SQLException e) {throw new BjormException("JDBC operation failed",e);}
     }
-    public <T> void insert(T entity) {Objects.requireNonNull(entity);withConnection(c->{insert(c,entity);return null;});}
+    public <T> void insert(T entity) {
+        Objects.requireNonNull(entity);
+        if(mapper(entity.getClass()).children().isEmpty()) withConnection(c->{insert(c,entity);return null;});
+        else tx(tx->tx.insert(entity));
+    }
     public <T> int update(T entity) {Objects.requireNonNull(entity);return withConnection(c->update(c,entity));}
-    public <T> int delete(T entity) {Objects.requireNonNull(entity);return withConnection(c->delete(c,entity));}
+    public <T> int delete(T entity) {
+        Objects.requireNonNull(entity);
+        if(mapper(entity.getClass()).children().isEmpty()) return withConnection(c->delete(c,entity));
+        return txResult(tx->tx.delete(entity));
+    }
+    public <T> int upsert(T entity) {
+        Objects.requireNonNull(entity);
+        if(mapper(entity.getClass()).children().isEmpty()) return withConnection(c->upsert(c,entity));
+        return txResult(tx->tx.upsert(entity));
+    }
     public <T> T find(Class<T> type,Object id) {return withConnection(c->find(c,type,id));}
     public <T> List<T> list(Class<T> type,SqlPredicate where) {return select(type).whereNullable(where).fetch();}
     public <T> List<T> list(Select<T> query) {return withConnection(c->list(c,query));}
@@ -108,6 +121,7 @@ public final class Bjorm implements Operations {
     }
     private <T> void insert(Connection c,T entity) throws SQLException {
         EntityMapper<T> m=mapper(entity.getClass());
+        m.prepareInsert(entity);
         try(PreparedStatement ps=m.generatedId()?c.prepareStatement(m.insertSql(),Statement.RETURN_GENERATED_KEYS):c.prepareStatement(m.insertSql())) {
             m.bindInsert(ps,entity);
             if(ps.executeUpdate()!=1)throw new SQLException("Insert affected unexpected number of rows");
@@ -116,6 +130,60 @@ public final class Bjorm implements Operations {
                 m.acceptGeneratedId(keys,entity);
             }
         }
+    }
+    private <T> int upsert(Connection c,T entity) throws SQLException {
+        EntityMapper<T> m=mapper(entity.getClass());
+        if(m.generatedId()) throw new IllegalArgumentException("Upsert requires an application-assigned primary key");
+        m.prepareInsert(entity);
+        if(m.id(entity)==null) throw new IllegalArgumentException("Upsert requires non-null ID");
+        try(PreparedStatement ps=c.prepareStatement(m.upsertSql())) {
+            m.bindUpsert(ps,entity);
+            int changed=ps.executeUpdate();
+            if(m.optimisticLocking() && changed==0) throw new OptimisticLockException("Stale upsert: "+m.type().getName());
+            return changed;
+        }
+    }
+    private <T> void persistGraph(Connection c,T entity,boolean upserting,IdentityHashMap<Object,Boolean> visited) throws SQLException {
+        if(visited.put(entity,Boolean.TRUE)!=null) throw new IllegalArgumentException("Cycle or repeated entity in persistence graph");
+        if(upserting) upsert(c,entity); else insert(c,entity);
+        EntityMapper<T> m=mapper(entity.getClass());
+        Object id=m.id(entity);
+        if(id==null && !m.children().isEmpty()) throw new IllegalArgumentException("Parent ID is null: "+m.type());
+        for(ChildRelation<T> relation:m.children()) {
+            Iterable<?> children=relation.children(entity);
+            if(children==null)continue;
+            for(Object child:children) {
+                Objects.requireNonNull(child,"Child cannot be null");
+                if(!relation.childType().isInstance(child)) throw new IllegalArgumentException("Unexpected child type: "+child.getClass());
+                relation.attach(id,child);
+                persistGraph(c,child,upserting,visited);
+            }
+        }
+    }
+    private record DeleteKey(Class<?> type,Object id) {}
+    private <T> int removeGraph(Connection c,T entity,Set<DeleteKey> visited) throws SQLException {
+        EntityMapper<T> m=mapper(entity.getClass());
+        Object id=Objects.requireNonNull(m.id(entity),"Cannot delete entity with null ID");
+        if(!visited.add(new DeleteKey(m.type(),id)))throw new IllegalArgumentException("Cycle in persisted entity graph");
+        for(ChildRelation<T> relation:m.children()) {
+            EntityMapper<Object> childMapper=mapper(relation.childType());
+            String fk=childMapper.columnFor(relation.mappedBy());
+            if(childMapper.children().isEmpty()) {
+                try(PreparedStatement ps=c.prepareStatement("DELETE FROM "+childMapper.table()+" WHERE "+fk+" = ?")) {
+                    childMapper.bindId(ps,1,id);
+                    ps.executeUpdate();
+                }
+            } else {
+                // Descendants must be removed before the child: do not depend on loaded collections.
+                try(PreparedStatement ps=c.prepareStatement("SELECT "+childMapper.qualifiedColumns("c")+" FROM "+childMapper.table()+" c WHERE c."+fk+" = ?")) {
+                    childMapper.bindId(ps,1,id);
+                    try(ResultSet rs=ps.executeQuery()) {
+                        while(rs.next())removeGraph(c,childMapper.read(rs),visited);
+                    }
+                }
+            }
+        }
+        return delete(c,entity);
     }
     private <T> int update(Connection c,T entity) throws SQLException {
         EntityMapper<T> m=mapper(entity.getClass());
@@ -258,9 +326,15 @@ public final class Bjorm implements Operations {
             if(!active||owner!=Thread.currentThread())throw new IllegalStateException("Transaction no longer active or accessed from a different thread");
             try{return work.run(c);}catch(SQLException e){throw new BjormException("Transaction JDBC operation failed",e);}
         }
-        public <T> void insert(T value) {use(c->{Bjorm.this.insert(c,value);return null;});}
+        public <T> void insert(T value) {use(c->{Bjorm.this.persistGraph(c,value,false,new IdentityHashMap<>());return null;});}
+        public <T> int upsert(T value) {return use(c->{
+            EntityMapper<T> mapper=Bjorm.this.mapper(value.getClass());
+            if(mapper.children().isEmpty()) return Bjorm.this.upsert(c,value);
+            Bjorm.this.persistGraph(c,value,true,new IdentityHashMap<>());
+            return 1;
+        });}
         public <T> int update(T value) {return use(c->Bjorm.this.update(c,value));}
-        public <T> int delete(T value) {return use(c->Bjorm.this.delete(c,value));}
+        public <T> int delete(T value) {return use(c->Bjorm.this.removeGraph(c,value,new HashSet<>()));}
         public <T> T find(Class<T> type,Object id) {return use(c->Bjorm.this.find(c,type,id));}
         public <T> List<T> list(Class<T> type,SqlPredicate where) {return list(select(type).whereNullable(where));}
         public <T> List<T> list(Select<T> query) {return use(c->Bjorm.this.list(c,query));}

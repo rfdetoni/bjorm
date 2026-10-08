@@ -95,6 +95,14 @@ public final class SmokeTest {
             catch(SQLException expected) {expect(expected.getMessage().contains("NULL"),"NULL primitive guard");}
         } catch(Exception e) {throw new AssertionError(e);}
 
-        System.out.println("PASS: compiled SQL, bind order, DSL binding, tx commit/rollback/scope and primitive NULL guard");
+        UUID last = UuidV7.next();
+        expect(last.version() == 7 && last.variant() == 2, "UUID v7 version and RFC variant");
+        for (int i = 0; i < 2000; i++) {
+            UUID current = UuidV7.next();
+            expect(current.version() == 7 && current.variant() == 2, "UUID v7 bits");
+            expect(last.compareTo(current) < 0, "UUID v7 monotonic order");
+            last = current;
+        }
+        System.out.println("PASS: generated SQL, DSL, transactions, primitive NULL guard and monotonic UUID v7");
     }
 }

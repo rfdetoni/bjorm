@@ -32,8 +32,11 @@ public final class PostgresIntegrationTest {
             st.execute("CREATE TABLE bjorm_it_users (id uuid PRIMARY KEY, name text NOT NULL, age integer NOT NULL)");
             st.execute("CREATE TABLE bjorm_it_products (id uuid PRIMARY KEY, name text, unit_price numeric(18,2), status text, version integer NOT NULL DEFAULT 0)");
             st.execute("CREATE TABLE bjorm_it_documents (id uuid PRIMARY KEY, payload jsonb)");
+            st.execute("CREATE TABLE bjorm_it_orders (id uuid PRIMARY KEY, description text)");
+            // FK RESTRICT: cascade here is implemented by BJORM, not delegated to PostgreSQL.
+            st.execute("CREATE TABLE bjorm_it_order_lines (id uuid PRIMARY KEY, orderId uuid NOT NULL REFERENCES bjorm_it_orders(id), sku text)");
         }
-        Bjorm db=Bjorm.open(ds,ItUser_BjormMapper.INSTANCE,ItProduct_BjormMapper.INSTANCE,ItDocument_BjormMapper.INSTANCE);
+        Bjorm db=Bjorm.open(ds,ItUser_BjormMapper.INSTANCE,ItProduct_BjormMapper.INSTANCE,ItDocument_BjormMapper.INSTANCE,ItOrder_BjormMapper.INSTANCE,ItOrderLine_BjormMapper.INSTANCE);
         UUID id=UUID.randomUUID();ItUser alice=new ItUser(id,"BJORM",34);
         try {
             db.insert(alice);
@@ -59,9 +62,38 @@ public final class PostgresIntegrationTest {
             try{db.update(product);throw new AssertionError("stale update not detected");}catch(OptimisticLockException expected){}
             db.tx(tx->tx.batchInsert(List.of(new ItUser(UUID.randomUUID(),"Batch1",1),new ItUser(UUID.randomUUID(),"Batch2",2))));
             check(db.list(ItUser.class,ItUser_.name.in(List.of("Batch1","Batch2"))).size()==2,"batch committed");
-            System.out.println("PASS: PostgreSQL CRUD, DSL, version, rollback, batch");
+            ItOrder order = new ItOrder();
+            order.setDescription("First order");
+            ItOrderLine line = new ItOrderLine();
+            line.setSku("SKU-1");
+            order.getLines().add(line);
+            db.insert(order);
+            check(order.getId() != null && order.getId().version() == 7 && order.getId().variant() == 2, "native UUID v7 parent");
+            check(line.getId() != null && line.getId().version() == 7, "native UUID v7 child");
+            check(order.getId().equals(line.getOrderId()), "child FK assigned after parent ID generation");
+            check(db.list(ItOrderLine.class, ItOrderLine_.orderId.eq(order.getId())).size() == 1, "child saved within parent transaction");
+            order.setDescription("Updated order");
+            line.setSku("SKU-2");
+            check(db.upsert(order) == 1, "native PostgreSQL upsert");
+            check(db.find(ItOrder.class, order.getId()).getDescription().equals("Updated order"), "upsert updates parent");
+            check(db.find(ItOrderLine.class, line.getId()).getSku().equals("SKU-2"), "upsert updates child");
+            // The loaded parent has no in-memory child collection. Deletion discovers children in the DB.
+            check(db.delete(db.find(ItOrder.class, order.getId())) == 1, "delete parent graph");
+            check(db.list(ItOrderLine.class, ItOrderLine_.orderId.eq(order.getId())).isEmpty(), "cascade deletion from DB, not in-memory list");
+            ItOrder bad = new ItOrder();
+            bad.setDescription("Must roll back");
+            ItOrderLine conflict = new ItOrderLine();
+            conflict.setSku("bad-fk");
+            conflict.setOrderId(UUID.randomUUID());
+            bad.getLines().add(conflict);
+            try { db.insert(bad); throw new AssertionError("Expected foreign key rejection"); }
+            catch(IllegalArgumentException expected) { }
+            check(db.list(ItOrder.class, ItOrder_.description.eq("Must roll back")).isEmpty(), "cascade insert failure rolled back root");
+            System.out.println("PASS: PostgreSQL CRUD, DSL, version, rollback, batch, UUID v7, upsert and nested cascade");
         } finally {
             try(Connection c=ds.getConnection();Statement st=c.createStatement()){
+                st.execute("DROP TABLE IF EXISTS bjorm_it_order_lines");
+                st.execute("DROP TABLE IF EXISTS bjorm_it_orders");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_users");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_products");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_documents");

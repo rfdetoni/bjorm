@@ -1,4 +1,4 @@
-# BJORM implementation status — 0.3.5-SNAPSHOT
+# BJORM implementation status — 0.3.6-SNAPSHOT
 
 This is a new codebase derived from the *requirements* and concepts of WORM. It is not a copy of WORM and intentionally has no backward compatibility.
 
@@ -30,20 +30,25 @@ This is a new codebase derived from the *requirements* and concepts of WORM. It 
 - Actual PostgreSQL integration execution: opt-in integration source exists, but no DB/driver configured here
 - Benchmarks with real PostgreSQL and equivalent handwritten JDBC baseline; no measured speedups or memory data
 - MySQL-specific SQL behavior and dialect matrix; not covered until PostgreSQL parity is validated
-- Additional nonessential features (auto graph cascade, lazy load, session, identity map, L2 cache) explicitly out of scope
+- Additional nonessential features (implicit graph cascade (without @Children), lazy load, session, identity map, L2 cache) explicitly out of scope
 
 ## Publishing
 
-`rfdetoni/bjorm` is the origin and `main` is the publication branch. Maven GitHub Packages publishing requires successful GitHub Actions execution; this document does not assert release success.
+`rfdetoni/bjorm` is the intended origin and `main` the publication branch. Maven GitHub Packages publication requires successfully executing the GitHub Actions workflow; this document does not assert release success. Do not call this production ready.
 
 
-## Release automation (0.3.5-SNAPSHOT)
+## Release automation (0.3.6-SNAPSHOT)
 
 - Configured GitHub Packages Maven `distributionManagement` for the reactor.
-- `main` snapshot deployments and workflow-dispatched stable release with version bump are added but **not executed on GitHub**. They require valid source on `main`, a successful JDK 25 build and permissions.
+- `main` snapshot deployments and workflow-dispatched stable release with version bump are added but **not executed on GitHub**. They require source pushed to `main` and successful CI credentials/build.
 - GitHub Actions/JDK25/Maven integration has not been verified in this environment.
 
-## Namespace migration (0.3.5-SNAPSHOT)
+## Namespace migration (0.3.6-SNAPSHOT)
 
-- Maven groupId, Java packages, generated classes, ServiceLoader and Spring adapter use `com.github.rfdetoni.bjorm`.
-- `javax.sql` belongs to Java SE `java.sql` and `javax.annotation.processing` belongs to Java SE `java.compiler`; these do not require Jakarta EE.
+- Public API and generated code package: `com.github.rfdetoni.bjorm` (previously `dev.bjorm`).
+- Maven groupId for all modules: `com.github.rfdetoni.bjorm`; artifacts and GitHub Packages URL unchanged.
+- No compatibility shims, since this project is pre-production.
+
+## 0.3.6-SNAPSHOT
+
+UUID v7, native upsert and explicit recursive `@Children` graph persistence/deletion implemented. Critical smoke and PostgreSQL integration tests prepared. PostgreSQL integration must pass on CI; no claim about performance improvement without benchmark evidence.

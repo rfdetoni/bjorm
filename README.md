@@ -1,6 +1,6 @@
 # BJORM — Bare Metal Java ORM
 
-**Experimental 0.3.5-SNAPSHOT** — a minimal, compile-time-assisted relational mapper for Java 25. Zero Spring/JPA/Hibernate dependencies in the core; SQL and JDBC remain visible and under application control.
+**Experimental 0.3.6-SNAPSHOT** — a minimal, compile-time-assisted relational mapper for Java 25. Zero Spring/JPA/Hibernate dependencies in the core; SQL and JDBC remain visible and under application control.
 
 > Early-stage source implementation. **Not production-ready**. It is not published to Maven Central. See [architecture and acceptance status](ARCHITECTURE.md).
 
@@ -17,7 +17,6 @@
 Requires JDK **25** and Maven 3.9+:
 
 ```shell
-mvn -B -ntp -pl bjorm-core,bjorm-processor -am -DskipTests install
 mvn -B clean verify
 ./scripts/verify.sh
 ```
@@ -177,7 +176,7 @@ The canonical development branch is **`main`**. All code changes should be pushe
 
 - **CI** (`.github/workflows/build.yml`): compiles the Maven reactor on JDK 25 and runs critical checks.
 - **Snapshot publication** (`publish-snapshot.yml`): on every push to `main`, validates the project and deploys `bjorm-core`, `bjorm-processor`, `bjorm-spring-boot` plus their parent POM to **GitHub Packages**. Examples and benchmarks are not published.
-- **Stable release** (`release.yml`): manually dispatch from `main` with a version matching the currently committed snapshot (e.g., `0.3.3` for `0.3.3-SNAPSHOT`). The workflow updates every POM, verifies, commits and tags `v0.3.3`, deploys Maven artifacts, then moves `main` to `0.3.4-SNAPSHOT`. All publication uses the workflow's `GITHUB_TOKEN` and no custom credentials are required in the repository.
+- **Stable release** (`release.yml`): manually dispatch from `main` with a version matching the currently committed snapshot (e.g., `0.3.3` for `0.3.3-SNAPSHOT`). The workflow updates every POM, verifies, commits and tags `v0.3.3`, deploys Maven artifacts, then moves `main` to `0.3.6-SNAPSHOT`. All publication uses the workflow's `GITHUB_TOKEN` and no custom credentials are required in the repository.
 
 ### Release procedure
 
@@ -189,10 +188,9 @@ GitHub Actions must have **read/write workflow permissions**, and branch protect
 
 ### Maven consumer example (GitHub Packages)
 
-JDBC `javax.sql.DataSource` remains part of Java SE 25 (`java.sql` module), and is not a Jakarta EE API; `jakarta.sql.DataSource` does not exist in the JDK. The annotation processor uses `javax.annotation.processing` from the Java SE `java.compiler` module.
+JDBC `javax.sql.DataSource` remains part of the Java SE 25 `java.sql` module: it is **not** a legacy Jakarta EE API and must not be replaced by a nonexistent `jakarta.sql.DataSource`. Similarly, the annotation processor uses `javax.annotation.processing` from the JDK `java.compiler` module.
 
-The Maven `groupId` and API package are `com.github.rfdetoni.bjorm`; GitHub Packages remains at `https://maven.pkg.github.com/rfdetoni/bjorm`. Maven Central publication requires separate namespace verification.
-
+The published Maven `groupId` and the Java API namespace are `com.github.rfdetoni.bjorm`. The GitHub Packages repository URL remains `https://maven.pkg.github.com/rfdetoni/bjorm`. Maven coordinates are not automatically derived from the GitHub URL; the declared namespace must be consistent across modules. Maven Central requires independent namespace verification.
 
 ```xml
 <repositories>
@@ -211,3 +209,37 @@ The Maven `groupId` and API package are `com.github.rfdetoni.bjorm`; GitHub Pack
 ```
 
 For consumers outside GitHub Actions, GitHub Packages may require authenticated access; configure `settings.xml` with a token in your own environment, **never commit credentials**. The configured target is **GitHub Packages**, not Maven Central. Maven Central publication requires separately verifying the namespace and configuring Central Portal publishing/signing credentials.
+
+## UUID v7, upsert and nested persistence (PostgreSQL)
+
+Use `@Id(uuidV7 = true)` on a **mutable `UUID` POJO field**, with a public getter and setter. BJORM assigns the ID before binding the INSERT/UPSERT. Immutable records can call `UuidV7.next()` explicitly when constructed; records cannot have their ID mutated.
+
+```java
+@Table("orders")
+public class Order {
+    @Id(uuidV7 = true) private UUID id;
+    private String customer;
+    @Children(mappedBy = "orderId") private List<OrderLine> lines;
+    // public no-arg constructor + getters and setters
+}
+
+@Table("order_lines")
+public class OrderLine {
+    @Id(uuidV7 = true) private UUID id;
+    private UUID orderId; // child FK; must match parent ID type
+    private String sku;
+    // public no-arg constructor + getters and setters
+}
+
+var db = Bjorm.open(dataSource);
+db.insert(order);     // one transaction: parent, then children; FKs assigned
+// Or update existing rows and insert new ones using native PostgreSQL ON CONFLICT:
+db.upsert(order);
+db.delete(order);     // one transaction: delete persisted children, then parent
+```
+
+- Child relations are explicit `@Children(mappedBy="childForeignKeyJavaProperty")` lists/collections. Only mapped columns are persisted; relationship collections are **not** automatically loaded on SELECT.
+- The parent ID must be available when inserting children. Record children must already carry the correct immutable FK. IDs generated by the database and UUID v7 on mutable POJOs are supported for parent and child inserts.
+- `upsert` is PostgreSQL native and matches on the primary key; it **does not** delete existing children omitted from the supplied collection. With `@Version`, the conflict branch rejects stale versions.
+- Cascade deletion resolves persisted children by foreign key even if the in-memory collection is empty, and deletes descendants before their parents. Use DB foreign keys for referential integrity. This is **not** JPA orphan removal or lazy loading.
+- Every graph is committed or rolled back atomically. Cyclic/repeated in-memory entities are rejected; this API has no identity map, no transparent retry, and no global context.

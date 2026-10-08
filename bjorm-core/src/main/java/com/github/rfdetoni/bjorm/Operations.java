@@ -4,6 +4,8 @@ import java.util.*;
 public interface Operations {
     <T> void insert(T entity);
     <T> int update(T entity);
+    /** Atomic PostgreSQL insert-or-update by primary key. */
+    <T> int upsert(T entity);
     <T> int delete(T entity);
     <T> T find(Class<T> type, Object id);
     <T> List<T> list(Class<T> type, SqlPredicate predicate);

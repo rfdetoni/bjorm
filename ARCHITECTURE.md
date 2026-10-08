@@ -2,7 +2,7 @@
 
 ## Product
 
-Bare Metal Java ORM. Java 25, PostgreSQL-first, direct JDBC, compile-time generated mappings, no mandatory frameworks, no WORM API compatibility. `0.3.3-SNAPSHOT` is an experimental codebase, **not production-ready**.
+Bare Metal Java ORM. Java 25, PostgreSQL-first, direct JDBC, compile-time generated mappings, no mandatory frameworks, no WORM API compatibility. `0.3.6-SNAPSHOT` is an experimental codebase, **not production-ready**.
 
 ## Modules
 
@@ -16,7 +16,7 @@ Bare Metal Java ORM. Java 25, PostgreSQL-first, direct JDBC, compile-time genera
 
 ## Dependencies and state
 
-- Core uses only JDK/JDBC; `javax.sql.DataSource` is part of Java SE 25 (`java.sql` module), not Java EE/Jakarta EE. The consuming application provides the DataSource, driver, and optional pool.
+- Core uses only JDK/JDBC; `javax.sql.DataSource` is part of Java SE 25 (`java.sql` module), not legacy Java EE/Jakarta EE. The consuming application supplies the `DataSource`, JDBC driver, and optional connection pool.
 - Instance-owned immutable entity registry (`Bjorm`); no static locator or global mutable cache. Generated mapper instances hold no connection. Startup-only ServiceLoader discovery is optional; explicit mapper registration is also supported.
 - All values flow to `PreparedStatement` binders; SQL identifiers are validated at compile-time or through generated `Field`/`SqlOrder` types.
 - `@Query` literals compiled by javac into positional binding; SQL body can still be invalid for a live database (schema and vendor syntax not checked).
@@ -65,4 +65,11 @@ No unsupported throughput claims. Compare equivalent SQL, statement caching, con
 
 ## Delivery
 
-GitHub repository: `rfdetoni/bjorm`. GitHub Actions provides Java 25 and PostgreSQL integration gates; actual Maven publication must be confirmed separately.
+GitHub repository: `rfdetoni/bjorm`. GitHub Actions performs Java 25 validation and a disposable PostgreSQL integration run; Maven publishing status must be confirmed separately.
+
+## Explicit graph persistence (0.3.6)
+
+- Generated `@Id(uuidV7=true)` for mutable POJO UUID fields and `UuidV7.next()` for immutable record construction.
+- PostgreSQL primary-key `ON CONFLICT DO UPDATE` generated at compile time, with `@Version` predicate on conflict.
+- Generated `@Children(mappedBy="foreignKeyJavaProperty")` metadata. Parent inserts and upserts recurse in dependency order, assigning child FKs after parent ID assignment. Deletion looks up persisted descendants by FK and removes them before the parent. Operations are atomic in one JDBC transaction.
+- No automatic relationship loading, orphan reconciliation, implicit global session or reflection-based relationship discovery; implicit cascades without `@Children` remain out of scope.

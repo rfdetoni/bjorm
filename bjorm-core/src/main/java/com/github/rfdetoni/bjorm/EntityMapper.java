@@ -5,6 +5,12 @@ public interface EntityMapper<T> extends RowMapper<T> {
     Class<T> type();
     String insertSql();
     String updateSql();
+    /** PostgreSQL native INSERT ON CONFLICT (primary key) DO UPDATE. */
+    default String upsertSql() { throw new UnsupportedOperationException("Upsert SQL not generated"); }
+    default void bindUpsert(PreparedStatement ps,T entity) throws SQLException { bindInsert(ps, entity); }
+    /** Runs before INSERT and UPSERT; generated POJO mappers can assign UUID v7 here. */
+    default void prepareInsert(T entity) {}
+    default java.util.List<ChildRelation<T>> children() { return java.util.List.of(); }
     String selectSql();
     String deleteSql();
     String selectAllSql();

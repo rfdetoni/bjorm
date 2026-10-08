@@ -38,7 +38,7 @@ public final class AdvancedSmokeTest {
         PreparedStatement prepared(int connection,String sql){
             Map<Integer,Object> binds=new TreeMap<>();List<Map<Integer,Object>> batch=new ArrayList<>();
             return (PreparedStatement)proxy(PreparedStatement.class,(p,m,a)->switch(m.getName()){
-                case "setInt","setLong","setObject","setString","setBigDecimal","setBoolean","setDouble","setFloat","setShort"->{binds.put((Integer)a[0],a[1]);yield null;}
+                case "setInt","setLong","setObject","setString","setBoolean","setDouble","setFloat","setShort","setBigDecimal"->{binds.put((Integer)a[0],a[1]);yield null;}
                 case "addBatch"->{batch.add(new HashMap<>(binds));yield null;}
                 case "executeBatch"->{int[] counts=new int[batch.size()];Arrays.fill(counts,updateResult);for(Map<Integer,Object> b:batch)calls.add(new Call(connection,sql,Map.copyOf(b)));batch.clear();yield counts;}
                 case "executeUpdate"->{calls.add(new Call(connection,sql,Map.copyOf(binds)));yield updateResult;}
