@@ -1,6 +1,6 @@
 # BJORM — Bare Metal Java ORM
 
-**Experimental 0.3.2-SNAPSHOT** — a minimal, compile-time-assisted relational mapper for Java 25. Zero Spring/JPA/Hibernate dependencies in the core; SQL and JDBC remain visible and under application control.
+**Experimental 0.3.3-SNAPSHOT** — a minimal, compile-time-assisted relational mapper for Java 25. Zero Spring/JPA/Hibernate dependencies in the core; SQL and JDBC remain visible and under application control.
 
 > Early-stage source implementation. **Not production-ready**. It is not published to Maven Central. See [architecture and acceptance status](ARCHITECTURE.md).
 
@@ -167,7 +167,7 @@ The adapter creates the `Bjorm` bean using `TransactionAwareDataSourceProxy`; if
 
 No transparent lazy loading, L2 cache, implicit graph persistence, schema migrations, complete SQL parser or fallback reflective mapping. SQL table/column names are ASCII identifiers and not quoted; avoid reserved names. `@Projection` maps columns **in selection order**. Static `@Query` methods can return `List<T>`, `Optional<T>`, `T`, a supported scalar, or `int` for DML; there is no proxy-based fallback. Plain `db.list()` collects all results, so prefer `limit` or `forEach` for larger datasets.
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) and [`bjorm-examples`](bjorm-examples/src/main/java/dev/bjorm/examples).
+See [ARCHITECTURE.md](ARCHITECTURE.md) and [`bjorm-examples`](bjorm-examples/src/main/java/com/github/rfdetoni/bjorm/examples).
 
 
 ## Maven versioning and publication
@@ -176,17 +176,22 @@ The canonical development branch is **`main`**. All code changes should be pushe
 
 - **CI** (`.github/workflows/build.yml`): compiles the Maven reactor on JDK 25 and runs critical checks.
 - **Snapshot publication** (`publish-snapshot.yml`): on every push to `main`, validates the project and deploys `bjorm-core`, `bjorm-processor`, `bjorm-spring-boot` plus their parent POM to **GitHub Packages**. Examples and benchmarks are not published.
-- **Stable release** (`release.yml`): manually dispatch from `main` with a version matching the currently committed snapshot (e.g., `0.3.2` for `0.3.2-SNAPSHOT`). The workflow updates every POM, verifies, commits and tags `v0.3.2`, deploys Maven artifacts, then moves `main` to `0.3.3-SNAPSHOT`. All publication uses the workflow's `GITHUB_TOKEN` and no custom credentials are required in the repository.
+- **Stable release** (`release.yml`): manually dispatch from `main` with a version matching the currently committed snapshot (e.g., `0.3.3` for `0.3.3-SNAPSHOT`). The workflow updates every POM, verifies, commits and tags `v0.3.3`, deploys Maven artifacts, then moves `main` to `0.3.4-SNAPSHOT`. All publication uses the workflow's `GITHUB_TOKEN` and no custom credentials are required in the repository.
 
 ### Release procedure
 
 1. Make sure the latest changes have been pushed to `main` and CI passes.
-2. In **GitHub → Actions → release-maven → Run workflow**, select `main` and enter the stable version, e.g. `0.3.2`.
+2. In **GitHub → Actions → release-maven → Run workflow**, select `main` and enter the stable version, e.g. `0.3.3`.
 3. Check that the release version commit and tag exist, the library packages were published, and `main` has the next snapshot version.
 
 GitHub Actions must have **read/write workflow permissions**, and branch protection must permit the release workflow's pushes. The workflow uses the built-in token with `contents:write` and `packages:write` permissions. A failed deploy after the release tag is pushed requires explicit recovery; it does not mean the release was published successfully. Version checks prevent accidental mismatched reactor versions.
 
 ### Maven consumer example (GitHub Packages)
+
+JDBC `javax.sql.DataSource` remains part of Java SE 25 (`java.sql` module), and is not a Jakarta EE API; `jakarta.sql.DataSource` does not exist in the JDK. The annotation processor uses `javax.annotation.processing` from the Java SE `java.compiler` module.
+
+The Maven `groupId` and API package are `com.github.rfdetoni.bjorm`; GitHub Packages remains at `https://maven.pkg.github.com/rfdetoni/bjorm`. Maven Central publication requires separate namespace verification.
+
 
 ```xml
 <repositories>
@@ -197,9 +202,9 @@ GitHub Actions must have **read/write workflow permissions**, and branch protect
 </repositories>
 <dependencies>
   <dependency>
-    <groupId>dev.bjorm</groupId>
+    <groupId>com.github.rfdetoni.bjorm</groupId>
     <artifactId>bjorm-core</artifactId>
-    <version>0.3.2-SNAPSHOT</version>
+    <version>0.3.3-SNAPSHOT</version>
   </dependency>
 </dependencies>
 ```

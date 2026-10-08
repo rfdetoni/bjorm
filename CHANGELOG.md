@@ -1,10 +1,15 @@
 # Changelog
 
-## 0.3.2-SNAPSHOT
+## 0.3.3-SNAPSHOT
+
+- Move Java API, annotation processor, generated classes, SPI registrations and Spring adapter from `dev.bjorm` to `com.github.rfdetoni.bjorm`.
+- Align Maven groupId across all modules and bump to `0.3.3-SNAPSHOT`.
+- Document Java SE `javax.sql` / `javax.annotation.processing` compatibility; add SPI namespace verification.
+- Keep GitHub Packages Maven snapshot and stable release automation.
 
 - Add Maven GitHub Packages snapshot publication on `main`.
 - Add stable release workflow with reactor version update, tag, Maven deploy, and next development snapshot bump.
-- Align all modules on `0.3.2-SNAPSHOT`; add release guards and publication documentation.
+- Align all modules on the current development snapshot; add release guards and publication documentation.
 
 
 ## 0.3.1-SNAPSHOT (unreleased)
