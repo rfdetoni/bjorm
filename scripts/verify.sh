@@ -14,6 +14,7 @@ java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.AdvancedSmo
 java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.GraphQuerySmokeTest
 java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.AnnotatedJoinSmokeTest
 java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.DialectSmokeTest
+java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.InheritedFieldSmokeTest
 java -cp "$OUT/core:$OUT/example${BJORM_MYSQL_DRIVER_JAR:+:$BJORM_MYSQL_DRIVER_JAR}" com.github.rfdetoni.bjorm.examples.MySqlIntegrationTest
 
 java -cp "$OUT/core:$OUT/example${BJORM_DRIVER_JAR:+:$BJORM_DRIVER_JAR}" com.github.rfdetoni.bjorm.examples.PostgresIntegrationTest

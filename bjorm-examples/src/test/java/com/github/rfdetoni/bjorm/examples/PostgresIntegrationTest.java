@@ -37,15 +37,24 @@ public final class PostgresIntegrationTest {
             st.execute("CREATE TABLE bjorm_it_order_lines (id uuid PRIMARY KEY, orderId uuid NOT NULL REFERENCES bjorm_it_orders(id), sku text)");
             st.execute("CREATE TABLE bjorm_it_order_notes (id uuid PRIMARY KEY, orderId uuid NOT NULL REFERENCES bjorm_it_orders(id), note text, version integer NOT NULL DEFAULT 0)");
             st.execute("CREATE TABLE bjorm_it_auto_uuid (id uuid PRIMARY KEY, label text)");
+            st.execute("CREATE TABLE bjorm_it_inherited (id uuid PRIMARY KEY, created_at timestamp, name text)");
             st.execute("CREATE TABLE bjorm_it_auto_string (id text PRIMARY KEY, label text)");
             st.execute("CREATE TABLE bjorm_it_auto_long (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, label text)");
             st.execute("CREATE TABLE bjorm_it_auto_int (id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY, label text)");
             st.execute("CREATE TABLE bjorm_it_record_parents (id uuid PRIMARY KEY, label text)");
             st.execute("CREATE TABLE bjorm_it_record_children (id uuid PRIMARY KEY, parentId uuid NOT NULL REFERENCES bjorm_it_record_parents(id), label text)");
         }
-        Bjorm db=Bjorm.open(ds,ItUser_BjormMapper.INSTANCE,ItProduct_BjormMapper.INSTANCE,ItDocument_BjormMapper.INSTANCE,ItOrder_BjormMapper.INSTANCE,ItOrderInner_BjormMapper.INSTANCE,ItOrderOuter_BjormMapper.INSTANCE,ItOrderLine_BjormMapper.INSTANCE,ItOrderNote_BjormMapper.INSTANCE,AutoUuidRecord_BjormMapper.INSTANCE,AutoStringRecord_BjormMapper.INSTANCE,AutoLongRecord_BjormMapper.INSTANCE,AutoIntRecord_BjormMapper.INSTANCE,AutoUuidPojo_BjormMapper.INSTANCE,AutoParentRecord_BjormMapper.INSTANCE,AutoChildRecord_BjormMapper.INSTANCE);
+        Bjorm db=Bjorm.open(ds,ItUser_BjormMapper.INSTANCE,ItProduct_BjormMapper.INSTANCE,ItDocument_BjormMapper.INSTANCE,ItOrder_BjormMapper.INSTANCE,ItOrderInner_BjormMapper.INSTANCE,ItOrderOuter_BjormMapper.INSTANCE,ItOrderLine_BjormMapper.INSTANCE,ItOrderNote_BjormMapper.INSTANCE,AutoUuidRecord_BjormMapper.INSTANCE,AutoStringRecord_BjormMapper.INSTANCE,AutoLongRecord_BjormMapper.INSTANCE,AutoIntRecord_BjormMapper.INSTANCE,AutoUuidPojo_BjormMapper.INSTANCE,AutoParentRecord_BjormMapper.INSTANCE,AutoChildRecord_BjormMapper.INSTANCE,InheritedPatient_BjormMapper.INSTANCE);
         UUID id=UUID.randomUUID();ItUser alice=new ItUser(id,"BJORM",34);
         try {
+            InheritedPatient inherited=new InheritedPatient();
+            inherited.setName("Inherited");
+            inherited.setCreatedAt(java.time.LocalDateTime.of(2026,10,8,10,0));
+            db.insert(inherited);
+            InheritedPatient reloaded=db.find(InheritedPatient.class,inherited.getId());
+            check(reloaded!=null && reloaded.getId().equals(inherited.getId()) &&
+                  reloaded.getCreatedAt().equals(inherited.getCreatedAt()) && reloaded.getName().equals("Inherited"),
+                  "real PostgreSQL inherited fields");
             AutoUuidPojo pojo=new AutoUuidPojo();pojo.setLabel("pojo");db.insert(pojo);
             check(pojo.getId()!=null && pojo.getId().version()==7,"POJO auto UUID");
             AutoUuidRecord ar=new AutoUuidRecord(null,"record");
