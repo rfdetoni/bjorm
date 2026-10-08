@@ -201,7 +201,11 @@ public final class EntityProcessor extends AbstractProcessor {
             w.write("public boolean optimisticLocking(){return "+(version>=0)+";}\n");
             w.write("public boolean generatedId(){return "+cols.get(id).generated()+";}\n");
             w.write("public boolean immutable(){return "+record+";}\n");
-            if(upsert!=null)w.write("public String upsertSql(){return \""+upsert+"\";}\n");
+            if(upsert!=null) {
+                w.write("public String upsertSql(){return \""+upsert+"\";}\n");
+                String changes=String.join(", ",cols.stream().filter(c->!c.id()).map(c->"\""+c.column()+"\"").toList());
+                w.write("public String upsertSql(com.github.rfdetoni.bjorm.SqlDialect dialect){return dialect.upsertSql(insertSql(dialect),\""+table+"\",\""+cols.get(id).column()+"\",java.util.List.of("+changes+"),"+(version>=0?"\""+cols.get(version).column()+"\"":"null")+");}\n");
+            }
             if(cols.get(id).uuidV7()) {
                 String expression=cols.get(id).type().equals("java.lang.String")?"com.github.rfdetoni.bjorm.UuidV7.next().toString()":"com.github.rfdetoni.bjorm.UuidV7.next()";
                 if(record)w.write("public "+clazz+" materializeInsert("+clazz+" value){if(value."+cols.get(id).property()+"()!=null)return value;return new "+clazz+"("+recordArguments(entity,cols.get(id).property(),expression)+");}\n");
@@ -247,17 +251,21 @@ public final class EntityProcessor extends AbstractProcessor {
             }
             for(var e:List.of(new String[]{"insertSql",insert},new String[]{"updateSql",update},new String[]{"deleteSql",delete},new String[]{"selectSql",select+" WHERE "+cols.get(id).column()+" = ?"},new String[]{"selectAllSql",select}))
                 w.write("public String "+e[0]+"(){return \""+e[1]+"\";}\n");
-            w.write("public void bindInsert(java.sql.PreparedStatement ps,"+clazz+" value) throws java.sql.SQLException {\n");
-            int insIndex=1;for(Col c:cols)if(!c.generated())w.write(setter(insIndex++,c.read(),c.type())+"\n");
-            w.write("}\npublic void bindUpdate(java.sql.PreparedStatement ps,"+clazz+" value) throws java.sql.SQLException {\n");
+            w.write("public void bindInsert(java.sql.PreparedStatement ps,"+clazz+" value) throws java.sql.SQLException {bindInsert(ps,value,com.github.rfdetoni.bjorm.SqlDialects.POSTGRESQL);}\n");
+            w.write("public void bindInsert(java.sql.PreparedStatement ps,"+clazz+" value,com.github.rfdetoni.bjorm.SqlDialect dialect) throws java.sql.SQLException {\n");
+            int insIndex=1;for(Col c:cols)if(!c.generated())w.write(setter(insIndex++,c.read(),c.type(),"dialect")+"\n");
+            w.write("}\npublic void bindUpdate(java.sql.PreparedStatement ps,"+clazz+" value) throws java.sql.SQLException {bindUpdate(ps,value,com.github.rfdetoni.bjorm.SqlDialects.POSTGRESQL);}\n");
+            w.write("public void bindUpdate(java.sql.PreparedStatement ps,"+clazz+" value,com.github.rfdetoni.bjorm.SqlDialect dialect) throws java.sql.SQLException {\n");
             int index=1;
-            for(int i=0;i<cols.size();i++)if(i!=id&&i!=version)w.write(setter(index++,cols.get(i).read(),cols.get(i).type())+"\n");
-            w.write(setter(index++,cols.get(id).read(),cols.get(id).type())+"\n");
-            if(version>=0)w.write(setter(index++,cols.get(version).read(),cols.get(version).type())+"\n");
-            w.write("}\npublic void bindDelete(java.sql.PreparedStatement ps,"+clazz+" value) throws java.sql.SQLException {\n");
-            w.write(setter(1,cols.get(id).read(),cols.get(id).type())+"\n");
-            if(version>=0)w.write(setter(2,cols.get(version).read(),cols.get(version).type())+"\n");
+            for(int i=0;i<cols.size();i++)if(i!=id&&i!=version)w.write(setter(index++,cols.get(i).read(),cols.get(i).type(),"dialect")+"\n");
+            w.write(setter(index++,cols.get(id).read(),cols.get(id).type(),"dialect")+"\n");
+            if(version>=0)w.write(setter(index++,cols.get(version).read(),cols.get(version).type(),"dialect")+"\n");
+            w.write("}\npublic void bindDelete(java.sql.PreparedStatement ps,"+clazz+" value) throws java.sql.SQLException {bindDelete(ps,value,com.github.rfdetoni.bjorm.SqlDialects.POSTGRESQL);}\n");
+            w.write("public void bindDelete(java.sql.PreparedStatement ps,"+clazz+" value,com.github.rfdetoni.bjorm.SqlDialect dialect) throws java.sql.SQLException {\n");
+            w.write(setter(1,cols.get(id).read(),cols.get(id).type(),"dialect")+"\n");
+            if(version>=0)w.write(setter(2,cols.get(version).read(),cols.get(version).type(),"dialect")+"\n");
             w.write("}\npublic void bindId(java.sql.PreparedStatement ps,int index,Object id) throws java.sql.SQLException {ps.setObject(index,id);}\n");
+            w.write("public void bindId(java.sql.PreparedStatement ps,int index,Object id,com.github.rfdetoni.bjorm.SqlDialect dialect) throws java.sql.SQLException {dialect.bindValue(ps,index,id);}\n");
             w.write("public Object id("+clazz+" value){return "+cols.get(id).read()+";}\n");
             w.write("public String idProperty(){return \""+cols.get(id).property()+"\";}\n");
             w.write("public "+clazz+" read(java.sql.ResultSet rs) throws java.sql.SQLException {return readAt(rs,1); }\n");
@@ -411,7 +419,8 @@ public final class EntityProcessor extends AbstractProcessor {
         case "java.lang.String","java.util.UUID","int","java.lang.Integer","long","java.lang.Long","short","java.lang.Short","float","java.lang.Float","double","java.lang.Double","boolean","java.lang.Boolean","java.math.BigDecimal","java.time.LocalDate","java.time.LocalDateTime","java.time.Instant","java.time.OffsetDateTime"->true;
         default->{TypeElement e=elements.getTypeElement(type);yield e!=null&&e.getKind()==ElementKind.ENUM;}
     };}
-    private String setter(int i,String access,String type){return switch(type){
+    private String setter(int i,String access,String type){return setter(i,access,type,null);}
+    private String setter(int i,String access,String type,String dialect){return switch(type){
         case "int"->"ps.setInt("+i+","+access+");";
         case "long"->"ps.setLong("+i+","+access+");";
         case "short"->"ps.setShort("+i+","+access+");";
@@ -419,6 +428,7 @@ public final class EntityProcessor extends AbstractProcessor {
         case "double"->"ps.setDouble("+i+","+access+");";
         case "boolean"->"ps.setBoolean("+i+","+access+");";
         case "java.lang.String"->"ps.setString("+i+","+access+");";
+        case "java.util.UUID"->dialect==null?"ps.setObject("+i+","+access+");":dialect+".bindUuid(ps,"+i+","+access+");";
         case "java.math.BigDecimal"->"ps.setBigDecimal("+i+","+access+");";
         default -> {TypeElement e=elements.getTypeElement(type);
             yield "ps.setObject("+i+","+(e!=null&&e.getKind()==ElementKind.ENUM?"("+access+"==null?null:"+access+".name())":access)+");";}
@@ -431,6 +441,7 @@ public final class EntityProcessor extends AbstractProcessor {
         case "double"->"com.github.rfdetoni.bjorm.JdbcValues.requiredDouble(rs,"+i+")";
         case "boolean"->"com.github.rfdetoni.bjorm.JdbcValues.requiredBoolean(rs,"+i+")";
         case "java.lang.String"->"rs.getString("+i+")";
+        case "java.util.UUID"->"com.github.rfdetoni.bjorm.JdbcValues.uuid(rs,"+i+")";
         case "java.math.BigDecimal"->"rs.getBigDecimal("+i+")";
         default -> {TypeElement e=elements.getTypeElement(type);yield e!=null&&e.getKind()==ElementKind.ENUM ? "com.github.rfdetoni.bjorm.JdbcValues.enumValue(rs,"+i+","+type+".class)" : "rs.getObject("+i+","+boxed(type)+".class)";}
     };}

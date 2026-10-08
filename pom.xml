@@ -5,7 +5,7 @@
 
   <groupId>com.github.rfdetoni.bjorm</groupId>
   <artifactId>bjorm-parent</artifactId>
-  <version>0.3.11-SNAPSHOT</version>
+  <version>0.3.12-SNAPSHOT</version>
   <packaging>pom</packaging>
   <name>BJORM Parent</name>
   <description>Bare Metal Java ORM — framework-agnostic JDBC mapping</description>

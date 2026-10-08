@@ -3,6 +3,7 @@ package com.github.rfdetoni.bjorm.spring;
 import com.github.rfdetoni.bjorm.Bjorm;
 import com.github.rfdetoni.bjorm.BjormOptions;
 import com.github.rfdetoni.bjorm.EntityMapper;
+import com.github.rfdetoni.bjorm.SqlDialects;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
@@ -22,11 +23,12 @@ public class BjormAutoConfiguration {
     public Bjorm bjorm(DataSource source,ObjectProvider<EntityMapper<?>> mappers,
                        @Value("${bjorm.jdbc.query-timeout-seconds:30}") int queryTimeoutSeconds,
                        @Value("${bjorm.jdbc.max-buffered-rows:100000}") int maxBufferedRows,
-                       @Value("${bjorm.jdbc.fetch-size:128}") int fetchSize) {
+                       @Value("${bjorm.jdbc.fetch-size:128}") int fetchSize,
+                       @Value("${bjorm.dialect:postgresql}") String dialectName) {
         EntityMapper<?>[] mapped=mappers.orderedStream().toArray(EntityMapper<?>[]::new);
         TransactionAwareDataSourceProxy transactionalSource=new TransactionAwareDataSourceProxy(source);
         BjormOptions options=new BjormOptions(queryTimeoutSeconds,maxBufferedRows,fetchSize);
-        return mapped.length==0 ? Bjorm.open(transactionalSource,options) : Bjorm.open(transactionalSource,options,mapped);
+        return Bjorm.open(transactionalSource,options,SqlDialects.named(dialectName),mapped);
     }
     @Bean
     @ConditionalOnMissingBean(BjormPages.class)
