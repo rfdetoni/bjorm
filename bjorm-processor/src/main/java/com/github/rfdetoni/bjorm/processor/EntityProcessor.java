@@ -73,7 +73,7 @@ public final class EntityProcessor extends AbstractProcessor {
             boolean constructor=false;
             for(Element el:entity.getEnclosedElements()) if(el.getKind()==ElementKind.CONSTRUCTOR && el instanceof ExecutableElement e && e.getParameters().isEmpty() && e.getModifiers().contains(Modifier.PUBLIC))constructor=true;
             if(!constructor){error(entity,"POJO needs a public no-argument constructor");return;}
-            for(Element el:entity.getEnclosedElements())if(el.getKind()==ElementKind.FIELD && !el.getModifiers().contains(Modifier.STATIC)){
+            for(Element el:pojoFields(entity)){
                 String prop=el.getSimpleName().toString(),type=el.asType().toString();
                 String suff=Character.toUpperCase(prop.charAt(0))+prop.substring(1);
                 String getter=findGetter(entity,suff,type);
@@ -88,7 +88,7 @@ public final class EntityProcessor extends AbstractProcessor {
             }
         }
         if(cols.isEmpty()){error(entity,"@Table requires mapped properties");return;}
-        for(Element el:record ? entity.getRecordComponents() : entity.getEnclosedElements()) {
+        for(Element el:record ? entity.getRecordComponents() : pojoFields(entity)) {
             Id ann=el.getAnnotation(Id.class);
             if(ann!=null && ann.assigned() && (ann.generated()||ann.uuidV7())) {
                 error(el,"@Id assigned=true cannot be combined with generated=true or uuidV7=true");return;
@@ -145,15 +145,34 @@ public final class EntityProcessor extends AbstractProcessor {
         if(childPropertyType==null)throw new IllegalArgumentException("@Children unmapped child property: "+mappedBy);
         return new Relation(field.getSimpleName().toString(),mappedBy,child.getQualifiedName().toString(),getter,childPropertyType,childSetter,record,ann.type());
     }
+    /** Compile inheritance once; no superclass reflection is used at runtime. */
+    private List<Element> pojoFields(TypeElement entity) {
+        LinkedList<TypeElement> hierarchy=new LinkedList<>();
+        for(TypeElement t=entity;t!=null&&!t.getQualifiedName().contentEquals("java.lang.Object");){
+            hierarchy.addFirst(t);
+            TypeMirror parent=t.getSuperclass();
+            t=parent.getKind()==TypeKind.DECLARED?(TypeElement)types.asElement(parent):null;
+        }
+        List<Element> fields=new ArrayList<>();
+        Set<String> names=new HashSet<>();
+        for(TypeElement t:hierarchy)for(Element field:t.getEnclosedElements()) {
+            if(field.getKind()!=ElementKind.FIELD||field.getModifiers().contains(Modifier.STATIC)||
+               field.getModifiers().contains(Modifier.TRANSIENT))continue;
+            if(!names.add(field.getSimpleName().toString()))
+                throw new IllegalArgumentException("Inherited persistent property shadowed: "+field.getSimpleName());
+            fields.add(field);
+        }
+        return fields;
+    }
     private static boolean cAnnotated(Element el,Class<? extends java.lang.annotation.Annotation> ann){return el.getAnnotation(ann)!=null;}
     private String findGetter(TypeElement entity,String suff,String type){
-        for(Element el:entity.getEnclosedElements())if(el.getKind()==ElementKind.METHOD&&el instanceof ExecutableElement m && m.getModifiers().contains(Modifier.PUBLIC) && m.getParameters().isEmpty() && m.getReturnType().toString().equals(type)){
+        for(Element el:elements.getAllMembers(entity))if(el.getKind()==ElementKind.METHOD&&el instanceof ExecutableElement m && m.getModifiers().contains(Modifier.PUBLIC) && m.getParameters().isEmpty() && m.getReturnType().toString().equals(type)){
             if(m.getSimpleName().contentEquals("get"+suff)||m.getSimpleName().contentEquals("is"+suff))return m.getSimpleName().toString();
         }
         return null;
     }
     private boolean hasSetter(TypeElement entity,String name,String type){
-        for(Element el:entity.getEnclosedElements())if(el.getKind()==ElementKind.METHOD&&el instanceof ExecutableElement m && m.getModifiers().contains(Modifier.PUBLIC) && m.getSimpleName().contentEquals(name)&&m.getParameters().size()==1&&m.getParameters().getFirst().asType().toString().equals(type))return true;
+        for(Element el:elements.getAllMembers(entity))if(el.getKind()==ElementKind.METHOD&&el instanceof ExecutableElement m && m.getModifiers().contains(Modifier.PUBLIC) && m.getSimpleName().contentEquals(name)&&m.getParameters().size()==1&&m.getParameters().getFirst().asType().toString().equals(type))return true;
         return false;
     }
     private String colName(Element el,String fallback){Column ann=el.getAnnotation(Column.class);return ann!=null?ann.value():fallback;}
