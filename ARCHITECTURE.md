@@ -77,3 +77,7 @@ GitHub repository: `rfdetoni/bjorm`. GitHub Actions performs Java 25 validation 
 ## Automatic identifier generation (0.3.8)
 
 The annotation processor determines `@Id` behavior from declared Java types without runtime reflection: UUID and String receive UUID v7 if null; int/long and boxed variants require an IDENTITY column in the database and use generated keys. `@Id(assigned=true)` disables inference. A Java record is immutable and must be persisted with `insertReturning` when its ID is absent; the mapper creates a new record with its assigned ID. Cascades rebuild record child foreign keys and return the persisted graph.
+
+## Typed domain compatibility (0.3.15)
+
+Inherited POJO columns and @Id are compiled by the annotation processor from the superclass chain (base-first, no per-row reflection). Typed JSON uses application-provided JsonCodec<T> instances stored in the generated mapper; the core has no Jackson dependency. Domain audit/soft-delete and module-aware routing remain explicit responsibilities of consumers (e.g. LJF) and must be validated in tenant-specific integration tests.

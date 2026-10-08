@@ -66,3 +66,9 @@ UUID v7, native upsert and explicit recursive `@Children` graph persistence/dele
 - Java smoke/SQL-shape and opt-in PostgreSQL coverage added.
 
 - Spring Boot adapter BOM upgraded to 4.1.1 in 0.3.14-SNAPSHOT; the consumer's real PostgreSQL `@Transactional` test validates integration and cannot be inferred from a Java-only smoke run.
+
+## 0.3.15-SNAPSHOT
+
+- Implemented compile-time mapped superclass field inheritance, with collision rejection and a PostgreSQL integration fixture.
+- Implemented typed JSON codecs for entity fields (including generic List<T>); generated JDBC binding and row mapping support String/default and typed/custom codecs.
+- Still application-specific: audit author/time, soft-delete filters, tenant/multi-DataSource routing, singular read-only relation mapping and LJF/LiviaPatient migrations. Never claim these are done by the BJORM core.

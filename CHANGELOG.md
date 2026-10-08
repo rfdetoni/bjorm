@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.15-SNAPSHOT
+
+- Compile persistent POJO fields declared in superclasses, including inherited @Id, @Column, @Version and @Children; access them through public inherited getters/setters, with deterministic base-first column ordering and shadowing rejection. No reflection in CRUD.
+- Extend @Json to typed objects/collections via explicit compile-time JsonCodec<T> classes, keeping existing String fields unchanged and JSON parameter casts selected by SQL dialect.
+- Reuse stateless per-mapper codec instances; preserve SQL NULL values, generate typed readers/binders and fail compilation when a typed @Json field lacks a codec.
+- Add real PostgreSQL integration checks for inherited ID/createdAt fields and typed JSON list round-trips, with regression smoke checks for both PostgreSQL and MySQL dialect casts.
+- Keep soft-delete/audit/tenant routing on their explicit domain boundaries instead of implicitly changing delete semantics or adding global context.
+
 ## 0.3.14-SNAPSHOT
 
 - Upgrade optional `bjorm-spring-boot` dependency management from Spring Boot 4.0.3 to latest stable 4.1.1; preserve Spring-free core and automatic DataSource/transaction integration.

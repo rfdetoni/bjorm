@@ -352,3 +352,40 @@ In Spring Boot 4: set `bjorm.dialect: mysql` (default: `postgresql`).
 ## Spring Boot integration
 
 The optional `bjorm-spring-boot` adapter targets **Spring Boot 4.1.1** (stable) and uses Spring's JDBC transaction-aware DataSource so `@Transactional` works with the same connection. No Spring dependencies are added to `bjorm-core`. Integration is exercised in `bjorm-demo` against PostgreSQL, including commit and rollback. Configure `bjorm.dialect` to select the SQL dialect.
+
+## Inherited entity fields (compile-time)
+
+Entity classes can inherit mapped fields from plain Java superclasses. The BJORM processor walks the hierarchy oldest-first, generates access via public getters/setters, and rejects shadowed property names or duplicate mapped columns. Java records retain their own declared components.
+
+```java
+public class BaseEntity {
+    @Id private UUID id;
+    @Column("created_at") private LocalDateTime createdAt;
+    // public getters and setters
+}
+@Table("patients")
+public class Patient extends BaseEntity {
+    private String name;
+    public Patient() {}
+    // public getters and setters
+}
+// db.insert(new Patient()) automatically creates UUID v7 and binds inherited properties.
+```
+
+BJORM does **not** mutate created/updated timestamps automatically: lifecycle methods and authenticated-user audit context must be invoked by the domain/service layer. This avoids duplicate or misleading writes during migration.
+
+## Typed JSON (no Jackson dependency in core)
+
+`@Json String` still binds the text directly. For a domain object, list or map, supply a codec whose parameter exactly matches the Java property type:
+
+```java
+public final class IntListCodec implements JsonCodec<List<Integer>> {
+    public String encode(List<Integer> value) { /* use your JSON serializer */ return "..."; }
+    public List<Integer> decode(String json) { /* use your JSON parser */ return List.of(); }
+}
+
+@Table("documents")
+public record Document(@Id UUID id, @Json(codec = IntListCodec.class) List<Integer> scores) {}
+```
+
+In production, implement codecs using your application's Jackson ObjectMapper (or another serializer). The generated mapper keeps one codec instance and calls it on a non-null value; null columns remain SQL NULL. Use thread-safe, stateless codecs because a generated mapper is shared across threads. SQL uses `CAST(? AS jsonb)` on PostgreSQL and `CAST(? AS JSON)` on MySQL. No reflective entity conversion is added to BJORM's hot path.
