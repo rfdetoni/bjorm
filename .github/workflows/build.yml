@@ -62,3 +62,42 @@ jobs:
             -DoutputDirectory=bjorm-examples/target
       - name: Verify against real PostgreSQL
         run: bash scripts/verify.sh
+
+  mysql:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root_test
+          MYSQL_DATABASE: bjorm_test
+          MYSQL_USER: bjorm
+          MYSQL_PASSWORD: bjorm_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -u bjorm -pbjorm_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 15
+    env:
+      BJORM_MYSQL_JDBC_URL: jdbc:mysql://localhost:3306/bjorm_test?sslMode=DISABLED
+      BJORM_MYSQL_USER: bjorm
+      BJORM_MYSQL_PASSWORD: bjorm_test
+      BJORM_MYSQL_DRIVER_JAR: bjorm-examples/target/mysql-connector-j-9.4.0.jar
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+      - name: Build and fetch MySQL JDBC driver
+        run: |
+          mvn -B -ntp -pl bjorm-core,bjorm-processor -am -DskipTests install
+          mvn -B -ntp -pl bjorm-examples -am verify
+          mvn -B -ntp org.apache.maven.plugins:maven-dependency-plugin:3.8.1:copy \
+            -Dartifact=com.mysql:mysql-connector-j:9.4.0 \
+            -DoutputDirectory=bjorm-examples/target
+      - name: Verify with real MySQL 8.4
+        run: bash scripts/verify.sh

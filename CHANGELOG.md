@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.12-SNAPSHOT
+
+- Introduce a minimal `SqlDialect` SPI with PostgreSQL and MySQL 8.4 implementations, without driver dependencies in the core.
+- Delegate native upsert, JSON parameters, UUID binding and supported JOIN operations to the selected dialect.
+- Add Spring property `bjorm.dialect` (postgresql/mysql), retaining PostgreSQL as default.
+- MySQL uses a row alias instead of deprecated VALUES(col) in ON DUPLICATE KEY UPDATE.
+- Refuse MySQL FULL OUTER JOIN and versioned UPSERT until semantics are safely supported.
+- Add MySQL 8.4 CI and real JDBC integration plus dialect unit smoke tests.
+
+
 ## 0.3.11-SNAPSHOT
 
 - Generate per-relation join type for @Children: LEFT(default), INNER, RIGHT and FULL OUTER.

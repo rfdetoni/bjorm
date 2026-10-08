@@ -325,3 +325,26 @@ collections. Sibling child collections use independent `UNION ALL` branches,
 not a cartesian product. `LIMIT/OFFSET` over an explicit join is rejected.
 RIGHT/FULL can produce unmatched child rows; rooted entity results skip them,
 while SQL projections can expose the outer-join result directly.
+
+## SQL dialects (0.3.12)
+
+Mapped CRUD/joins now choose a dialect at BJORM construction. No JDBC driver is
+bundled in the core; the consumer supplies the correct JDBC driver and DataSource.
+
+```java
+Bjorm db = Bjorm.open(source, BjormOptions.defaults(), SqlDialects.MYSQL,
+                      Product_BjormMapper.INSTANCE);
+```
+
+In Spring Boot 4: set `bjorm.dialect: mysql` (default: `postgresql`).
+
+- **PostgreSQL 17**: UUID native, JSONB, ON CONFLICT upsert and all join types.
+- **MySQL 8.4**: store UUIDs in `CHAR(36)`, native JSON and
+  `ON DUPLICATE KEY UPDATE` with row aliases.
+- `FULL OUTER JOIN` is not available on MySQL; explicitly rejected.
+- MySQL upsert on `@Version` is refused; using MySQL UPSERT with multiple
+  UNIQUE indexes can update a different conflict target than PostgreSQL.
+- `@Query` native SQL and manually supplied SQL may be database-specific;
+  the dialect does not automatically rewrite arbitrary SQL.
+- Extra dialect implementations can implement `SqlDialect`; verify the
+  target JDBC driver's binding and SQL semantics using integration tests.
