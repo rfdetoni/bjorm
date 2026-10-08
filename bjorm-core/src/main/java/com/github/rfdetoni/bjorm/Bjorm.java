@@ -10,10 +10,12 @@ import java.util.function.Function;
 public final class Bjorm implements Operations {
     private final DataSource dataSource;
     private final BjormOptions options;
+    private final SqlDialect dialect;
     private final Map<Class<?>, EntityMapper<?>> mappers;
-    private Bjorm(DataSource dataSource,BjormOptions options,EntityMapper<?>... registered) {
+    private Bjorm(DataSource dataSource,BjormOptions options,SqlDialect dialect,EntityMapper<?>... registered) {
         this.dataSource = Objects.requireNonNull(dataSource, "dataSource");
         this.options = Objects.requireNonNull(options, "options");
+        this.dialect = Objects.requireNonNull(dialect, "dialect");
         Map<Class<?>, EntityMapper<?>> byType = new HashMap<>();
         for(EntityMapper<?> m : registered) if(byType.putIfAbsent(m.type(), m)!=null)
             throw new IllegalArgumentException("Duplicate mapper: " + m.type());
@@ -23,18 +25,27 @@ public final class Bjorm implements Operations {
     public static Bjorm open(DataSource dataSource) {
         ArrayList<EntityMapper<?>> discovered=new ArrayList<>();
         for(EntityMapper<?> mapper:ServiceLoader.load(EntityMapper.class))discovered.add(mapper);
-        return new Bjorm(dataSource,BjormOptions.defaults(),discovered.toArray(EntityMapper<?>[]::new));
+        return new Bjorm(dataSource,BjormOptions.defaults(),SqlDialects.POSTGRESQL,discovered.toArray(EntityMapper<?>[]::new));
     }
     /** Explicit registration avoids discovery and works with custom mapper implementations. */
     public static Bjorm open(DataSource dataSource,BjormOptions options) {
         ArrayList<EntityMapper<?>> discovered=new ArrayList<>();
         for(EntityMapper<?> mapper:ServiceLoader.load(EntityMapper.class))discovered.add(mapper);
-        return new Bjorm(dataSource,options,discovered.toArray(EntityMapper<?>[]::new));
+        return new Bjorm(dataSource,options,SqlDialects.POSTGRESQL,discovered.toArray(EntityMapper<?>[]::new));
     }
-    public static Bjorm open(DataSource dataSource, EntityMapper<?>... mappers) {return new Bjorm(dataSource,BjormOptions.defaults(),mappers);}
+    public static Bjorm open(DataSource dataSource, EntityMapper<?>... mappers) {return new Bjorm(dataSource,BjormOptions.defaults(),SqlDialects.POSTGRESQL,mappers);}
     public static Bjorm open(DataSource source,BjormOptions options,EntityMapper<?>... mappers) {
-        return new Bjorm(source,options,mappers);
+        return new Bjorm(source,options,SqlDialects.POSTGRESQL,mappers);
     }
+    public static Bjorm open(DataSource source,BjormOptions options,SqlDialect dialect,EntityMapper<?>... mappers){
+        if(mappers.length==0) {
+            ArrayList<EntityMapper<?>> discovered=new ArrayList<>();
+            for(EntityMapper<?> mapper:ServiceLoader.load(EntityMapper.class))discovered.add(mapper);
+            return new Bjorm(source,options,dialect,discovered.toArray(EntityMapper<?>[]::new));
+        }
+        return new Bjorm(source,options,dialect,mappers);
+    }
+    public SqlDialect dialect(){return dialect;}
     private PreparedStatement prepare(Connection c,String sql) throws SQLException {
         PreparedStatement ps=c.prepareStatement(sql);
         try {if(options.queryTimeoutSeconds()>0)ps.setQueryTimeout(options.queryTimeoutSeconds());return ps;}
@@ -111,7 +122,7 @@ public final class Bjorm implements Operations {
             try (PreparedStatement ps = prepare(c,sql)) {
                 if (where != null) {
                     int i = 1;
-                    for (Object value : where.params()) ps.setObject(i++, value);
+                    for (Object value : where.params()) dialect.bindValue(ps,i++,value);
                 }
                 try (ResultSet rs = ps.executeQuery()) {
                     if (!rs.next()) throw new SQLException("COUNT returned no row");
@@ -209,8 +220,8 @@ public final class Bjorm implements Operations {
     private <T> T insert(Connection c,T entity) throws SQLException {
         EntityMapper<T> m=mapper(entity.getClass());
         T prepared=m.materializeInsert(entity);
-        try(PreparedStatement ps=m.generatedId()?prepare(c,m.insertSql(),new String[]{m.columnFor(m.idProperty())}):prepare(c,m.insertSql())) {
-            m.bindInsert(ps,prepared);
+        try(PreparedStatement ps=m.generatedId()?prepare(c,m.insertSql(dialect),new String[]{m.columnFor(m.idProperty())}):prepare(c,m.insertSql(dialect))) {
+            m.bindInsert(ps,prepared,dialect);
             if(ps.executeUpdate()!=1)throw new SQLException("Insert affected unexpected number of rows");
             if(m.generatedId())try(ResultSet keys=ps.getGeneratedKeys()) {
                 if(!keys.next())throw new SQLException("No generated key returned for "+m.type().getName());
@@ -224,8 +235,8 @@ public final class Bjorm implements Operations {
         if(m.generatedId()) throw new IllegalArgumentException("Upsert requires an application-assigned primary key");
         entity=m.materializeInsert(entity);
         if(m.id(entity)==null) throw new IllegalArgumentException("Upsert requires non-null ID");
-        try(PreparedStatement ps=prepare(c,m.upsertSql())) {
-            m.bindUpsert(ps,entity);
+        try(PreparedStatement ps=prepare(c,m.upsertSql(dialect))) {
+            m.bindUpsert(ps,entity,dialect);
             int changed=ps.executeUpdate();
             if(m.optimisticLocking() && changed==0) throw new OptimisticLockException("Stale upsert: "+m.type().getName());
             return changed;
@@ -262,13 +273,13 @@ public final class Bjorm implements Operations {
             String fk=childMapper.columnFor(relation.mappedBy());
             if(childMapper.children().isEmpty() && !childMapper.optimisticLocking()) {
                 try(PreparedStatement ps=prepare(c,"DELETE FROM "+childMapper.table()+" WHERE "+fk+" = ?")) {
-                    childMapper.bindId(ps,1,id);
+                    childMapper.bindId(ps,1,id,dialect);
                     ps.executeUpdate();
                 }
             } else {
                 // Descendants must be removed before the child: do not depend on loaded collections.
                 try(PreparedStatement ps=prepare(c,"SELECT "+childMapper.qualifiedColumns("c")+" FROM "+childMapper.table()+" c WHERE c."+fk+" = ?")) {
-                    childMapper.bindId(ps,1,id);
+                    childMapper.bindId(ps,1,id,dialect);
                     try(ResultSet rs=ps.executeQuery()) {
                         while(rs.next())removeGraph(c,childMapper.read(rs),visited);
                     }
@@ -279,8 +290,8 @@ public final class Bjorm implements Operations {
     }
     private <T> int update(Connection c,T entity) throws SQLException {
         EntityMapper<T> m=mapper(entity.getClass());
-        try(PreparedStatement ps=prepare(c,m.updateSql())) {
-            m.bindUpdate(ps,entity);
+        try(PreparedStatement ps=prepare(c,m.updateSql(dialect))) {
+            m.bindUpdate(ps,entity,dialect);
             int count=ps.executeUpdate();
             if(m.optimisticLocking() && count==0)throw new OptimisticLockException("Stale update: " + m.type().getName());
             return count;
@@ -288,8 +299,8 @@ public final class Bjorm implements Operations {
     }
     private <T> int delete(Connection c,T entity) throws SQLException {
         EntityMapper<T> m=mapper(entity.getClass());
-        try(PreparedStatement ps=prepare(c,m.deleteSql())) {
-            m.bindDelete(ps,entity);
+        try(PreparedStatement ps=prepare(c,m.deleteSql(dialect))) {
+            m.bindDelete(ps,entity,dialect);
             int count=ps.executeUpdate();
             if(m.optimisticLocking() && count==0)throw new OptimisticLockException("Stale delete: " + m.type().getName());
             return count;
@@ -302,8 +313,8 @@ public final class Bjorm implements Operations {
                 m.columnFor(m.idProperty())+" = ?",Collections.singletonList(id))).limit(1));
             return values.isEmpty() ? null : values.getFirst();
         }
-        try(PreparedStatement ps=prepare(c,m.selectSql())) {
-            m.bindId(ps,1,id);
+        try(PreparedStatement ps=prepare(c,m.selectSql(dialect))) {
+            m.bindId(ps,1,id,dialect);
             try(ResultSet rs=ps.executeQuery()) {return rs.next()?m.read(rs):null;}
         }
     }
@@ -314,9 +325,9 @@ public final class Bjorm implements Operations {
             readGraph(c,query,rows::add,true);
             return rows;
         }
-        try(PreparedStatement ps=prepare(c,query.sql(m,type->mapper(type)))) {
+        try(PreparedStatement ps=prepare(c,query.sql(m,type->mapper(type),dialect))) {
             boundRows(ps);
-            query.bind(ps);
+            query.bind(ps,dialect);
             try(ResultSet rs=ps.executeQuery()) {
                 ArrayList<T> result=new ArrayList<>();
                 while(rs.next()){
@@ -346,7 +357,7 @@ public final class Bjorm implements Operations {
         ArrayList<GraphSlot> slots=new ArrayList<>();
         ArrayList<List<Integer>> paths=new ArrayList<>();
         collectGraphPaths((EntityMapper<Object>)root,0,new ArrayList<>(),new HashSet<>(),slots,paths);
-        String rootSql=query.sql(root,type->mapper(type));
+        String rootSql=query.sql(root,type->mapper(type),dialect);
         // Multiple matching explicit joins cannot multiply roots before eager expansion.
         // LIMIT/OFFSET on such joins remains rejected by Select.sql().
         if(query.hasJoins())rootSql="SELECT DISTINCT * FROM ("+rootSql+") bjorm_unique_roots";
@@ -366,7 +377,7 @@ public final class Bjorm implements Operations {
                 GraphSlot slot=slots.get(i);
                 EntityMapper<Object> parent=slot.parent==0?(EntityMapper<Object>)root:slots.get(slot.parent-1).mapper;
                 String parentAlias=slot.parent==0?"r":slots.get(slot.parent-1).alias;
-                sql.append(' ').append(slot.relation.joinType().sql()).append(' ').append(slot.mapper.table()).append(' ').append(slot.alias)
+                sql.append(' ').append(dialect.join(slot.relation.joinType())).append(' ').append(slot.mapper.table()).append(' ').append(slot.alias)
                    .append(" ON ").append(slot.alias).append('.').append(slot.mapper.columnFor(slot.relation.mappedBy()))
                    .append(" = ").append(parentAlias).append('.').append(parent.columnFor(parent.idProperty()));
             }
@@ -383,7 +394,7 @@ public final class Bjorm implements Operations {
         try(PreparedStatement ps=prepare(c,sql.toString())) {
             if(bounded)boundRows(ps);
             ps.setFetchSize(options.fetchSize());
-            query.bind(ps);
+            query.bind(ps,dialect);
             try(ResultSet rs=ps.executeQuery()) {
                 Object lastId=null;
                 GraphNode current=null;
@@ -478,10 +489,10 @@ public final class Bjorm implements Operations {
     private <T,P> List<P> project(Connection c,Select<T> query,String[] properties,RowMapper<P> projection) throws SQLException {
         Objects.requireNonNull(projection);
         EntityMapper<T> m=mapper(query.type());
-        String sql=query.sql(m,type->mapper(type),properties);
+        String sql=query.sql(m,type->mapper(type),properties,dialect);
         try(PreparedStatement ps=prepare(c,sql)) {
             boundRows(ps);
-            query.bind(ps);
+            query.bind(ps,dialect);
             try(ResultSet rs=ps.executeQuery()){
                 ArrayList<P> rows=new ArrayList<>();
                 while(rs.next()){checkRows(rows.size()+1);rows.add(projection.read(rs));}
@@ -492,9 +503,9 @@ public final class Bjorm implements Operations {
     private <T,P> Optional<P> first(Connection c,Select<T> query,String[] properties,RowMapper<P> projection) throws SQLException {
         Objects.requireNonNull(projection);
         EntityMapper<T> m=mapper(query.type());
-        String sql=query.sql(m,type->mapper(type),properties);
+        String sql=query.sql(m,type->mapper(type),properties,dialect);
         try(PreparedStatement ps=prepare(c,sql)) {
-            query.bind(ps);
+            query.bind(ps,dialect);
             try(ResultSet rs=ps.executeQuery()) {
                 if(!rs.next())return Optional.empty();
                 if(properties==null && query.hasRightOrFullJoin() &&
@@ -524,9 +535,9 @@ public final class Bjorm implements Operations {
         Objects.requireNonNull(consumer);
         EntityMapper<T> m=mapper(query.type());
         if (!m.children().isEmpty()) {readGraph(c,query,consumer,false);return;}
-        try(PreparedStatement ps=prepare(c,query.sql(m,type->mapper(type)))) {
+        try(PreparedStatement ps=prepare(c,query.sql(m,type->mapper(type),dialect))) {
             ps.setFetchSize(options.fetchSize());
-            query.bind(ps);
+            query.bind(ps,dialect);
             try(ResultSet rs=ps.executeQuery()){while(rs.next())consumer.accept(m.read(rs));}
         }
     }
@@ -545,12 +556,12 @@ public final class Bjorm implements Operations {
         T first=Objects.requireNonNull(entities.getFirst());
         EntityMapper<T> m=mapper(first.getClass());
         if(!updating && m.generatedId())throw new IllegalArgumentException("Batch generated ids not yet supported; use insert()");
-        try(PreparedStatement ps=prepare(c,updating?m.updateSql():m.insertSql())) {
+        try(PreparedStatement ps=prepare(c,updating?m.updateSql(dialect):m.insertSql(dialect))) {
             int pending=0;
             for(T entity:entities) {
                 if(entity==null||entity.getClass()!=first.getClass())throw new IllegalArgumentException("Batch requires entities of one exact type");
-                if(updating)m.bindUpdate(ps,entity);
-                else { requireReturnForImmutable(entity); m.bindInsert(ps,m.materializeInsert(entity)); }
+                if(updating)m.bindUpdate(ps,entity,dialect);
+                else { requireReturnForImmutable(entity); m.bindInsert(ps,m.materializeInsert(entity),dialect); }
                 ps.addBatch();
                 if(++pending==256){validateBatch(ps.executeBatch(),m,updating);pending=0;}
             }

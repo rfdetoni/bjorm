@@ -73,9 +73,15 @@ public final class Select<T> {
 
     Class<T> type(){return type;}
     String sql(EntityMapper<T> base,Function<Class<?>,EntityMapper<?>> lookup){
-        return sql(base, lookup, null);
+        return sql(base, lookup, null, SqlDialects.POSTGRESQL);
+    }
+    String sql(EntityMapper<T> base,Function<Class<?>,EntityMapper<?>> lookup,SqlDialect dialect){
+        return sql(base,lookup,null,dialect);
     }
     String sql(EntityMapper<T> base,Function<Class<?>,EntityMapper<?>> lookup,String[] properties){
+        return sql(base,lookup,properties,SqlDialects.POSTGRESQL);
+    }
+    String sql(EntityMapper<T> base,Function<Class<?>,EntityMapper<?>> lookup,String[] properties,SqlDialect dialect){
         if(properties!=null && properties.length==0)throw new IllegalArgumentException("Select at least one property");
         if(limit!=null && !joins.isEmpty())
             throw new IllegalArgumentException("Paginating JOIN results may multiply root entities; page root IDs first, then fetch relations separately");
@@ -109,7 +115,7 @@ public final class Select<T> {
                 }
                 if(!linked) throw new IllegalArgumentException("JOIN ON must relate indexed/mapped columns of two distinct table aliases; cartesian joins are not supported");
                 EntityMapper<?> target=lookup.apply(join.type);
-                sql.append(" ").append(join.joinType.sql()).append(" ").append(target.table()).append(" ").append(join.alias)
+                sql.append(" ").append(dialect.join(join.joinType)).append(" ").append(target.table()).append(" ").append(join.alias)
                         .append(" ON ").append(join.on.sql());
             }
         }
@@ -122,10 +128,12 @@ public final class Select<T> {
         if(offset!=null){if(limit==null)throw new IllegalStateException("offset requires limit");sql.append(" OFFSET ?");}
         return sql.toString();
     }
-    int bind(PreparedStatement ps) throws SQLException { return bind(ps,1); }
-    int bind(PreparedStatement ps,int start) throws SQLException {
+    int bind(PreparedStatement ps) throws SQLException { return bind(ps,1,SqlDialects.POSTGRESQL); }
+    int bind(PreparedStatement ps,int start) throws SQLException { return bind(ps,start,SqlDialects.POSTGRESQL); }
+    int bind(PreparedStatement ps,SqlDialect dialect) throws SQLException {return bind(ps,1,dialect);}
+    int bind(PreparedStatement ps,int start,SqlDialect dialect) throws SQLException {
         int i=start;
-        for(Join join:joins)for(Object value:join.on.params())ps.setObject(i++,value);
+        for(Join join:joins)for(Object value:join.on.params())dialect.bindValue(ps,i++,value);
         if(predicate!=null)for(Object value:predicate.params())ps.setObject(i++,value);
         if(limit!=null)ps.setInt(i++,limit);
         if(offset!=null)ps.setLong(i++,offset);

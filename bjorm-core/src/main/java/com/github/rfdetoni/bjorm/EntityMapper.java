@@ -7,6 +7,18 @@ public interface EntityMapper<T> extends RowMapper<T> {
     String updateSql();
     /** PostgreSQL native INSERT ON CONFLICT (primary key) DO UPDATE. */
     default String upsertSql() { throw new UnsupportedOperationException("Upsert SQL not generated"); }
+    default String upsertSql(SqlDialect dialect){return upsertSql();}
+    default String insertSql(SqlDialect dialect){return dialect.sql(insertSql());}
+    default String updateSql(SqlDialect dialect){return dialect.sql(updateSql());}
+    default String deleteSql(SqlDialect dialect){return deleteSql();}
+    default String selectSql(SqlDialect dialect){return selectSql();}
+    default void bindInsert(PreparedStatement ps,T value,SqlDialect dialect)throws SQLException{bindInsert(ps,value);}
+    default void bindUpdate(PreparedStatement ps,T value,SqlDialect dialect)throws SQLException{bindUpdate(ps,value);}
+    default void bindDelete(PreparedStatement ps,T value,SqlDialect dialect)throws SQLException{bindDelete(ps,value);}
+    default void bindId(PreparedStatement ps,int index,Object id,SqlDialect dialect)throws SQLException {
+        dialect.bindValue(ps,index,id);
+    }
+    default void bindUpsert(PreparedStatement ps,T value,SqlDialect dialect)throws SQLException{bindInsert(ps,value,dialect);}
     default void bindUpsert(PreparedStatement ps,T entity) throws SQLException { bindInsert(ps, entity); }
     /** Runs before INSERT and UPSERT; generated POJO mappers can assign UUID v7 here. */
     default void prepareInsert(T entity) {}

@@ -3,6 +3,17 @@ import java.sql.*;
 /** Mapping helpers only where JDBC primitive getters hide SQL NULL. */
 public final class JdbcValues {
     private JdbcValues() {}
+    /** PostgreSQL returns UUID; MySQL CHAR(36) returns String. */
+    public static java.util.UUID uuid(ResultSet rs,int i)throws SQLException {
+        Object value=rs.getObject(i);
+        if(value==null)return null;
+        if(value instanceof java.util.UUID uuid)return uuid;
+        if(value instanceof String text) {
+            try{return java.util.UUID.fromString(text);}
+            catch(IllegalArgumentException e){throw new SQLException("Invalid UUID at column "+i,e);}
+        }
+        throw new SQLException("Unsupported UUID JDBC value "+value.getClass().getName()+" at column "+i);
+    }
     public static int requiredInt(ResultSet rs, int i) throws SQLException { int v=rs.getInt(i); if(rs.wasNull())throw new SQLException("NULL for required int at column "+i); return v; }
     public static long requiredLong(ResultSet rs, int i) throws SQLException { long v=rs.getLong(i); if(rs.wasNull())throw new SQLException("NULL for required long at column "+i); return v; }
     public static boolean requiredBoolean(ResultSet rs, int i) throws SQLException { boolean v=rs.getBoolean(i); if(rs.wasNull())throw new SQLException("NULL for required boolean at column "+i); return v; }
