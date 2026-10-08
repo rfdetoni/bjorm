@@ -1,6 +1,6 @@
 # BJORM — Bare Metal Java ORM
 
-**Experimental 0.3.8-SNAPSHOT** — a minimal, compile-time-assisted relational mapper for Java 25. Zero Spring/JPA/Hibernate dependencies in the core; SQL and JDBC remain visible and under application control.
+**Experimental 0.3.10-SNAPSHOT** — a minimal, compile-time-assisted relational mapper for Java 25. Zero Spring/JPA/Hibernate dependencies in the core; SQL and JDBC remain visible and under application control.
 
 > Early-stage source implementation. **Not production-ready**. It is not published to Maven Central. See [architecture and acceptance status](ARCHITECTURE.md).
 
@@ -296,3 +296,8 @@ For stable JSON APIs prefer `PagedModel` rather than directly serializing Spring
 
 The `Page` count and row query are separate JDBC operations; use an appropriate database
 transaction isolation level if a consistent snapshot across concurrent writes is required.
+
+
+### JDBC driver-level row budgets (0.3.10)
+
+Materialized SELECTs now also call `PreparedStatement.setMaxRows(maxBufferedRows + 1)` and reject the lookahead row. This prevents pgJDBC from fetching an unbounded materialized result before Java-side row checks. `forEach`/`scan` remain cursor-based, without a global row cutoff, but eager graph hydration bounds a single root's accumulated children. Query timeout is a driver cancellation request, not a hard deadline; consider database `statement_timeout`, `lock_timeout` and socket timeouts in production.

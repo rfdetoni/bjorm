@@ -46,7 +46,7 @@ public final class SmokeTest {
                         default -> throw new UnsupportedOperationException("ResultSet."+mr.getName());
                     });
                 }
-                case "close","setQueryTimeout" -> null;
+                case "close","setQueryTimeout","setMaxRows" -> null;
                 default -> throw new UnsupportedOperationException("PreparedStatement."+m.getName());
             };
             return (PreparedStatement)Proxy.newProxyInstance(getClass().getClassLoader(),new Class[]{PreparedStatement.class},ps);

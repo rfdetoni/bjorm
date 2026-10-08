@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.10-SNAPSHOT
+
+- Enforce JDBC setMaxRows(maxBufferedRows + 1) for materialized SELECTs, avoiding unbounded driver-side buffering before application limits are checked.
+- Preserve streaming behavior for forEach/scan and enforce row budgets on automatically joined entity graphs.
+
+## 0.3.9-SNAPSHOT
+
+- Automatically hydrate mapped @Children with a single parent-first SELECT and LEFT JOIN; multiple siblings use UNION ALL to prevent Cartesian multiplication.
+- Add generated offset row readers, typed ID column metadata, nested record graph reconstruction and per-parent deduplication.
+- Introduce JDBC query timeout, row budgets, configurable cursor fetch size and version-aware cascade deletes.
+
+
 ## 0.3.8-SNAPSHOT
 
 - Infer automatic `@Id` strategies from Java type: UUID v7 for UUID/String and JDBC identity for int/long and wrappers. Use `assigned=true` to opt out.

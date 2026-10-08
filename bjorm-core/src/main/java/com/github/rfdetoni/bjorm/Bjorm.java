@@ -45,6 +45,11 @@ public final class Bjorm implements Operations {
         try {if(options.queryTimeoutSeconds()>0)ps.setQueryTimeout(options.queryTimeoutSeconds());return ps;}
         catch(SQLException|RuntimeException e){try{ps.close();}catch(SQLException ex){e.addSuppressed(ex);}throw e;}
     }
+    /** Prevent the JDBC driver itself from buffering an unbounded SELECT result. */
+    private void boundRows(PreparedStatement ps) throws SQLException {
+        if(options.maxBufferedRows()<Integer.MAX_VALUE)
+            ps.setMaxRows(options.maxBufferedRows()+1); // lookahead detects and rejects truncation
+    }
     private void checkRows(int count) {
         if(count>options.maxBufferedRows())throw new IllegalStateException(
             "Query exceeded maxBufferedRows="+options.maxBufferedRows()+"; use a paged query or forEach/scan");
@@ -310,6 +315,7 @@ public final class Bjorm implements Operations {
             return rows;
         }
         try(PreparedStatement ps=prepare(c,query.sql(m,type->mapper(type)))) {
+            boundRows(ps);
             query.bind(ps);
             try(ResultSet rs=ps.executeQuery()) {
                 ArrayList<T> result=new ArrayList<>();
@@ -371,6 +377,7 @@ public final class Bjorm implements Operations {
         }
         sql.append(query.sorting().isEmpty()?" ORDER BY ":", ").append(root.idColumnIndex());
         try(PreparedStatement ps=prepare(c,sql.toString())) {
+            if(bounded)boundRows(ps);
             ps.setFetchSize(options.fetchSize());
             query.bind(ps);
             try(ResultSet rs=ps.executeQuery()) {
@@ -467,6 +474,7 @@ public final class Bjorm implements Operations {
         EntityMapper<T> m=mapper(query.type());
         String sql=query.sql(m,type->mapper(type),properties);
         try(PreparedStatement ps=prepare(c,sql)) {
+            boundRows(ps);
             query.bind(ps);
             try(ResultSet rs=ps.executeQuery()){
                 ArrayList<P> rows=new ArrayList<>();
@@ -488,12 +496,14 @@ public final class Bjorm implements Operations {
     }
     private <T> List<T> query(Connection c,String sql,StatementBinder binder,RowMapper<T> mapper) throws SQLException {
         try(PreparedStatement ps=prepare(c,sql)) {
+            boundRows(ps);
             Objects.requireNonNull(binder).bind(ps);
             try(ResultSet rs=ps.executeQuery()) {ArrayList<T> result=new ArrayList<>();while(rs.next()){checkRows(result.size()+1);result.add(mapper.read(rs));}return result;}
         }
     }
     private <T> T one(Connection c,String sql,StatementBinder binder,RowMapper<T> mapper) throws SQLException {
         try(PreparedStatement ps=prepare(c,sql)) {
+            ps.setMaxRows(1);
             Objects.requireNonNull(binder).bind(ps);
             try(ResultSet rs=ps.executeQuery()) {return rs.next()?mapper.read(rs):null;}
         }

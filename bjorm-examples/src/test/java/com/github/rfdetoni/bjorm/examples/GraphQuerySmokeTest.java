@@ -29,7 +29,7 @@ public final class GraphQuerySmokeTest {
                     check(sql.contains(" LEFT JOIN bjorm_it_order_lines ") && sql.contains(" LEFT JOIN bjorm_it_order_notes "),"eager child joins");
                     check(sql.contains(" UNION ALL "),"sibling relations without cartesian multiplication");
                     yield proxy(PreparedStatement.class,(ps,pm,pa)->switch(pm.getName()){
-                        case "setFetchSize","setQueryTimeout","setObject","setInt","setLong","close" -> null;
+                        case "setFetchSize","setQueryTimeout","setMaxRows","setObject","setInt","setLong","close" -> null;
                         case "executeQuery" -> proxy(ResultSet.class,new InvocationHandler(){int row=-1;boolean wasNull;
                             public Object invoke(Object rs,Method rm,Object[] ra){return switch(rm.getName()){
                                 case "next" -> ++row<values.length;
