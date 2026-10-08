@@ -43,7 +43,7 @@ public final class PostgresIntegrationTest {
             st.execute("CREATE TABLE bjorm_it_record_parents (id uuid PRIMARY KEY, label text)");
             st.execute("CREATE TABLE bjorm_it_record_children (id uuid PRIMARY KEY, parentId uuid NOT NULL REFERENCES bjorm_it_record_parents(id), label text)");
         }
-        Bjorm db=Bjorm.open(ds,ItUser_BjormMapper.INSTANCE,ItProduct_BjormMapper.INSTANCE,ItDocument_BjormMapper.INSTANCE,ItOrder_BjormMapper.INSTANCE,ItOrderLine_BjormMapper.INSTANCE,ItOrderNote_BjormMapper.INSTANCE,AutoUuidRecord_BjormMapper.INSTANCE,AutoStringRecord_BjormMapper.INSTANCE,AutoLongRecord_BjormMapper.INSTANCE,AutoIntRecord_BjormMapper.INSTANCE,AutoUuidPojo_BjormMapper.INSTANCE,AutoParentRecord_BjormMapper.INSTANCE,AutoChildRecord_BjormMapper.INSTANCE);
+        Bjorm db=Bjorm.open(ds,ItUser_BjormMapper.INSTANCE,ItProduct_BjormMapper.INSTANCE,ItDocument_BjormMapper.INSTANCE,ItOrder_BjormMapper.INSTANCE,ItOrderInner_BjormMapper.INSTANCE,ItOrderOuter_BjormMapper.INSTANCE,ItOrderLine_BjormMapper.INSTANCE,ItOrderNote_BjormMapper.INSTANCE,AutoUuidRecord_BjormMapper.INSTANCE,AutoStringRecord_BjormMapper.INSTANCE,AutoLongRecord_BjormMapper.INSTANCE,AutoIntRecord_BjormMapper.INSTANCE,AutoUuidPojo_BjormMapper.INSTANCE,AutoParentRecord_BjormMapper.INSTANCE,AutoChildRecord_BjormMapper.INSTANCE);
         UUID id=UUID.randomUUID();ItUser alice=new ItUser(id,"BJORM",34);
         try {
             AutoUuidPojo pojo=new AutoUuidPojo();pojo.setLabel("pojo");db.insert(pojo);
@@ -115,6 +115,18 @@ public final class PostgresIntegrationTest {
             check(db.list(ItOrderLine.class, ItOrderLine_.orderId.eq(order.getId())).size() == 1, "child saved within parent transaction");
             ItOrder fromJoin=db.find(ItOrder.class,order.getId());
             check(fromJoin.getLines().size()==1 && fromJoin.getNotes().size()==1, "single SQL graph JOIN loads siblings");
+            check(db.find(ItOrderInner.class,order.getId()).getNotes().size()==1,
+                "@Children INNER JOIN on PostgreSQL");
+            check(db.find(ItOrderOuter.class,order.getId()).getLines().size()==1,
+                "@Children RIGHT/FULL JOIN on PostgreSQL");
+            var explicit=db.select(ItOrder.class).as("o")
+                .join(ItOrderLine.class,"l").on(ItOrder_.id.as("o").sameAs(ItOrderLine_.orderId.as("l")))
+                .fetch();
+            check(explicit.size()==1 && explicit.getFirst().getNotes().size()==1,
+                "explicit JOIN with eager children in one SQL");
+            check(db.select(ItUser.class).as("u").fullJoin(ItProduct.class,"p")
+                .on(ItUser_.id.as("u").sameAs(ItProduct_.id.as("p"))).fetch().size()>=1,
+                "real PostgreSQL FULL OUTER JOIN");
             check(fromJoin.getLines().getFirst().getId().equals(line.getId()) &&
                   fromJoin.getNotes().getFirst().getId().equals(note.getId()), "joined children mapped without duplicates");
             check(db.select(ItOrder.class).orderBy(ItOrder_.description.asc()).limit(1).fetch().getFirst().getNotes().size()==1,

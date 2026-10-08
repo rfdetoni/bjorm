@@ -57,6 +57,22 @@ public final class GraphQuerySmokeTest {
             limited.find(ItOrder.class,ROOT);
             throw new AssertionError("Expected bounded materialization failure");
         } catch(IllegalStateException expected) { check(expected.getMessage().contains("maxBufferedRows"),"bounded graph reads"); }
+        int before=sqls.size();
+        var filtered=db.select(ItOrder.class).as("o")
+            .join(ItOrderLine.class,"l").on(ItOrder_.id.as("o").sameAs(ItOrderLine_.orderId.as("l")))
+            .fetch();
+        check(filtered.size()==1 && filtered.getFirst().getLines().size()==2,
+            "QueryDSL explicit JOIN and children use one SQL");
+        check(sqls.size()==before+1 && sqls.getLast().contains("SELECT DISTINCT * FROM") &&
+            sqls.getLast().contains(" INNER JOIN bjorm_it_order_lines l"),
+            "matched roots deduplicated before expanding child collections");
+        try {
+            db.select(ItOrder.class).as("o").rightJoin(ItOrderLine.class,"l")
+                .on(ItOrder_.id.as("o").sameAs(ItOrderLine_.orderId.as("l"))).limit(1).fetch();
+            throw new AssertionError("Expected paginated explicit JOIN guard");
+        } catch(IllegalArgumentException expected) {
+            check(expected.getMessage().contains("Paginating JOIN"),"unsafe joined pagination rejected");
+        }
         System.out.println("PASS: eager joined entity graph, sibling UNION ALL, one SQL and bounded reads");
     }
 }

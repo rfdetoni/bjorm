@@ -56,3 +56,11 @@ UUID v7, native upsert and explicit recursive `@Children` graph persistence/dele
 - Automatic @Id inference and immutable record-return APIs implemented; Java 21 `scripts/verify.sh` covers generated SQL, binding, batch and record graph logic. Java 25 + PostgreSQL CI remains authoritative for real database identities and transaction behavior.
 
 - 0.3.10-SNAPSHOT: JDBC materialized row budgets applied on PreparedStatement as well as Java-side loops; unbounded cursor streaming remains possible via forEach/scan.
+
+## Join types (0.3.11-SNAPSHOT)
+
+- Compile @Children(type=LEFT/INNER/RIGHT/FULL) into generated child metadata (default LEFT).
+- QueryDSL-style join(...).on(...) with LEFT, RIGHT, INNER, FULL OUTER, including projections.
+- Explicit filtering joins and eager graph expansion share one SQL with root deduplication.
+- Pagination that can multiply roots is blocked; RIGHT/FULL unmatched child-only rows are not parent entities.
+- Java smoke/SQL-shape and opt-in PostgreSQL coverage added.

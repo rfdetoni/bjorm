@@ -258,7 +258,7 @@ db.upsert(order);
 db.delete(order);     // one transaction: delete persisted children, then parent
 ```
 
-- Child relations are explicit `@Children(mappedBy="childForeignKeyJavaProperty")` lists/collections. Only mapped columns are persisted; relationship collections are **not** automatically loaded on SELECT.
+- Child relations are explicit `@Children(mappedBy="childForeignKeyJavaProperty")` lists/collections. Only mapped columns are persisted; full-entity SELECTs eagerly load @Children with generated JOIN SQL.
 - The parent ID is generated before saving children. Record children with null foreign keys are copied with the parent's ID; `insertReturning` returns the updated graph containing new record IDs. Conflicting non-null foreign keys are rejected.
 - All graph writes run in a single transaction; use `insertReturning` when an immutable root entity lacks its ID.
 - `upsert` is PostgreSQL native and matches on the primary key; it **does not** delete existing children omitted from the supplied collection. With `@Version`, the conflict branch rejects stale versions.
@@ -301,3 +301,27 @@ transaction isolation level if a consistent snapshot across concurrent writes is
 ### JDBC driver-level row budgets (0.3.10)
 
 Materialized SELECTs now also call `PreparedStatement.setMaxRows(maxBufferedRows + 1)` and reject the lookahead row. This prevents pgJDBC from fetching an unbounded materialized result before Java-side row checks. `forEach`/`scan` remain cursor-based, without a global row cutoff, but eager graph hydration bounds a single root's accumulated children. Query timeout is a driver cancellation request, not a hard deadline; consider database `statement_timeout`, `lock_timeout` and socket timeouts in production.
+
+## Configurable @Children and QueryDSL-style JOIN (0.3.11)
+
+`@Children(mappedBy="orderId", type=JoinType.LEFT)` uses LEFT JOIN, preserving
+parents without children. Other supported types are `INNER`, `RIGHT` and `FULL`;
+the default is `LEFT` to preserve previous entity-loading semantics.
+
+```java
+var orders = db.select(ItOrder.class).as("o")
+    .leftJoin(ItOrderLine.class,"l")
+    .on(ItOrder_.id.as("o").sameAs(ItOrderLine_.orderId.as("l")))
+    .fetch();
+```
+
+The DSL also supports `join`/`innerJoin`, `rightJoin`, `fullJoin`/`outerJoin`
+and `fullOuterJoin`, both directly and with `.on(...)`; `FieldSelect`
+projections support the same join types. ON expressions use mapped typed fields.
+
+Explicit JOINs and automatically generated child joins execute as one SQL
+statement; root rows from explicit joins are deduplicated before expanding
+collections. Sibling child collections use independent `UNION ALL` branches,
+not a cartesian product. `LIMIT/OFFSET` over an explicit join is rejected.
+RIGHT/FULL can produce unmatched child rows; rooted entity results skip them,
+while SQL projections can expose the outer-join result directly.

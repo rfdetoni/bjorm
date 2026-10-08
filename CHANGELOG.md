@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.11-SNAPSHOT
+
+- Generate per-relation join type for @Children: LEFT(default), INNER, RIGHT and FULL OUTER.
+- Add QueryDSL-style .join(...).on(...), leftJoin, rightJoin, fullJoin/outerJoin on entity and field projections.
+- Permit non-paginated explicit joins with eager children in one SQL, deduplicating roots before UNION ALL child branches.
+- Keep unsafe JOIN pagination rejected; ignore unmatched child-only rows when reading root entities.
+- Add regression and PostgreSQL integration tests for join SQL semantics.
+
+
 ## 0.3.10-SNAPSHOT
 
 - Enforce JDBC setMaxRows(maxBufferedRows + 1) for materialized SELECTs, avoiding unbounded driver-side buffering before application limits are checked.

@@ -241,6 +241,21 @@ public final class AdvancedSmokeTest {
         try{db.select(Product.class).fields();throw new AssertionError("empty fields must fail");}
         catch(IllegalArgumentException expected){}
 
+        var joinOn = Product_.id.as("p").sameAs(User_.id.as("u"));
+        db.select(Product.class).as("p").join(User.class,"u").on(joinOn).fetch();
+        check(spy.last().sql().contains(" INNER JOIN users u ON p.id = u.id"),"QueryDSL INNER JOIN");
+        db.select(Product.class).as("p").leftJoin(User.class,"u").on(joinOn).fetch();
+        check(spy.last().sql().contains(" LEFT JOIN users u ON p.id = u.id"),"QueryDSL LEFT JOIN");
+        db.select(Product.class).as("p").rightJoin(User.class,"u").on(joinOn).fetch();
+        check(spy.last().sql().contains(" RIGHT JOIN users u ON p.id = u.id"),"QueryDSL RIGHT JOIN");
+        db.select(Product.class).as("p").fullJoin(User.class,"u").on(joinOn).fetch();
+        check(spy.last().sql().contains(" FULL OUTER JOIN users u ON p.id = u.id"),"QueryDSL FULL OUTER");
+        db.select(Product.class).as("p").fields("name").fullOuterJoin(User.class,"u").on(joinOn).fetch();
+        check(spy.last().sql().contains(" FULL OUTER JOIN users u ON p.id = u.id"),"projected FULL OUTER");
+        check(ItOrder_BjormMapper.INSTANCE.children().getFirst().joinType()==JoinType.LEFT,"LEFT default");
+        check(ItOrderInner_BjormMapper.INSTANCE.children().getFirst().joinType()==JoinType.INNER,"annotated INNER");
+        check(ItOrderOuter_BjormMapper.INSTANCE.children().get(0).joinType()==JoinType.RIGHT,"annotated RIGHT");
+        check(ItOrderOuter_BjormMapper.INSTANCE.children().get(1).joinType()==JoinType.FULL,"annotated FULL");
         System.out.println("PASS: POJO, projection, findOne, selected properties, @Query, DSL, locking, generated IDs, batch and transactions");
     }
 }

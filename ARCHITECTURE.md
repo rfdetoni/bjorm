@@ -72,7 +72,7 @@ GitHub repository: `rfdetoni/bjorm`. GitHub Actions performs Java 25 validation 
 - Generated `@Id(uuidV7=true)` for mutable POJO UUID fields and `UuidV7.next()` for immutable record construction.
 - PostgreSQL primary-key `ON CONFLICT DO UPDATE` generated at compile time, with `@Version` predicate on conflict.
 - Generated `@Children(mappedBy="foreignKeyJavaProperty")` metadata. Parent inserts and upserts recurse in dependency order, assigning child FKs after parent ID assignment. Deletion looks up persisted descendants by FK and removes them before the parent. Operations are atomic in one JDBC transaction.
-- No automatic relationship loading, orphan reconciliation, implicit global session or reflection-based relationship discovery; implicit cascades without `@Children` remain out of scope.
+- No orphan reconciliation, implicit global session or reflection-based relationship discovery; implicit cascades without `@Children` remain out of scope.
 
 ## Automatic identifier generation (0.3.8)
 
