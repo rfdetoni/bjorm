@@ -2,17 +2,22 @@ package com.github.rfdetoni.bjorm;
 import java.sql.*;
 import java.util.*;
 import java.util.function.Function;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /** Small, mutable single-use typed query builder. Explicit SQL joins; no implicit entity graph traversal. */
 public final class Select<T> {
     private record Join(Class<?> type,String alias,SqlPredicate on,boolean left) {}
+    private static final Pattern JOIN_KEYS = Pattern.compile(
+        "([A-Za-z_][A-Za-z_0-9]*)\\.[A-Za-z_][A-Za-z_0-9]*\\s*=\\s*([A-Za-z_][A-Za-z_0-9]*)\\.[A-Za-z_][A-Za-z_0-9]*");
     private final Operations db;
     private final Class<T> type;
     private SqlPredicate predicate;
     private String alias;
     private final List<Join> joins=new ArrayList<>();
     private final List<SqlOrder> orders=new ArrayList<>();
-    private Integer limit,offset;
+    private Integer limit;
+    private Long offset;
     Select(Operations db,Class<T> type){this.db=Objects.requireNonNull(db);this.type=Objects.requireNonNull(type);}
     public Select<T> as(String value){this.alias=identifier(value);return this;}
     public Select<T> join(Class<?> type,String alias,SqlPredicate on){return addJoin(type,alias,on,false);}
@@ -28,7 +33,7 @@ public final class Select<T> {
     Select<T> whereNullable(SqlPredicate value){predicate=value;return this;}
     public Select<T> orderBy(SqlOrder... values){orders.addAll(Arrays.asList(values));return this;}
     public Select<T> limit(int value){if(value<1)throw new IllegalArgumentException("limit must be positive");limit=value;return this;}
-    public Select<T> offset(int value){if(value<0)throw new IllegalArgumentException("offset must be non-negative");offset=value;return this;}
+    public Select<T> offset(long value){if(value<0)throw new IllegalArgumentException("offset must be non-negative");offset=value;return this;}
     public List<T> fetch(){return db.list(this);}
     /** Restrict SELECT to named Java properties. Does not materialize a partial entity. */
     public FieldSelect<T> fields(String... properties){return new FieldSelect<>(this, properties);}
@@ -42,6 +47,8 @@ public final class Select<T> {
     }
     String sql(EntityMapper<T> base,Function<Class<?>,EntityMapper<?>> lookup,String[] properties){
         if(properties!=null && properties.length==0)throw new IllegalArgumentException("Select at least one property");
+        if(limit!=null && !joins.isEmpty())
+            throw new IllegalArgumentException("Paginating JOIN results may multiply root entities; page root IDs first, then fetch relations separately");
         StringBuilder sql=new StringBuilder();
         if(properties==null && alias==null && joins.isEmpty()){sql.append(base.selectAllSql());}
         else {
@@ -59,6 +66,18 @@ public final class Select<T> {
             Set<String> known=new HashSet<>();known.add(root);
             for(Join join:joins){
                 if(!known.add(join.alias))throw new IllegalArgumentException("Duplicate SQL alias: "+join.alias);
+                // OR clauses can make an otherwise linked join degenerate into a Cartesian product.
+                if(Pattern.compile("(?i)\\bOR\\b").matcher(join.on.sql()).find())
+                    throw new IllegalArgumentException("JOIN ON with OR is not supported; it can multiply rows unpredictably");
+                boolean linked=false;
+                Matcher matcher=JOIN_KEYS.matcher(join.on.sql());
+                while(matcher.find()) {
+                    String a=matcher.group(1),b=matcher.group(2);
+                    if(!a.equals(b) && (a.equals(join.alias) && known.contains(b) || b.equals(join.alias) && known.contains(a))) {
+                        linked=true; break;
+                    }
+                }
+                if(!linked) throw new IllegalArgumentException("JOIN ON must relate indexed/mapped columns of two distinct table aliases; cartesian joins are not supported");
                 EntityMapper<?> target=lookup.apply(join.type);
                 sql.append(join.left?" LEFT JOIN ":" INNER JOIN ").append(target.table()).append(" ").append(join.alias)
                         .append(" ON ").append(join.on.sql());
@@ -78,7 +97,7 @@ public final class Select<T> {
         for(Join join:joins)for(Object value:join.on.params())ps.setObject(i++,value);
         if(predicate!=null)for(Object value:predicate.params())ps.setObject(i++,value);
         if(limit!=null)ps.setInt(i++,limit);
-        if(offset!=null)ps.setInt(i++,offset);
+        if(offset!=null)ps.setLong(i++,offset);
         return i;
     }
 }

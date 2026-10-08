@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.7-SNAPSHOT
+
+- Add optional Spring Data `Pageable`, `Page<T>` and count-free `Slice<T>` integration via `BjormPages`.
+- Add generated-metadata-backed sort validation and typed `COUNT(*)` predicate binding.
+- Support JDBC long offsets and page size + 1 lookahead; preserve Spring-free JDBC core.
+
+
 ## 0.3.6-SNAPSHOT
 
 - Native RFC 9562 UUID v7 generation through `UuidV7.next()` and compile-time `@Id(uuidV7=true)` on mutable entity IDs.

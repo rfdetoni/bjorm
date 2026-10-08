@@ -44,6 +44,20 @@ public final class PostgresIntegrationTest {
             check(db.list(ItUser.class,ItUser_.name.eq("BJORM")).stream().anyMatch(x->x.id().equals(id)),"DSL binding against PostgreSQL");
             check(db.findOne(ItUser.class,ItUser_.name.eq("BJORM")).orElseThrow().equals(alice),"findOne Optional against PostgreSQL");
             check(db.findOne(ItUser.class,ItUser_.name.eq("missing")).isEmpty(),"findOne missing record");
+            check(db.count(ItUser.class,ItUser_.name.eq("BJORM")) == 1L, "mapped count predicate");
+            check(db.count(ItUser.class,null) >= 1L, "mapped total count");
+            UUID secondId=UUID.randomUUID();
+            db.insert(new ItUser(secondId,"Cursor User",20));
+            UUID lower=db.select(ItUser.class).orderBy(db.primaryKeyOrder(ItUser.class,false))
+                .limit(1).fetch().getFirst().id();
+            var sought=db.select(ItUser.class).where(db.seekAfterId(ItUser.class,lower,false))
+                .orderBy(db.primaryKeyOrder(ItUser.class,false)).limit(2).fetch();
+            check(sought.size()==1 && !sought.getFirst().id().equals(lower),
+                "real keyset seek skips cursor ID");
+            check(db.select(ItUser.class).orderBy(db.mappedOrder(ItUser.class,"name",false)).limit(1).offset(0L)
+                .fetch().size()==1, "mapped order with long offset");
+            try {db.mappedOrder(ItUser.class,"notMapped",false);throw new AssertionError("unsafe sort property accepted");}
+            catch(IllegalArgumentException expected) {}
             var fields=db.findFields(ItUser.class,ItUser_.name.eq("BJORM"),"name","age");
             check(fields.size()==1 && fields.getFirst().get("age").equals(34),"named Java properties return only selected columns");
             check(db.findColumnOne(ItUser.class,"name",String.class,ItUser_.age.eq(34)).orElseThrow().equals("BJORM"),"typed scalar projection");

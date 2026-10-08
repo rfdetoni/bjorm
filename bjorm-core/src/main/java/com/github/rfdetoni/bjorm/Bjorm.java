@@ -54,6 +54,43 @@ public final class Bjorm implements Operations {
     }
     public <T> T find(Class<T> type,Object id) {return withConnection(c->find(c,type,id));}
     public <T> List<T> list(Class<T> type,SqlPredicate where) {return select(type).whereNullable(where).fetch();}
+    /** Count mapped rows matching a typed predicate without materializing entities. */
+    public <T> long count(Class<T> type, SqlPredicate where) {
+        return withConnection(c -> {
+            EntityMapper<T> m = mapper(type);
+            String sql = "SELECT COUNT(*) FROM " + m.table() + (where == null ? "" : " WHERE " + where.sql());
+            try (PreparedStatement ps = c.prepareStatement(sql)) {
+                if (where != null) {
+                    int i = 1;
+                    for (Object value : where.params()) ps.setObject(i++, value);
+                }
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (!rs.next()) throw new SQLException("COUNT returned no row");
+                    return rs.getLong(1);
+                }
+            }
+        });
+    }
+    /** Resolve Spring-style property sorting using generated mapping, never raw client SQL. */
+    public <T> SqlOrder mappedOrder(Class<T> type, String property, boolean descending) {
+        return new SqlOrder(mapper(type).columnFor(property), descending);
+    }
+    /** Indexed primary-key seek predicate for cursor pagination, without OFFSET. */
+    public <T> SqlPredicate seekAfterId(Class<T> type, Object id, boolean descending) {
+        Objects.requireNonNull(id, "afterId");
+        EntityMapper<T> m=mapper(type);
+        return new SqlPredicate(m.columnFor(m.idProperty())+(descending?" < ?":" > ?"),
+            java.util.Collections.singletonList(id));
+    }
+    public <T> SqlOrder primaryKeyOrder(Class<T> type, boolean descending) {
+        EntityMapper<T> m=mapper(type);
+        return mappedOrder(type,m.idProperty(),descending);
+    }
+    /** Generated access to @Id; no per-row reflection. */
+    public <T> Object primaryKeyValue(T entity) {
+        Objects.requireNonNull(entity);
+        return mapper(entity.getClass()).id(entity);
+    }
     public <T> List<T> list(Select<T> query) {return withConnection(c->list(c,query));}
     public <T> Optional<T> first(Select<T> query) {query.limit(1);return withConnection(c->first(c,query,null,mapper(query.type())));}
     public <T> List<Map<String,Object>> fieldRows(Select<T> query,String[] properties) {

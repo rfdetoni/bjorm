@@ -124,19 +124,32 @@ public final class AdvancedSmokeTest {
                 .and(Product_.version.between(0,2)).not()).orderBy(Product_.name.asc()).limit(10).offset(5).fetch();
         check(selected.size()==1,"typed selection returns rows");
         check(spy.last().sql().contains("IN (?, ?)")&&spy.last().sql().endsWith(" ORDER BY name ASC LIMIT ? OFFSET ?"),"typed query SQL shape");
-        check(spy.last().binds().get(5).equals(10)&&spy.last().binds().get(6).equals(5),"pagination values parameterized");
+        check(spy.last().binds().get(5).equals(10)&&spy.last().binds().get(6).equals(5L),"pagination values parameterized");
         check(Product_.name.in(List.of()).sql().equals("1 = 0"),"empty IN is false");
         db.select(Product.class).as("p")
             .join(User.class,"u", Product_.id.as("p").sameAs(User_.id.as("u")))
             .where(Product_.name.as("p").eq("Pencil"))
-            .orderBy(Product_.name.as("p").asc()).limit(3).fetch();
-        check(spy.last().sql().equals("SELECT p.id, p.name, p.unit_price, p.status, p.version FROM products p INNER JOIN users u ON p.id = u.id WHERE p.name = ? ORDER BY p.name ASC LIMIT ?"),"typed join compilation");
-        check(spy.last().binds().equals(Map.of(1,"Pencil",2,3)),"typed join bind ordering");
+            .orderBy(Product_.name.as("p").asc()).fetch();
+        check(spy.last().sql().equals("SELECT p.id, p.name, p.unit_price, p.status, p.version FROM products p INNER JOIN users u ON p.id = u.id WHERE p.name = ? ORDER BY p.name ASC"),"typed join compilation");
+        check(spy.last().binds().equals(Map.of(1,"Pencil")),"typed join bind ordering");
         db.select(Product.class).as("p")
             .join(User.class,"u",Product_.id.as("p").sameAs(User_.id.as("u"))
                 .and(Product_.name.as("p").eq("ON_VALUE")))
-            .where(Product_.name.as("p").eq("WHERE_VALUE")).limit(4).fetch();
-        check(spy.last().binds().equals(Map.of(1,"ON_VALUE",2,"WHERE_VALUE",3,4)),"join ON parameters are bound before WHERE and LIMIT");
+            .where(Product_.name.as("p").eq("WHERE_VALUE")).fetch();
+        check(spy.last().binds().equals(Map.of(1,"ON_VALUE",2,"WHERE_VALUE")),"join ON parameters are bound before WHERE and LIMIT");
+        try {
+            db.select(Product.class).as("p")
+                .join(User.class,"u",Product_.id.as("p").sameAs(User_.id.as("u"))).limit(2).fetch();
+            throw new AssertionError("Paginated join accepted");
+        } catch(IllegalArgumentException expected) {
+            check(expected.getMessage().contains("Paginating JOIN"),"join pagination must fail closed");
+        }
+        try {
+            db.select(Product.class).as("p").join(User.class,"u",Product_.name.as("p").eq("Pencil")).fetch();
+            throw new AssertionError("Cartesian join accepted");
+        } catch(IllegalArgumentException expected) {
+            check(expected.getMessage().contains("cartesian"),"cartesian join rejected");
+        }
         Identity identity=new Identity();identity.setLabel("ok");db.insert(identity);
         check(identity.getId()==42L,"JDBC generated key populated");
         check(spy.last().sql().equals("INSERT INTO identities (label) VALUES (?)"),"generated ID omitted from INSERT");

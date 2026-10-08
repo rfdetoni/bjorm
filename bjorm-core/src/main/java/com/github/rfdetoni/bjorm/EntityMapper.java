@@ -28,6 +28,8 @@ public interface EntityMapper<T> extends RowMapper<T> {
     void bindUpdate(PreparedStatement ps, T entity) throws SQLException;
     void bindId(PreparedStatement ps, int index, Object id) throws SQLException;
     Object id(T entity);
+    /** Java name of the generated primary-key property. */
+    default String idProperty() { return "id"; }
     default boolean generatedId() { return false; }
     default void acceptGeneratedId(ResultSet keys,T entity) throws SQLException {}
     default boolean optimisticLocking() { return false; }

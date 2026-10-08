@@ -1,6 +1,6 @@
 # BJORM — Bare Metal Java ORM
 
-**Experimental 0.3.6-SNAPSHOT** — a minimal, compile-time-assisted relational mapper for Java 25. Zero Spring/JPA/Hibernate dependencies in the core; SQL and JDBC remain visible and under application control.
+**Experimental 0.3.7-SNAPSHOT** — a minimal, compile-time-assisted relational mapper for Java 25. Zero Spring/JPA/Hibernate dependencies in the core; SQL and JDBC remain visible and under application control.
 
 > Early-stage source implementation. **Not production-ready**. It is not published to Maven Central. See [architecture and acceptance status](ARCHITECTURE.md).
 
@@ -176,7 +176,7 @@ The canonical development branch is **`main`**. All code changes should be pushe
 
 - **CI** (`.github/workflows/build.yml`): compiles the Maven reactor on JDK 25 and runs critical checks.
 - **Snapshot publication** (`publish-snapshot.yml`): on every push to `main`, validates the project and deploys `bjorm-core`, `bjorm-processor`, `bjorm-spring-boot` plus their parent POM to **GitHub Packages**. Examples and benchmarks are not published.
-- **Stable release** (`release.yml`): manually dispatch from `main` with a version matching the currently committed snapshot (e.g., `0.3.3` for `0.3.3-SNAPSHOT`). The workflow updates every POM, verifies, commits and tags `v0.3.3`, deploys Maven artifacts, then moves `main` to `0.3.6-SNAPSHOT`. All publication uses the workflow's `GITHUB_TOKEN` and no custom credentials are required in the repository.
+- **Stable release** (`release.yml`): manually dispatch from `main` with a version matching the currently committed snapshot (e.g., `0.3.3` for `0.3.3-SNAPSHOT`). The workflow updates every POM, verifies, commits and tags `v0.3.3`, deploys Maven artifacts, then moves `main` to `0.3.7-SNAPSHOT`. All publication uses the workflow's `GITHUB_TOKEN` and no custom credentials are required in the repository.
 
 ### Release procedure
 
@@ -243,3 +243,35 @@ db.delete(order);     // one transaction: delete persisted children, then parent
 - `upsert` is PostgreSQL native and matches on the primary key; it **does not** delete existing children omitted from the supplied collection. With `@Version`, the conflict branch rejects stale versions.
 - Cascade deletion resolves persisted children by foreign key even if the in-memory collection is empty, and deletes descendants before their parents. Use DB foreign keys for referential integrity. This is **not** JPA orphan removal or lazy loading.
 - Every graph is committed or rolled back atomically. Cyclic/repeated in-memory entities are rejected; this API has no identity map, no transparent retry, and no global context.
+
+## Spring MVC Pageable, Page and Slice
+
+The optional `bjorm-spring-boot` module depends on `spring-data-commons` **only for paging types**;
+the JDBC-only core remains independent of Spring Data and JPA.
+
+Enable Spring Data web argument resolution in your MVC application with `@EnableSpringDataWebSupport`:
+
+```java
+@GetMapping("/products/page")
+Page<Product> page(@PageableDefault(sort = "name") Pageable pageable) {
+    return bjormPages.page(Product.class, Product_.active.eq(true), pageable);
+}
+
+@GetMapping("/products/slice")
+Slice<Product> slice(@PageableDefault(sort = "name") Pageable pageable) {
+    return bjormPages.slice(Product.class, Product_.active.eq(true), pageable);
+}
+```
+
+`Page` executes a paginated `SELECT` plus `SELECT COUNT(*)` with the same predicate;
+`Slice` performs **one** `SELECT` using `LIMIT pageSize + 1` and `OFFSET`, then removes
+the lookahead row and sets `hasNext`. Neither creates an intermediate row map.
+A `sort` property is translated using the compile-time-generated entity mapper; unknown fields are rejected.
+`ignoreCase` and non-native null-ordering requests are rejected rather than silently ignored.
+`Pageable.getOffset()` is bound as a JDBC `long` to support high offsets, although
+large-offset pagination may be slower than keyset pagination.
+For stable ordering include a unique tie-break field (such as `sort=name,asc&sort=id,asc`).
+For stable JSON APIs prefer `PagedModel` rather than directly serializing Spring Data `PageImpl`.
+
+The `Page` count and row query are separate JDBC operations; use an appropriate database
+transaction isolation level if a consistent snapshot across concurrent writes is required.
