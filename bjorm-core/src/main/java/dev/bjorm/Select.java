@@ -1,0 +1,84 @@
+package dev.bjorm;
+import java.sql.*;
+import java.util.*;
+import java.util.function.Function;
+
+/** Small, mutable single-use typed query builder. Explicit SQL joins; no implicit entity graph traversal. */
+public final class Select<T> {
+    private record Join(Class<?> type,String alias,SqlPredicate on,boolean left) {}
+    private final Operations db;
+    private final Class<T> type;
+    private SqlPredicate predicate;
+    private String alias;
+    private final List<Join> joins=new ArrayList<>();
+    private final List<SqlOrder> orders=new ArrayList<>();
+    private Integer limit,offset;
+    Select(Operations db,Class<T> type){this.db=Objects.requireNonNull(db);this.type=Objects.requireNonNull(type);}
+    public Select<T> as(String value){this.alias=identifier(value);return this;}
+    public Select<T> join(Class<?> type,String alias,SqlPredicate on){return addJoin(type,alias,on,false);}
+    public Select<T> leftJoin(Class<?> type,String alias,SqlPredicate on){return addJoin(type,alias,on,true);}
+    private Select<T> addJoin(Class<?> type,String alias,SqlPredicate on,boolean left){
+        joins.add(new Join(Objects.requireNonNull(type),identifier(alias),Objects.requireNonNull(on),left));return this;
+    }
+    private static String identifier(String value){
+        if(value==null||!value.matches("[A-Za-z_][A-Za-z_0-9]*"))throw new IllegalArgumentException("Invalid SQL alias: "+value);
+        return value;
+    }
+    public Select<T> where(SqlPredicate value){predicate=Objects.requireNonNull(value);return this;}
+    Select<T> whereNullable(SqlPredicate value){predicate=value;return this;}
+    public Select<T> orderBy(SqlOrder... values){orders.addAll(Arrays.asList(values));return this;}
+    public Select<T> limit(int value){if(value<1)throw new IllegalArgumentException("limit must be positive");limit=value;return this;}
+    public Select<T> offset(int value){if(value<0)throw new IllegalArgumentException("offset must be non-negative");offset=value;return this;}
+    public List<T> fetch(){return db.list(this);}
+    /** Restrict SELECT to named Java properties. Does not materialize a partial entity. */
+    public FieldSelect<T> fields(String... properties){return new FieldSelect<>(this, properties);}
+    /** Fetch one mapped entity, using SQL LIMIT 1. */
+    public Optional<T> first(){limit(1);return db.first(this);}
+    Operations operations(){return db;}
+
+    Class<T> type(){return type;}
+    String sql(EntityMapper<T> base,Function<Class<?>,EntityMapper<?>> lookup){
+        return sql(base, lookup, null);
+    }
+    String sql(EntityMapper<T> base,Function<Class<?>,EntityMapper<?>> lookup,String[] properties){
+        if(properties!=null && properties.length==0)throw new IllegalArgumentException("Select at least one property");
+        StringBuilder sql=new StringBuilder();
+        if(properties==null && alias==null && joins.isEmpty()){sql.append(base.selectAllSql());}
+        else {
+            boolean qualified=alias!=null||!joins.isEmpty();
+            String root=alias==null?"a":alias;
+            sql.append("SELECT ");
+            if(properties==null)sql.append(base.qualifiedColumns(root));
+            else for(int n=0;n<properties.length;n++) {
+                if(n>0)sql.append(", ");
+                if(qualified)sql.append(root).append('.');
+                sql.append(base.columnFor(properties[n]));
+            }
+            sql.append(" FROM ").append(base.table());
+            if(qualified)sql.append(" ").append(root);
+            Set<String> known=new HashSet<>();known.add(root);
+            for(Join join:joins){
+                if(!known.add(join.alias))throw new IllegalArgumentException("Duplicate SQL alias: "+join.alias);
+                EntityMapper<?> target=lookup.apply(join.type);
+                sql.append(join.left?" LEFT JOIN ":" INNER JOIN ").append(target.table()).append(" ").append(join.alias)
+                        .append(" ON ").append(join.on.sql());
+            }
+        }
+        if(predicate!=null)sql.append(" WHERE ").append(predicate.sql());
+        if(!orders.isEmpty()){
+            sql.append(" ORDER BY ");
+            for(int i=0;i<orders.size();i++){if(i>0)sql.append(", ");sql.append(orders.get(i).sql());}
+        }
+        if(limit!=null)sql.append(" LIMIT ?");
+        if(offset!=null){if(limit==null)throw new IllegalStateException("offset requires limit");sql.append(" OFFSET ?");}
+        return sql.toString();
+    }
+    int bind(PreparedStatement ps) throws SQLException {
+        int i=1;
+        for(Join join:joins)for(Object value:join.on.params())ps.setObject(i++,value);
+        if(predicate!=null)for(Object value:predicate.params())ps.setObject(i++,value);
+        if(limit!=null)ps.setInt(i++,limit);
+        if(offset!=null)ps.setInt(i++,offset);
+        return i;
+    }
+}
