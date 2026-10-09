@@ -20,6 +20,19 @@ java -cp "$OUT/core:$OUT/example${BJORM_MYSQL_DRIVER_JAR:+:$BJORM_MYSQL_DRIVER_J
 
 java -cp "$OUT/core:$OUT/example${BJORM_DRIVER_JAR:+:$BJORM_DRIVER_JAR}" com.github.rfdetoni.bjorm.examples.PostgresIntegrationTest
 
+
+# Cross-module inheritance: base annotations must survive compilation into a separate JAR/module.
+mkdir -p "$OUT/shared-base" "$OUT/consumer"
+javac -cp "$OUT/core" -d "$OUT/shared-base" bjorm-examples/src/main/java/com/github/rfdetoni/bjorm/examples/AuditedBase.java
+javac -cp "$OUT/core:$OUT/shared-base" \
+  -processorpath "$OUT/core:$OUT/processor" \
+  -processor com.github.rfdetoni.bjorm.processor.EntityProcessor \
+  -d "$OUT/consumer" \
+  bjorm-examples/src/main/java/com/github/rfdetoni/bjorm/examples/InheritedPatient.java \
+  bjorm-examples/src/test/java/com/github/rfdetoni/bjorm/examples/InheritedFieldSmokeTest.java
+java -cp "$OUT/core:$OUT/shared-base:$OUT/consumer" com.github.rfdetoni.bjorm.examples.InheritedFieldSmokeTest
+echo 'PASS: annotations retained when base is compiled in another module'
+
 # The processor must reject unsafe identifiers and unbound query parameters at compile time.
 cat > "$OUT/InvalidTable.java" <<'JAVA'
 import com.github.rfdetoni.bjorm.*;

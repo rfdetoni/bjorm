@@ -4,7 +4,7 @@ import java.lang.annotation.*;
 
 /** Explicit one-to-many persistence relation, not a database column.
  * Child @Table type must expose a scalar FK Java property named mappedBy. */
-@Retention(RetentionPolicy.SOURCE)
+@Retention(RetentionPolicy.CLASS)
 @Target({ElementType.FIELD, ElementType.RECORD_COMPONENT})
 public @interface Children {
     String mappedBy();

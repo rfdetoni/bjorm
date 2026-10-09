@@ -101,3 +101,28 @@ jobs:
             -DoutputDirectory=bjorm-examples/target
       - name: Verify with real MySQL 8.4
         run: bash scripts/verify.sh
+
+  publish-snapshot:
+    name: Publish verified Maven snapshot
+    needs: [java, postgres, mysql]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+          server-id: github
+          server-username: GITHUB_ACTOR
+          server-password: GITHUB_TOKEN
+      - name: Publish snapshots only after all verification jobs
+        env:
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mvn -B -ntp -pl bjorm-core,bjorm-processor,bjorm-spring-boot -am -DskipTests deploy
