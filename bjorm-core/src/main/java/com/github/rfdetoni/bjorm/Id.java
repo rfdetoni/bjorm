@@ -2,7 +2,7 @@ package com.github.rfdetoni.bjorm;
 import java.lang.annotation.*;
 /** IDs are inferred by type: UUID (v7), String (v7 text) or database identity (int/long).
  * Use assigned=true when the caller always supplies the primary key. */
-@Retention(RetentionPolicy.SOURCE) @Target({ElementType.RECORD_COMPONENT,ElementType.FIELD})
+@Retention(RetentionPolicy.CLASS) @Target({ElementType.RECORD_COMPONENT,ElementType.FIELD})
 public @interface Id {
     /** Request a JDBC-generated key, normally numeric. Retained for explicit configurations. */
     boolean generated() default false;
