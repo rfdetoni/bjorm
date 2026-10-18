@@ -2,6 +2,8 @@ package com.github.rfdetoni.bjorm;
 import java.util.*;
 /** Common entry points for database and explicit transaction; generated repositories use this contract. */
 public interface Operations {
+    /** Selected dialect for compiled native @Query binders. */
+    SqlDialect dialect();
     <T> void insert(T entity);
     /** Persist and return the entity with its generated ID; required for immutable records. */
     <T> T insertReturning(T entity);

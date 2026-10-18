@@ -2,7 +2,7 @@
 
 ## Product
 
-Bare Metal Java ORM. Java 25, PostgreSQL-first, direct JDBC, compile-time generated mappings, no mandatory frameworks, no WORM API compatibility. `0.3.6-SNAPSHOT` is an experimental codebase, **not production-ready**.
+Bare Metal Java ORM. Java 25, PostgreSQL-first, direct JDBC, compile-time generated mappings, no mandatory frameworks, no WORM API compatibility. `0.3.17-SNAPSHOT` is an experimental codebase, **not production-ready**.
 
 ## Modules
 
@@ -36,28 +36,26 @@ Bare Metal Java ORM. Java 25, PostgreSQL-first, direct JDBC, compile-time genera
 | JDBC transactions | Implemented | Commit/rollback, one connection per explicit tx |
 | Optimistic locking | Implemented | Versioned update/delete; caller refreshes after update |
 | Batch write | Implemented | Insert/update, bounded batch size 256, typed binders |
-| Generated keys | Implemented (subset) | POJO only; batch IDs not implemented |
+| Generated keys | Implemented | POJO and immutable record identity returns; numeric batch uses individual inserts |
 | Streaming reads | Implemented | `forEach` typed entity scan and `scan` with custom/projection readers |
 | Joins and projections | Implemented | Explicit typed joins, named-property selection (maps or compiled DTOs), scalars, native `@Query` readers |
-| JSON | PostgreSQL `jsonb` string | `@Json String`; custom serializers remain application-owned |
+| JSON | PostgreSQL JSONB / MySQL JSON | String and typed `@Json` fields via user-provided codecs |
 | Tenancy | Through DataSource | Application provides tenant-aware DataSource; no global tenant state |
-| Spring Boot | Adapter source present | Actual Spring Boot 4 build/context integration **not verified** |
+| Spring Boot | Boot 4.1.1 adapter | Transaction-aware DataSource; verify the consumer's `@Transactional` integration separately |
 | `findOne` / named-property `find` / scalar | Implemented | `Optional<T>` with `LIMIT 1`, property-keyed partial rows, typed scalar and `@Projection` DTO, no partial entities |
 | SQL shape cache | Deliberately omitted | Need measurable gain before adding storage/caching complexity |
-| MySQL | Not yet | Requires dedicated dialect + real integration tests |
+| MySQL | Supported subset | MySQL 8.4 CRUD/JSON/UUID/JOIN/upsert; FULL OUTER JOIN and versioned upsert unsupported |
 | Performance benchmarks | JMH source present | Requires JDK25/Maven and real JDBC comparison |
-| Real PostgreSQL tests | Available opt-in | Not executed without test database/driver |
+| Real PostgreSQL tests | CI integrated | Disposable PostgreSQL 17 service plus Java 25 verification in `build.yml` |
 | Transparent lazy-loading/L2 cache | Out of scope | Would violate target simplicity |
 
 ## Open engineering gates before production
 
-1. Compile full Maven reactor with JDK 25, including optional Spring/JMH dependencies, then run Java 25 CI gates.
-2. Run PostgreSQL integration in an **isolated disposable DB**, with CRUD/null/JSON/version/batch/generation concurrency and actual transaction semantics.
-3. Run actual Spring Boot 4.1.1 application integration to verify injection and `@Transactional` enlistment.
-4. Add JDBC driver matrix and typed compatibility checks for date/time, nullable JSON, generated key behavior.
-5. Validate the new selected-property queries against real PostgreSQL and add keyset helpers only if motivated by concrete use cases; avoid generic AST/proxy frameworks.
-6. Run reproducible JMH and full-database benchmarks versus equivalent manual JDBC + WORM; report alloc/op, CPU, throughput, latency p50/p95/p99.
-7. Publish artifacts and repo only after build/CI gates; document license and package ownership.
+1. Require Java 25, PostgreSQL 17 and MySQL 8.4 GitHub CI checks to pass on each revision.
+2. Verify Spring Boot 4.1.1 `@Transactional` behavior against a real consumer application.
+3. Extend database coverage for concurrent updates, lock contention and JDBC driver compatibility.
+4. Run reproducible JDBC/JMH benchmarks with equivalent SQL and transaction boundaries; report allocations and tail latency.
+5. Keep user-domain audit, soft delete and tenant routing in their consumers and prove these boundaries with integration tests.
 
 ## Performance standard
 
@@ -65,7 +63,7 @@ No unsupported throughput claims. Compare equivalent SQL, statement caching, con
 
 ## Delivery
 
-GitHub repository: `rfdetoni/bjorm`. GitHub Actions performs Java 25 validation and a disposable PostgreSQL integration run; Maven publishing status must be confirmed separately.
+GitHub repository: `rfdetoni/bjorm`. GitHub Actions runs Java 25, disposable PostgreSQL 17 and MySQL 8.4 checks; only the `build.yml` gated snapshot job publishes snapshots. Check each run for the current commit.
 
 ## Explicit graph persistence (0.3.6)
 

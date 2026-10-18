@@ -12,6 +12,7 @@ java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.SmokeTest
 
 java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.AdvancedSmokeTest
 java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.GraphQuerySmokeTest
+java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.GraphSharedRelationSmokeTest
 java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.AnnotatedJoinSmokeTest
 java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.DialectSmokeTest
 java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.InheritedFieldSmokeTest

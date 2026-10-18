@@ -27,7 +27,7 @@ public final class MySqlIntegrationTest {
             public boolean isWrapperFor(Class<?> cls){return false;}
         };
         try(Connection c=source.getConnection();Statement st=c.createStatement()){
-            st.execute("CREATE TABLE bjorm_it_users(id CHAR(36) PRIMARY KEY,name VARCHAR(255),age INT NOT NULL)");
+            st.execute("CREATE TABLE bjorm_it_users(id CHAR(36) PRIMARY KEY,name VARCHAR(255) UNIQUE,age INT NOT NULL)");
             st.execute("CREATE TABLE bjorm_it_documents(id CHAR(36) PRIMARY KEY,payload JSON)");
             st.execute("CREATE TABLE bjorm_it_auto_long(id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,label VARCHAR(255))");
             st.execute("CREATE TABLE bjorm_it_orders(id CHAR(36) PRIMARY KEY,description VARCHAR(255))");
@@ -44,6 +44,17 @@ public final class MySqlIntegrationTest {
             check(db.find(ItUser.class,original.id()).age()==33,"MySQL UUID read from CHAR(36)");
             db.upsertReturning(new ItUser(original.id(),"Updated",34));
             check(db.find(ItUser.class,original.id()).name().equals("Updated"),"MySQL native upsert");
+            check(original.id().equals(new ItQueries_Bjorm(db).findUserId(original.id()).orElseThrow()),
+                "Native @Query UUID bindings/readers round-trip on MySQL");
+            UUID conflictingId=UUID.randomUUID();
+            try {
+                db.upsertReturning(new ItUser(conflictingId,"Updated",99));
+                throw new AssertionError("Secondary UNIQUE conflict must not update another primary-key row");
+            } catch(BjormException expected) {
+                check(expected.getCause() instanceof SQLException,"MySQL must reject conflicting unique row");
+            }
+            check(db.find(ItUser.class,original.id()).age()==34 && db.find(ItUser.class,conflictingId)==null,
+                "MySQL secondary-key collision cannot mutate unrelated entity");
             check(db.select(ItUser.class).where(ItUser_.id.eq(original.id())).fetch().size()==1,"MySQL UUID predicate bind");
             ItDocument json=db.insertReturning(new ItDocument(null,"{\"count\":2}"));
             check(db.find(ItDocument.class,json.id()).payload().contains("count"),"MySQL native JSON");

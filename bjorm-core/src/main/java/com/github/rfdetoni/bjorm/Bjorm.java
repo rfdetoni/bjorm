@@ -235,6 +235,10 @@ public final class Bjorm implements Operations {
         if(m.generatedId()) throw new IllegalArgumentException("Upsert requires an application-assigned primary key");
         entity=m.materializeInsert(entity);
         if(m.id(entity)==null) throw new IllegalArgumentException("Upsert requires non-null ID");
+        // A MySQL AUTO_INCREMENT key may silently change on UPDATE id=NULL.
+        // PK-only conflict checks are consequently safe only for textual/UUID IDs.
+        if("mysql".equals(dialect.name()) && !(m.id(entity) instanceof UUID || m.id(entity) instanceof String))
+            throw new UnsupportedOperationException("MySQL UPSERT requires UUID/String primary key; use insert/update for numeric IDs");
         try(PreparedStatement ps=prepare(c,m.upsertSql(dialect))) {
             m.bindUpsert(ps,entity,dialect);
             int changed=ps.executeUpdate();
@@ -357,6 +361,19 @@ public final class Bjorm implements Operations {
         ArrayList<GraphSlot> slots=new ArrayList<>();
         ArrayList<List<Integer>> paths=new ArrayList<>();
         collectGraphPaths((EntityMapper<Object>)root,0,new ArrayList<>(),new HashSet<>(),slots,paths);
+        // Joined-result hydration groups rows by root; ordering on a joined-only field
+        // cannot be represented by the outer UNION ALL query.
+        for(SqlOrder order:query.sorting()) {
+            String field=order.column();
+            int separator=field.lastIndexOf('.');
+            if(separator>=0 && !field.substring(0,separator).equals(query.rootAlias()))
+                throw new IllegalArgumentException("Eager graph ORDER BY supports only root columns: "+field);
+            String column=separator>=0?field.substring(separator+1):field;
+            try {root.columnIndex(column);}
+            catch(IllegalArgumentException e) {
+                throw new IllegalArgumentException("Eager graph ORDER BY supports only mapped root columns: "+field,e);
+            }
+        }
         String rootSql=query.sql(root,type->mapper(type),dialect);
         // Multiple matching explicit joins cannot multiply roots before eager expansion.
         // LIMIT/OFFSET on such joins remains rejected by Select.sql().
@@ -405,7 +422,7 @@ public final class Bjorm implements Operations {
                     // RIGHT/FULL outer rows without a root cannot materialize a parent entity.
                     if(id==null)continue;
                     if(current==null || !Objects.equals(lastId,id)) {
-                        if(current!=null)emit.accept((T)finishGraph(current,slots));
+                        if(current!=null)emit.accept((T)finishGraph(current,slots,0));
                         current=new GraphNode((EntityMapper<Object>)root,root.read(rs));
                         lastId=id;
                         groupRows=0;
@@ -428,20 +445,20 @@ public final class Bjorm implements Operations {
                         cursor=child;
                     }
                 }
-                if(current!=null)emit.accept((T)finishGraph(current,slots));
+                if(current!=null)emit.accept((T)finishGraph(current,slots,0));
             }
         }
     }
-    private Object finishGraph(GraphNode node,List<GraphSlot> slots) {
+    private Object finishGraph(GraphNode node,List<GraphSlot> slots,int parentSlot) {
         Object value=node.value;
         // Attach all mapped child relations, including empty collections on LEFT JOIN misses.
         for(ChildRelation<Object> relation:node.mapper.children()) {
             int slotIndex=-1;
-            for(int i=0;i<slots.size();i++)if(slots.get(i).relation==relation){slotIndex=i;break;}
+            for(int i=0;i<slots.size();i++)if(slots.get(i).parent()==parentSlot && slots.get(i).relation()==relation){slotIndex=i;break;}
             if(slotIndex<0)throw new IllegalStateException("Missing compiled child graph slot");
             LinkedHashMap<Object,GraphNode> related=node.children.get(slotIndex);
             ArrayList<Object> values=new ArrayList<>(related==null?0:related.size());
-            if(related!=null)for(GraphNode child:related.values())values.add(finishGraph(child,slots));
+            if(related!=null)for(GraphNode child:related.values())values.add(finishGraph(child,slots,slotIndex+1));
             value=node.mapper.withChildren(value,relation.property(),values);
         }
         return value;
@@ -580,6 +597,7 @@ public final class Bjorm implements Operations {
         private final Thread owner=Thread.currentThread();
         private volatile boolean active=true;
         private Transaction(Connection c) {this.c=c;}
+        public SqlDialect dialect(){return Bjorm.this.dialect;}
         private <T> T use(JdbcWork<T> work) {
             if(!active||owner!=Thread.currentThread())throw new IllegalStateException("Transaction no longer active or accessed from a different thread");
             try{return work.run(c);}catch(SQLException e){throw new BjormException("Transaction JDBC operation failed",e);}

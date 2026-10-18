@@ -135,7 +135,7 @@ public final class EntityProcessor extends AbstractProcessor {
         TypeElement child=(TypeElement)childType.asElement();
         String childPropertyType=null, childGetter=null, childSetter=null;
         boolean record=child.getKind()==ElementKind.RECORD;
-        for(Element property:record ? child.getRecordComponents():child.getEnclosedElements()) {
+        for(Element property:record ? child.getRecordComponents():pojoFields(child)) {
             if(property.getSimpleName().contentEquals(mappedBy) && (record||property.getKind()==ElementKind.FIELD)) {
                 childPropertyType=property.asType().toString();
                 String cap=Character.toUpperCase(mappedBy.charAt(0))+mappedBy.substring(1);
@@ -420,7 +420,7 @@ public final class EntityProcessor extends AbstractProcessor {
         String binder="ps -> {";
         for(int i=0;i<compiled.names.size();i++){
             VariableElement variable=vars.get(params.get(compiled.names.get(i)));
-            binder+=setter(i+1,variable.getSimpleName().toString(),variable.asType().toString());
+            binder+=setter(i+1,variable.getSimpleName().toString(),variable.asType().toString(),"db.dialect()");
         }
         binder+="}";
         String executable="\""+javaString(compiled.sql)+"\"";
@@ -438,7 +438,7 @@ public final class EntityProcessor extends AbstractProcessor {
             case "boolean","java.lang.Boolean" -> "(rs -> rs.getObject(1, java.lang.Boolean.class))";
             case "java.lang.String" -> "(rs -> rs.getString(1))";
             case "java.math.BigDecimal" -> "(rs -> rs.getBigDecimal(1))";
-            case "java.util.UUID" -> "(rs -> rs.getObject(1, java.util.UUID.class))";
+            case "java.util.UUID" -> "(rs -> com.github.rfdetoni.bjorm.JdbcValues.uuid(rs,1))";
             default -> null;
         };
     }
