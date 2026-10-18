@@ -30,6 +30,8 @@ javac -cp "$OUT/core:$OUT/shared-base" \
   -processor com.github.rfdetoni.bjorm.processor.EntityProcessor \
   -d "$OUT/consumer" \
   bjorm-examples/src/main/java/com/github/rfdetoni/bjorm/examples/InheritedPatient.java \
+  bjorm-examples/src/main/java/com/github/rfdetoni/bjorm/examples/ItInheritedFkChild.java \
+  bjorm-examples/src/main/java/com/github/rfdetoni/bjorm/examples/ItInheritedFkParent.java \
   bjorm-examples/src/test/java/com/github/rfdetoni/bjorm/examples/InheritedFieldSmokeTest.java
 java -cp "$OUT/core:$OUT/shared-base:$OUT/consumer" com.github.rfdetoni.bjorm.examples.InheritedFieldSmokeTest
 echo 'PASS: annotations retained when base is compiled in another module'
