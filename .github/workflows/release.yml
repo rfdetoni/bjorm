@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Stable version to release (example: 0.3.5, must match current SNAPSHOT)'
+        description: 'Stable version to release (example: 0.3.17, must match current SNAPSHOT)'
         required: true
         type: string
 

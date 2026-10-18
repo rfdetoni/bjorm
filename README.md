@@ -1,6 +1,6 @@
 # BJORM — Bare Metal Java ORM
 
-**Experimental 0.3.10-SNAPSHOT** — a minimal, compile-time-assisted relational mapper for Java 25. Zero Spring/JPA/Hibernate dependencies in the core; SQL and JDBC remain visible and under application control.
+**Experimental 0.3.17-SNAPSHOT** — a minimal, compile-time-assisted relational mapper for Java 25. Zero Spring/JPA/Hibernate dependencies in the core; SQL and JDBC remain visible and under application control.
 
 > Early-stage source implementation. **Not production-ready**. It is not published to Maven Central. See [architecture and acceptance status](ARCHITECTURE.md).
 
@@ -180,13 +180,13 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) and [`bjorm-examples`](bjorm-examples/src
 The canonical development branch is **`main`**. All code changes should be pushed to `main`; the GitHub Actions workflows handle Maven packages:
 
 - **CI** (`.github/workflows/build.yml`): compiles the Maven reactor on JDK 25 and runs critical checks.
-- **Snapshot publication** (`publish-snapshot.yml`): on every push to `main`, validates the project and deploys `bjorm-core`, `bjorm-processor`, `bjorm-spring-boot` plus their parent POM to **GitHub Packages**. Examples and benchmarks are not published.
-- **Stable release** (`release.yml`): manually dispatch from `main` with a version matching the currently committed snapshot (e.g., `0.3.3` for `0.3.3-SNAPSHOT`). The workflow updates every POM, verifies, commits and tags `v0.3.3`, deploys Maven artifacts, then moves `main` to `0.3.8-SNAPSHOT`. All publication uses the workflow's `GITHUB_TOKEN` and no custom credentials are required in the repository.
+- **Snapshot publication** (`build.yml`): the `publish-snapshot` job runs only after Java 25, PostgreSQL 17 and MySQL 8.4 validation succeeds, then deploys `bjorm-core`, `bjorm-processor`, `bjorm-spring-boot` and parent POM to **GitHub Packages**. Stable-version commits skip this snapshot deploy. Examples and benchmarks are not published.
+- **Stable release** (`release.yml`): manually dispatch from `main` with a version matching the currently committed snapshot (e.g., `0.3.17` for `0.3.17-SNAPSHOT`). The workflow updates every POM, verifies, commits and tags the stable release, deploys Maven artifacts, then advances `main` to the next development snapshot. All publication uses the workflow's `GITHUB_TOKEN` and no custom credentials are required in the repository.
 
 ### Release procedure
 
 1. Make sure the latest changes have been pushed to `main` and CI passes.
-2. In **GitHub → Actions → release-maven → Run workflow**, select `main` and enter the stable version, e.g. `0.3.3`.
+2. In **GitHub → Actions → release-maven → Run workflow**, select `main` and enter the stable version, e.g. `0.3.17`.
 3. Check that the release version commit and tag exist, the library packages were published, and `main` has the next snapshot version.
 
 GitHub Actions must have **read/write workflow permissions**, and branch protection must permit the release workflow's pushes. The workflow uses the built-in token with `contents:write` and `packages:write` permissions. A failed deploy after the release tag is pushed requires explicit recovery; it does not mean the release was published successfully. Version checks prevent accidental mismatched reactor versions.
@@ -208,7 +208,7 @@ The published Maven `groupId` and the Java API namespace are `com.github.rfdeton
   <dependency>
     <groupId>com.github.rfdetoni.bjorm</groupId>
     <artifactId>bjorm-core</artifactId>
-    <version>0.3.3-SNAPSHOT</version>
+    <version>0.3.17-SNAPSHOT</version>
   </dependency>
 </dependencies>
 ```
@@ -342,8 +342,12 @@ In Spring Boot 4: set `bjorm.dialect: mysql` (default: `postgresql`).
 - **MySQL 8.4**: store UUIDs in `CHAR(36)`, native JSON and
   `ON DUPLICATE KEY UPDATE` with row aliases.
 - `FULL OUTER JOIN` is not available on MySQL; explicitly rejected.
-- MySQL upsert on `@Version` is refused; using MySQL UPSERT with multiple
-  UNIQUE indexes can update a different conflict target than PostgreSQL.
+- MySQL upsert with `@Version` is refused. For application-assigned UUID/String
+  primary keys, a PK-equality guard rejects a duplicate secondary UNIQUE key
+  instead of updating another entity. Numeric primary-key upsert is refused
+  because `AUTO_INCREMENT` may generate a key on UPDATE-to-NULL.
+- Compiled `@Query` UUID parameters and scalar UUID results use the active
+  dialect (PostgreSQL native UUID, MySQL `CHAR(36)`).
 - `@Query` native SQL and manually supplied SQL may be database-specific;
   the dialect does not automatically rewrite arbitrary SQL.
 - Extra dialect implementations can implement `SqlDialect`; verify the

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.17-SNAPSHOT
+
+- Fix eager graph hydration when the same generated child relation is reachable through different parent paths; identify relation slots by parent context.
+- Reject graph sorting on non-root columns with an explicit error before SQL execution.
+- Bind native `@Query` UUID arguments and decode scalar UUID results according to the current JDBC dialect (including MySQL CHAR(36)).
+- Resolve inherited child foreign-key fields when compiling `@Children(mappedBy=...)`.
+- Guard MySQL native UPSERT so a secondary UNIQUE collision cannot silently update another UUID/String-PK row. Explicitly refuse unsafe numeric-key MySQL UPSERT.
+- Add focused graph/compiled-mapping/MySQL integration regressions for these issues.
+- Consolidate snapshot publishing in the Java/PostgreSQL/MySQL-gated `build.yml`; do not publish stable-version commits as snapshots.
+- Align all module versions and current capability/acceptance documentation.
+
+
 ## 0.3.15-SNAPSHOT
 
 - Compile persistent POJO fields declared in superclasses, including inherited @Id, @Column, @Version and @Children; access them through public inherited getters/setters, with deterministic base-first column ordering and shadowing rejection. No reflection in CRUD.

@@ -120,7 +120,16 @@ jobs:
           server-id: github
           server-username: GITHUB_ACTOR
           server-password: GITHUB_TOKEN
+      - name: Identify snapshot build (stable release commits are published by release.yml)
+        id: version
+        run: |
+          if python3 scripts/release_version.py check-snapshot; then
+            echo 'is_snapshot=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'is_snapshot=false' >> "$GITHUB_OUTPUT"
+          fi
       - name: Publish snapshots only after all verification jobs
+        if: steps.version.outputs.is_snapshot == 'true'
         env:
           GITHUB_ACTOR: ${{ github.actor }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

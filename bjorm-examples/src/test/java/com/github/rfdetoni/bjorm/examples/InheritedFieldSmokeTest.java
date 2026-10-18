@@ -26,6 +26,12 @@ public final class InheritedFieldSmokeTest {
             throw new AssertionError("Inherited binding order mismatch: "+binds);
         if(!mapper.columnFor("createdAt").equals("created_at"))
             throw new AssertionError("Inherited @Column not mapped");
-        System.out.println("PASS: inherited @Id and @Column with deterministic bind order");
+        var fkMapper=ItInheritedFkChild_BjormMapper.INSTANCE;
+        if(!"parentId".equals(fkMapper.columnFor("parentId")))
+            throw new AssertionError("Inherited child FK missing from compiled mapping");
+        var relations=ItInheritedFkParent_BjormMapper.INSTANCE.children();
+        if(relations.size()!=1 || !"parentId".equals(relations.getFirst().mappedBy()))
+            throw new AssertionError("Inherited child FK not resolved by @Children");
+        System.out.println("PASS: inherited @Id, @Column, child FK and deterministic bind order");
     }
 }

@@ -67,6 +67,7 @@ public final class Select<T> {
     public Optional<T> first(){limit(1);return db.first(this);}
     Operations operations(){return db;}
     boolean hasJoins(){return !joins.isEmpty();}
+    String rootAlias(){return alias==null?"a":alias;}
     boolean hasRightOrFullJoin(){return joins.stream().anyMatch(j -> j.joinType()==JoinType.RIGHT || j.joinType()==JoinType.FULL);}
     List<SqlOrder> sorting(){return List.copyOf(orders);}
 

@@ -48,6 +48,9 @@ public final class DialectSmokeTest {
         check(id.toString().equals(p.binds.get(1)),"MySQL UUID in typed WHERE predicate must bind as CHAR(36) text");
         mysql.upsertReturning(new ItUser(id,"Bia",16));
         check(p.sql.contains(" AS bjorm_new ON DUPLICATE KEY UPDATE "),"MySQL native upsert alias");
+        check(p.sql.contains("id = IF("),"MySQL upsert must reject secondary UNIQUE collisions");
+        new ItQueries_Bjorm(mysql).findUserId(id);
+        check(id.toString().equals(p.binds.get(1)),"Native @Query UUID parameter must use MySQL CHAR(36) dialect");
         mysql.insertReturning(new ItDocument(null,"{\"ok\":true}"));
         check(p.sql.contains("CAST(? AS JSON)") && !p.sql.contains("jsonb"),"MySQL JSON dialect");
         try {
