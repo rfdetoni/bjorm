@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.18-SNAPSHOT
+
+- Add framework-neutral validated Pageable and Slice<T> with safe sort-property grammar, bounded offset policy and count-free lookahead construction.
+- Add pagination smoke regression and align reactor version pins.
+
+
 ## 0.3.17-SNAPSHOT
 
 - Fix eager graph hydration when the same generated child relation is reachable through different parent paths; identify relation slots by parent context.
