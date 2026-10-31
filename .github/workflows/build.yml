@@ -1,9 +1,16 @@
 name: build
 on:
   push:
-    branches: [main]
+    branches: [main] # Required by snapshot publication
+    paths-ignore: ['**/*.md', 'docs/**']
   pull_request:
+    branches: [main]
+    paths-ignore: ['**/*.md', 'docs/**']
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -26,6 +33,7 @@ jobs:
         run: bash scripts/verify.sh
 
   postgres:
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -64,6 +72,7 @@ jobs:
         run: bash scripts/verify.sh
 
   mysql:
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     services:
       mysql:
