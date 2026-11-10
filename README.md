@@ -1,6 +1,6 @@
 # BJORM — Bare Metal Java ORM
 
-**Experimental 0.3.17-SNAPSHOT** — a minimal, compile-time-assisted relational mapper for Java 25. Zero Spring/JPA/Hibernate dependencies in the core; SQL and JDBC remain visible and under application control.
+**Experimental 0.3.18-SNAPSHOT** — a minimal, compile-time-assisted relational mapper for Java 25. Zero Spring/JPA/Hibernate dependencies in the core; SQL and JDBC remain visible and under application control.
 
 > Early-stage source implementation. **Not production-ready**. It is not published to Maven Central. See [architecture and acceptance status](ARCHITECTURE.md).
 
@@ -56,6 +56,34 @@ db.tx(tx -> {
     tx.execute("UPDATE audit SET events = events + 1", StatementBinder.NONE);
 });
 ```
+
+## Native aggregates and row locks (no JdbcClient required)
+
+Use BJORM's generated field predicates for index-friendly COUNT and EXISTS, including
+inside `db.tx` and injected Spring `@Transactional` methods:
+
+```java
+long total = db.count(Product.class, Product_.name.eq("Pencil"));
+boolean any = db.exists(Product.class, Product_.name.eq("Pencil"));
+// Result sets are not materialized: COUNT(*) and SELECT 1 ... LIMIT 1.
+db.tx(tx -> {
+    if (tx.lockOne(Product.class, Product_.id.eq(productId), LockMode.UPDATE)) {
+        // Update in the same transaction. Lock is released on commit/rollback.
+    }
+});
+```
+
+`LockMode.UPDATE` and `LockMode.SHARE` map to `FOR UPDATE` and
+`FOR SHARE` (PostgreSQL and MySQL 8.4). `lockOne` requires a non-null
+typed predicate and a live transaction. A call with an auto-commit connection
+fails explicitly; doing row locking outside a transaction would silently
+release the lock. A row-missing predicate returns `false`.
+
+For specialized PostgreSQL SQL (CTEs, aggregates with multiple JOINs, JSONB
+expressions and conflict updates by composite key), **use BJORM's existing**
+`db.query(sql, binder, mapper)`, `db.one(...)`, `db.execute(...)` or
+compile `@Query` repositories before adding Spring JdbcClient. Those are
+first-class BJORM APIs, not a reason to expand the DSL with every SQL feature.
 
 ## Find one and fetch only requested properties
 
