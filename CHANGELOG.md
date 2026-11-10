@@ -2,6 +2,9 @@
 
 ## 0.3.18-SNAPSHOT
 
+- Fix compile-time generated entity binders and readers for `java.time.Instant` on PostgreSQL/MySQL, handling null values and avoiding unsupported JDBC `setObject(Instant)` and `getObject(Instant.class)`.
+- Add cross-dialect integration coverage for record insertion, versioned update, nullable timestamp and roundtrip.
+
 - Bind `java.time.Instant` as JDBC `Timestamp` in native BJORM `SqlDialect.bindValue`, avoiding PostgreSQL driver failures in custom SQL queries and automation writes.
 - Add real PostgreSQL/MySQL native timestamp parameter roundtrip regression tests.
 

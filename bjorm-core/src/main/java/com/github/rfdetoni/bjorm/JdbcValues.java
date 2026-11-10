@@ -14,6 +14,11 @@ public final class JdbcValues {
         }
         throw new SQLException("Unsupported UUID JDBC value "+value.getClass().getName()+" at column "+i);
     }
+    /** JDBC drivers do not consistently implement getObject(index, Instant.class). */
+    public static java.time.Instant instant(ResultSet rs,int i)throws SQLException {
+        Timestamp value=rs.getTimestamp(i);
+        return value==null?null:value.toInstant();
+    }
     public static int requiredInt(ResultSet rs, int i) throws SQLException { int v=rs.getInt(i); if(rs.wasNull())throw new SQLException("NULL for required int at column "+i); return v; }
     public static long requiredLong(ResultSet rs, int i) throws SQLException { long v=rs.getLong(i); if(rs.wasNull())throw new SQLException("NULL for required long at column "+i); return v; }
     public static boolean requiredBoolean(ResultSet rs, int i) throws SQLException { boolean v=rs.getBoolean(i); if(rs.wasNull())throw new SQLException("NULL for required boolean at column "+i); return v; }

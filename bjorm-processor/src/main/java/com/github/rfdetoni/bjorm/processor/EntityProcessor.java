@@ -483,6 +483,9 @@ public final class EntityProcessor extends AbstractProcessor {
         case "java.lang.String"->"ps.setString("+i+","+access+");";
         case "java.util.UUID"->dialect==null?"ps.setObject("+i+","+access+");":dialect+".bindUuid(ps,"+i+","+access+");";
         case "java.math.BigDecimal"->"ps.setBigDecimal("+i+","+access+");";
+        case "java.time.Instant"->dialect==null
+            ? "ps.setTimestamp("+i+","+access+"==null?null:java.sql.Timestamp.from("+access+"));"
+            : dialect+".bindValue(ps,"+i+","+access+");";
         default -> {TypeElement e=elements.getTypeElement(type);
             yield "ps.setObject("+i+","+(e!=null&&e.getKind()==ElementKind.ENUM?"("+access+"==null?null:"+access+".name())":access)+");";}
     };}
@@ -496,6 +499,7 @@ public final class EntityProcessor extends AbstractProcessor {
         case "java.lang.String"->"rs.getString("+i+")";
         case "java.util.UUID"->"com.github.rfdetoni.bjorm.JdbcValues.uuid(rs,"+i+")";
         case "java.math.BigDecimal"->"rs.getBigDecimal("+i+")";
+        case "java.time.Instant"->"com.github.rfdetoni.bjorm.JdbcValues.instant(rs,"+i+")";
         default -> {TypeElement e=elements.getTypeElement(type);yield e!=null&&e.getKind()==ElementKind.ENUM ? "com.github.rfdetoni.bjorm.JdbcValues.enumValue(rs,"+i+","+type+".class)" : "rs.getObject("+i+","+boxed(type)+".class)";}
     };}
     private static String boxed(String type){return switch(type){case "int"->"java.lang.Integer";case "long"->"java.lang.Long";case "boolean"->"java.lang.Boolean";case "short"->"java.lang.Short";case "float"->"java.lang.Float";case "double"->"java.lang.Double";default->type;};}
