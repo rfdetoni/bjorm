@@ -33,7 +33,7 @@ jobs:
         run: bash scripts/verify.sh
 
   postgres:
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.title, '[full-db]')
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -72,7 +72,7 @@ jobs:
         run: bash scripts/verify.sh
 
   mysql:
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.title, '[full-db]')
     runs-on: ubuntu-latest
     services:
       mysql:
