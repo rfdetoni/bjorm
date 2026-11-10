@@ -351,11 +351,13 @@ public final class Bjorm implements Operations {
     public <T> SqlPredicate seekAfterId(Class<T> type, Object id, boolean descending) {
         Objects.requireNonNull(id, "afterId");
         EntityMapper<T> m=mapper(type);
+        if(m.compositeId())throw new UnsupportedOperationException("Keyset seek needs an explicit tuple predicate for composite IDs");
         return new SqlPredicate(m.columnFor(m.idProperty())+(descending?" < ?":" > ?"),
             java.util.Collections.singletonList(id));
     }
     public <T> SqlOrder primaryKeyOrder(Class<T> type, boolean descending) {
         EntityMapper<T> m=mapper(type);
+        if(m.compositeId())throw new UnsupportedOperationException("Order composite keys explicitly by individual mapped columns");
         return mappedOrder(type,m.idProperty(),descending);
     }
     /** Generated access to @Id; no per-row reflection. */
@@ -497,6 +499,7 @@ public final class Bjorm implements Operations {
     private <T> int upsertPrepared(Connection c,T entity) throws SQLException {
         EntityMapper<T> m=mapper(entity.getClass());
         if(m.generatedId()) throw new IllegalArgumentException("Upsert requires an application-assigned primary key");
+        if(m.compositeId())throw new UnsupportedOperationException("Composite-key UPSERT is not supported; use explicit INSERT or optimistic UPDATE");
         if(m.id(entity)==null) throw new IllegalArgumentException("Upsert requires non-null ID");
         // A MySQL AUTO_INCREMENT key may silently change on UPDATE id=NULL.
         // PK-only conflict checks are consequently safe only for textual/UUID IDs.
@@ -625,7 +628,7 @@ public final class Bjorm implements Operations {
         List<Object> values=new ArrayList<>(ordered.size());
         for(var entry:ordered.entrySet()) {
             String property=Objects.requireNonNull(entry.getKey(),"property");
-            if(property.equals(m.idProperty())) throw new IllegalArgumentException("Bulk mutation cannot alter @Id");
+            if(m.isIdProperty(property)) throw new IllegalArgumentException("Bulk mutation cannot alter @Id");
             String column=m.columnFor(property); // generated mapping; rejects unknown input
             assignments.add(column+" = "+m.bulkParameterSql(property,dialect));
             values.add(m.bulkParameterValue(property,entry.getValue()));
