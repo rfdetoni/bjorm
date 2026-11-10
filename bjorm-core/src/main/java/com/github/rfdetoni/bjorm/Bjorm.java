@@ -5,6 +5,8 @@ import java.sql.*;
 import java.util.*;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.stream.Stream;
+import java.util.stream.StreamSupport;
 
 /** Explicit, immutable instance-owned mapper registry, no globally scoped context. */
 public final class Bjorm implements Operations {
@@ -391,6 +393,11 @@ public final class Bjorm implements Operations {
         forEach(select(type).whereNullable(where),consumer);
     }
     public <T> void forEach(Select<T> query,Consumer<T> consumer) { tx(tx->tx.forEach(query,consumer)); }
+    public <T,R> R withStream(Select<T> query,Function<Stream<T>,R> work) {
+        Objects.requireNonNull(query,"query");
+        Objects.requireNonNull(work,"work");
+        return txResult(tx->tx.withStream(query,work));
+    }
     public <T> void scan(String sql,StatementBinder binder,RowMapper<T> mapper,Consumer<T> consumer) {requireNativeSqlPermission();tx(tx->tx.scan(sql,binder,mapper,consumer));}
     public <T> void batchInsert(List<T> values) {tx(tx->tx.batchInsert(values));}
     public <T> List<T> batchInsertReturning(List<T> values) {return txResult(tx->tx.batchInsertReturning(values));}
@@ -906,6 +913,65 @@ public final class Bjorm implements Operations {
             try(ResultSet rs=executeQueryObserved(ps)){while(rs.next())consumer.accept(m.read(rs));}
         }
     }
+    /**
+     * The complete stream lifecycle is inside the active JDBC transaction.
+     * PostgreSQL requires autoCommit=false for positive fetch-size cursor
+     * retrieval. A returned Stream is never allowed to outlive this method.
+     */
+    private <T,R> R withStreamRows(Connection c,Select<T> query,
+            Function<Stream<T>,R> work) throws SQLException {
+        Objects.requireNonNull(query,"query");
+        Objects.requireNonNull(work,"work");
+        EntityMapper<T> mapper=mapper(query.type());
+        if(!mapper.children().isEmpty())
+            throw new UnsupportedOperationException("Stream cursor supports flat entities only; use forEach for graphs");
+        String sql=query.sql(mapper,type->mapper(type),dialect);
+        Thread owner=Thread.currentThread();
+        try(PreparedStatement ps=prepareRead(c,sql)) {
+            query.bind(ps,dialect);
+            try(ResultSet rs=executeQueryObserved(ps)) {
+                Iterator<T> iterator=new Iterator<>() {
+                    private boolean fetched;
+                    private boolean available;
+                    private boolean exhausted;
+                    private void checkThread() {
+                        if(Thread.currentThread()!=owner)
+                            throw new IllegalStateException("JDBC Stream must be consumed on the transaction owner thread");
+                    }
+                    @Override public boolean hasNext() {
+                        checkThread();
+                        if(exhausted)return false;
+                        if(!fetched) {
+                            try {
+                                available=false;
+                                while(rs.next()) {
+                                    if(query.hasRightOrFullJoin() &&
+                                        rs.getObject(mapper.idColumnIndex())==null)continue;
+                                    available=true;break;
+                                }
+                                exhausted=!available;
+                                fetched=true;
+                            } catch(SQLException error) {
+                                throw new BjormException("Cursor iteration failed",error);
+                            }
+                        }
+                        return available;
+                    }
+                    @Override public T next() {
+                        if(!hasNext())throw new NoSuchElementException();
+                        fetched=false;
+                        try {return mapper.read(rs);}
+                        catch(SQLException error){throw new BjormException("Cursor row mapping failed",error);}
+                    }
+                };
+                try(Stream<T> rows=StreamSupport.stream(
+                    Spliterators.spliteratorUnknownSize(iterator,Spliterator.ORDERED|Spliterator.NONNULL),
+                    false)) {
+                    return work.apply(rows);
+                }
+            }
+        }
+    }
     private <T> void scan(Connection c,String sql,StatementBinder binder,RowMapper<T> mapper,Consumer<T> consumer) throws SQLException {
         Objects.requireNonNull(consumer);
         try(PreparedStatement ps=prepareRead(c,sql)) {
@@ -1031,6 +1097,9 @@ public final class Bjorm implements Operations {
         public int execute(String sql,StatementBinder bind) {requireNativeSqlPermission();return useWrite(c->Bjorm.this.execute(c,sql,bind));}
         public <T> void forEach(Class<T> type,SqlPredicate where,Consumer<T> consumer) {forEach(select(type).whereNullable(where),consumer);}
         public <T> void forEach(Select<T> query,Consumer<T> consumer) {use(c->{Bjorm.this.forEach(c,query,consumer);return null;});}
+        public <T,R> R withStream(Select<T> query,Function<Stream<T>,R> work) {
+            return use(c->Bjorm.this.withStreamRows(c,query,work));
+        }
         public <T> void scan(String sql,StatementBinder binder,RowMapper<T> mapper,Consumer<T> consumer) {requireNativeSqlPermission();useWrite(c->{Bjorm.this.scan(c,sql,binder,mapper,consumer);return null;});}
         public <T> void batchInsert(List<T> list) {useWrite(c->{Bjorm.this.batch(c,list,false);return null;});}
         public <T> List<T> batchInsertReturning(List<T> list) {return useWrite(c->{
