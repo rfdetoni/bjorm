@@ -36,6 +36,7 @@ public final class MySqlIntegrationTest {
             st.execute("CREATE TABLE bjorm_it_instants(id CHAR(36) PRIMARY KEY,label VARCHAR(255),occurred_at TIMESTAMP(6) NULL,version INT NOT NULL DEFAULT 0)");
             st.execute("CREATE TABLE bjorm_it_documents(id CHAR(36) PRIMARY KEY,payload JSON)");
             st.execute("CREATE TABLE bjorm_it_auto_long(id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,label VARCHAR(255))");
+            st.execute("CREATE TABLE bjorm_it_static(id CHAR(36) PRIMARY KEY,label VARCHAR(255))");
             st.execute("CREATE TABLE bjorm_it_explicit_assigned(id BIGINT PRIMARY KEY,label VARCHAR(255))");
             st.execute("CREATE TABLE bjorm_it_explicit_identity(id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,label VARCHAR(255))");
             st.execute("CREATE TABLE bjorm_it_explicit_uuid(id CHAR(36) PRIMARY KEY,label VARCHAR(255))");
@@ -51,7 +52,13 @@ public final class MySqlIntegrationTest {
                 ItInstant_BjormMapper.INSTANCE,MappedColumns_BjormMapper.INSTANCE,OrdinalEvent_BjormMapper.INSTANCE,
                 ItAuditRecord_BjormMapper.INSTANCE,ItAuditPojo_BjormMapper.INSTANCE,
                 ExplicitAssignedRecord_BjormMapper.INSTANCE,ExplicitIdentityRecord_BjormMapper.INSTANCE,
-                ExplicitUuidRecord_BjormMapper.INSTANCE);
+                ExplicitUuidRecord_BjormMapper.INSTANCE,StaticSchemaRecord_BjormMapper.INSTANCE);
+            StaticSchemaRecord staticRecord=db.insertReturning(new StaticSchemaRecord(null,"mysql-static"));
+            check(db.find(StaticSchemaRecord.class,staticRecord.id()).label().equals("mysql-static"),
+                "MySQL static database schema SELECT");
+            db.upsertReturning(new StaticSchemaRecord(staticRecord.id(),"mysql-upsert"));
+            check(db.find(StaticSchemaRecord.class,staticRecord.id()).label().equals("mysql-upsert"),
+                "MySQL static schema native UPSERT");
             ExplicitAssignedRecord assigned=db.insertReturning(new ExplicitAssignedRecord(704L,"assigned"));
             check(db.find(ExplicitAssignedRecord.class,704L).equals(assigned),"MySQL explicit assigned numeric ID");
             ExplicitIdentityRecord identity=db.insertReturning(new ExplicitIdentityRecord(null,"identity"));
@@ -162,6 +169,7 @@ public final class MySqlIntegrationTest {
                 for(String name:List.of("bjorm_it_order_notes","bjorm_it_order_lines","bjorm_it_orders",
                     "bjorm_it_columns","bjorm_it_ordinal","bjorm_it_audit","bjorm_it_audit_pojo",
                     "bjorm_it_explicit_assigned","bjorm_it_explicit_identity","bjorm_it_explicit_uuid",
+                    "bjorm_it_static",
                     "bjorm_it_instants","bjorm_it_documents","bjorm_it_auto_long","bjorm_it_users"))
                     st.execute("DROP TABLE IF EXISTS "+name);
             }
