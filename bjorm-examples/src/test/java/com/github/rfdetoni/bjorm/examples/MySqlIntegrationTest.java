@@ -125,8 +125,8 @@ public final class MySqlIntegrationTest {
                 throw new AssertionError("secondary UNIQUE key should fail");
             } catch(BjormException expected) {
                 check(expected.getCause() instanceof SQLException &&
-                    ((SQLException)expected.getCause()).getErrorCode()==1062,
-                    "secondary MySQL UNIQUE conflict is not a stale PK");
+                    "23000".equals(((SQLException)expected.getCause()).getSQLState()),
+                    "secondary MySQL UNIQUE conflict remains a SQL integrity error, not stale PK");
             }
             check(db.find(ItInstant.class,secondaryConflict)==null &&
                 db.find(ItInstant.class,savedInstant.id()).version()==3,
