@@ -35,9 +35,11 @@ public final class AuditSmokeTest {
         check(same==pojo && pojo.getId()!=null && pojo.getCreatedAt()!=null &&
               pojo.getUpdatedAt()!=null,"POJO insert audit fields and v7 key");
         Instant before=pojo.getCreatedAt();
-        ItAuditPojo_BjormMapper.INSTANCE.materializeUpdate(pojo);
-        check(pojo.getCreatedAt().equals(before) && pojo.getUpdatedAt()!=null,
-            "POJO update audit stamps and retains immutable creation timestamp");
+        Instant beforeUpdated=pojo.getUpdatedAt();
+        ItAuditPojo prepared=ItAuditPojo_BjormMapper.INSTANCE.materializeUpdate(pojo);
+        check(prepared==pojo && pojo.getCreatedAt().equals(before) &&
+              pojo.getUpdatedAt().equals(beforeUpdated),
+            "POJO update materializer never modifies caller state before JDBC commit");
         System.out.println("PASS: audit timestamps for generated records and POJOs");
     }
 }
