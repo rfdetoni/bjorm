@@ -26,6 +26,7 @@ public interface SqlDialect {
     default void bindValue(PreparedStatement ps,int position,Object value)throws SQLException {
         if(value instanceof UUID uuid)bindUuid(ps,position,uuid);
         else if(value instanceof Instant instant)ps.setTimestamp(position,Timestamp.from(instant));
+        else if(value instanceof Enum<?> item)ps.setString(position,item.name());
         else ps.setObject(position,value);
     }
 }
