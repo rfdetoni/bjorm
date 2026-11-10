@@ -83,6 +83,23 @@ The active `SqlDialect.bindValue(...)` handles UUID and `java.time.Instant`
 portably (the latter as a JDBC `Timestamp`); native `db.query` / `db.execute`
 callers can use it in their `StatementBinder` without custom temporal conversions.
 
+For native SQL, avoid duplicating `StatementBinder` lambdas. `Operations.params(...)`
+captures positional arguments once, binds through the selected dialect and works
+in the top-level `Bjorm` and in transaction-scoped `Operations`:
+
+```java
+long updated = db.execute(
+    "UPDATE orders SET checked_at=? WHERE id=?",
+    db.params(Instant.now(), orderId));
+var result = db.query(
+    "SELECT id, title FROM orders WHERE tenant_id=? LIMIT 25",
+    db.params(tenantId),
+    rs -> new OrderSummary((UUID) rs.getObject(1), rs.getString(2)));
+```
+
+All values remain bound parameters; never concatenate user input into SQL.
+Use `db.select()`, `@Query` or mapped operations for ordinary queries.
+
 For specialized PostgreSQL SQL (CTEs, aggregates with multiple JOINs, JSONB
 expressions and conflict updates by composite key), **use BJORM's existing**
 `db.query(sql, binder, mapper)`, `db.one(...)`, `db.execute(...)` or

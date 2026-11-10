@@ -38,7 +38,7 @@ public final class AdvancedSmokeTest {
         PreparedStatement prepared(int connection,String sql){
             Map<Integer,Object> binds=new TreeMap<>();List<Map<Integer,Object>> batch=new ArrayList<>();
             return (PreparedStatement)proxy(PreparedStatement.class,(p,m,a)->switch(m.getName()){
-                case "setInt","setLong","setObject","setString","setBoolean","setDouble","setFloat","setShort","setBigDecimal"->{binds.put((Integer)a[0],a[1]);yield null;}
+                case "setInt","setLong","setObject","setString","setBoolean","setDouble","setFloat","setShort","setBigDecimal","setTimestamp"->{binds.put((Integer)a[0],a[1]);yield null;}
                 case "addBatch"->{batch.add(new HashMap<>(binds));yield null;}
                 case "executeBatch"->{int[] counts=new int[batch.size()];Arrays.fill(counts,updateResult);for(Map<Integer,Object> b:batch)calls.add(new Call(connection,sql,Map.copyOf(b)));batch.clear();yield counts;}
                 case "executeUpdate"->{calls.add(new Call(connection,sql,Map.copyOf(binds)));yield updateResult;}
@@ -112,6 +112,23 @@ public final class AdvancedSmokeTest {
         catch(OptimisticLockException expected){};
         check(spy.rollbacks.get()==1,"optimistic locking rolls transaction back");
         spy.updateResult=1;
+        Object[] mutableArgs={"Pencil",spy.id};
+        StatementBinder captured=db.params(mutableArgs);
+        mutableArgs[0]="tampered";
+        check(db.execute("UPDATE products SET name=? WHERE id=?",captured)==1,
+            "native positional binder executes SQL");
+        check(spy.last().binds().get(1).equals("Pencil") && spy.last().binds().get(2).equals(spy.id),
+            "native positional binder snapshots values and preserves UUID");
+        java.time.Instant instant=java.time.Instant.parse("2026-11-10T12:00:00Z");
+        db.execute("UPDATE products SET updated_at=? WHERE id=?",db.params(instant,spy.id));
+        check(spy.last().binds().get(1) instanceof java.sql.Timestamp timestamp &&
+              timestamp.toInstant().equals(instant),
+            "native binder converts Instant through SQL dialect");
+        db.tx(tx -> {
+            tx.execute("UPDATE products SET name=? WHERE id=?",tx.params("in-transaction",spy.id));
+            check(spy.last().binds().get(1).equals("in-transaction"),
+                "native binder available through transaction Operations");
+        });
         check(JsonDocument_BjormMapper.INSTANCE.insertSql().contains("CAST(? AS jsonb)"),"PostgreSQL JSON binding precompiled");
         ProductQueries repo=new ProductQueries_Bjorm(db);
         var summaries=repo.summaries("Pencil",spy.id);

@@ -4,6 +4,16 @@ import java.util.*;
 public interface Operations {
     /** Selected dialect for compiled native @Query binders. */
     SqlDialect dialect();
+    /** Snapshot values and bind them through the active dialect (UUID, Instant, etc).
+     * Use with query/one/execute. Does not expose a connection or execute SQL. */
+    default StatementBinder params(Object... values) {
+        Object[] captured = Objects.requireNonNull(values, "values").clone();
+        SqlDialect active = Objects.requireNonNull(dialect(), "dialect");
+        return ps -> {
+            for (int i=0; i<captured.length; i++)
+                active.bindValue(ps, i+1, captured[i]);
+        };
+    }
     <T> void insert(T entity);
     /** Persist and return the entity with its generated ID; required for immutable records. */
     <T> T insertReturning(T entity);
