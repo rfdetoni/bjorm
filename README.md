@@ -162,6 +162,29 @@ untrusted native SQL. Prefer per-tenant DB grants when tenants are mutually
 untrusted; a connection with access to every schema can still execute
 fully-qualified native SQL if the application exposes it.
 
+## Transaction-local identity reuse
+
+BJORM now keeps a **small first-level identity cache only for `tx.find(Type,id)`**
+within an explicitly active transaction:
+
+```java
+db.tx(tx -> {
+    Customer first = tx.find(Customer.class, id);
+    Customer again = tx.find(Customer.class, id); // same Java instance, no second SELECT
+    tx.update(first);                            // invalidates the per-tx cache
+    Customer refreshed = tx.find(Customer.class, id); // fresh SELECT
+});
+```
+
+The cache is not global, does not cross request threads or tenants, and is
+discarded after commit/rollback. It does not intercept `list`, joined graph
+queries or direct `Bjorm.find` outside a transaction; therefore it is not
+a JPA persistence context or dirty-checking system. The cache is invalidated
+by mapped mutations, row-lock acquisition, batch operations and native
+`query/one/execute/scan` inside the transaction. If your code mutates the
+connection through an API outside BJORM, bypassing these invalidation hooks,
+do not rely on the cached instance being fresh.
+
 ## Native mapped mutations and richer compile-time mappings
 
 ```java
