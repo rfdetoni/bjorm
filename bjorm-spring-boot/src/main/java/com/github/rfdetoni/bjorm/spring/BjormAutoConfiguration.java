@@ -24,11 +24,15 @@ public class BjormAutoConfiguration {
                        @Value("${bjorm.jdbc.query-timeout-seconds:30}") int queryTimeoutSeconds,
                        @Value("${bjorm.jdbc.max-buffered-rows:100000}") int maxBufferedRows,
                        @Value("${bjorm.jdbc.fetch-size:128}") int fetchSize,
-                       @Value("${bjorm.dialect:postgresql}") String dialectName) {
+                       @Value("${bjorm.jdbc.batch-size:256}") int batchSize,
+                       @Value("${bjorm.dialect:postgresql}") String dialectName,
+                       @Value("${bjorm.tenant.required:false}") boolean tenantRequired) {
         EntityMapper<?>[] mapped=mappers.orderedStream().toArray(EntityMapper<?>[]::new);
         TransactionAwareDataSourceProxy transactionalSource=new TransactionAwareDataSourceProxy(source);
-        BjormOptions options=new BjormOptions(queryTimeoutSeconds,maxBufferedRows,fetchSize);
-        return Bjorm.open(transactionalSource,options,SqlDialects.named(dialectName),mapped);
+        BjormOptions options=new BjormOptions(queryTimeoutSeconds,maxBufferedRows,fetchSize,batchSize);
+        return tenantRequired
+            ? Bjorm.tenantRequired(transactionalSource,options,SqlDialects.named(dialectName),mapped)
+            : Bjorm.open(transactionalSource,options,SqlDialects.named(dialectName),mapped);
     }
     @Bean
     @ConditionalOnMissingBean(BjormPages.class)
