@@ -101,7 +101,6 @@ public final class EntityProcessor extends AbstractProcessor {
             String sqlColumn=prefix+colName(member,name);
             if(!identifier(sqlColumn))
                 throw new IllegalArgumentException("Invalid @Embedded SQL column: "+sqlColumn);
-            Id noId=null;
             cols.add(new Col(property+"."+name,sqlColumn,type,reader+"."+name+"()","",
                 false,false,false,member.getAnnotation(Json.class)!=null,false,
                 jsonCodec(member),member.asType(),
@@ -272,6 +271,11 @@ public final class EntityProcessor extends AbstractProcessor {
                 error(entity,"@ManyToOne foreign key must match target @Id type: "+toOne.mappedBy());return;
             }
         }
+        Set<String> paths=new HashSet<>();
+        for(Col mapped:cols)
+            if(!paths.add(mapped.property().replace('.','_'))){
+                error(entity,"Conflicting generated DSL property name: "+mapped.property());return;
+            }
         generateMapper(entity,qualifiedTable,schema,cols,id,ver,record,relations,toOnes,embeddeds);
         mapperServices.add(packageOf(entity)+"."+entity.getSimpleName()+"_BjormMapper");
         generatePaths(entity,cols);
