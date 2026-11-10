@@ -99,6 +99,9 @@ class BjormSpringTransactionTest {
         template.execute(status -> {
             assertEquals(1,tenant.execute("UPDATE items SET label=?",ps->ps.setString(1,"one")));
             assertEquals(1,tenant.execute("UPDATE items SET label=?",ps->ps.setString(1,"two")));
+            // An operation requiring BJORM's multi-statement contract must
+            // participate in Spring's already-bound transaction, not nest it.
+            tenant.batchDelete(java.util.List.of());
             assertEquals(1,spy.borrowed.get(),"Spring-bound physical connection reused");
             assertEquals(0,spy.commits.get(),"BJORM must not commit Spring transaction");
             assertThrows(IllegalStateException.class,()->tenant.tx(tx->{}),
