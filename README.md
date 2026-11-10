@@ -201,6 +201,12 @@ untrusted native SQL. Prefer per-tenant DB grants when tenants are mutually
 untrusted; a connection with access to every schema can still execute
 fully-qualified native SQL if the application exposes it.
 
+For PostgreSQL 17 / MySQL 8.4 provisioning SQL, dedicated tenant login
+credentials, cross-schema security verification and migration guidance, see
+[database-enforced tenant isolation](docs/tenant-database-permissions.md).
+The PostgreSQL CI provisions an independent LOGIN and confirms that a
+fully qualified cross-tenant UPDATE is rejected with SQLSTATE 42501.
+
 ## Cursor-backed Stream with automatic cleanup
 
 `withStream(select, callback)` exposes a sequential Java `Stream` backed
@@ -323,7 +329,15 @@ the original POJO keeps its prior timestamp; use `updateReturning` or
 fills generated IDs/audit fields on POJOs before JDBC execution for
 backward compatibility, and UPSERT retains its existing audit
 materialization behavior; neither is covered by the UPDATE-only
-rollback immutability guarantee. A generated mapper signals when UPSERT
+rollback immutability guarantee. For new code, use the opt-in
+`insertDetached(entity)` and `upsertDetached(entity)` operations to clone
+mapped POJO properties via generated accessors before attempting the write.
+The source entity is unchanged on success, failure or rollback. The returned
+copy carries IDs and audit fields, but does not signify commit if the caller
+owns an external transaction. Mutable `@Children` graphs are intentionally
+unsupported by these detached operations; nested entities require deep copy
+semantics. See [database security and detached writes](docs/tenant-database-permissions.md)
+for limitations and examples. A generated mapper signals when UPSERT
 must reload database-generated properties; otherwise record values can be stale.
 
 The annotation processor supports `@Transient` (including record components),
