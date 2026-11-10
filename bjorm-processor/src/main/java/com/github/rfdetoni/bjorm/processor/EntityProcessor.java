@@ -561,6 +561,8 @@ public final class EntityProcessor extends AbstractProcessor {
         code.append("@Override public ").append(returnText).append(" ").append(method.getSimpleName()).append("(");
         for(int i=0;i<vars.size();i++){if(i>0)code.append(", ");code.append(vars.get(i).asType()).append(" ").append(vars.get(i).getSimpleName());}
         code.append("){\n");
+        if(compiled.postgresCast())
+            code.append("if(!\"postgresql\".equals(db.dialect().name()))throw new UnsupportedOperationException(\"@Query PostgreSQL :: cast requires PostgreSQL; use CAST(... AS ...) for portable SQL\");\n");
         String binder="ps -> {";
         for(int i=0;i<compiled.names.size();i++){
             VariableElement variable=vars.get(params.get(compiled.names.get(i)));
@@ -587,11 +589,11 @@ public final class EntityProcessor extends AbstractProcessor {
         };
     }
     private static boolean hasAnnotation(TypeElement el,Class<? extends java.lang.annotation.Annotation> cls){return el.getAnnotation(cls)!=null;}
-    private record Compiled(String sql,List<String> names){}
+    private record Compiled(String sql,List<String> names,boolean postgresCast){}
     /** Ignore placeholders in SQL literals/comments and PostgreSQL casts. Identifiers validated by parser. */
     private static Compiled compileSql(String sql){
         List<String> names=new ArrayList<>();StringBuilder out=new StringBuilder();
-        int mode=0;String dollar=null;
+        int mode=0;String dollar=null;boolean postgresCast=false;
         for(int i=0;i<sql.length();){char c=sql.charAt(i),next=i+1<sql.length()?sql.charAt(i+1):'\0';
             if(mode==4){if(c=='\n')mode=0;out.append(c);i++;continue;}
             if(mode==5){if(c=='*'&&next=='/'){out.append("*/");i+=2;mode=0;}else{out.append(c);i++;}continue;}
@@ -601,7 +603,7 @@ public final class EntityProcessor extends AbstractProcessor {
             if(c=='-'&&next=='-'){mode=4;out.append("--");i+=2;continue;}
             if(c=='/'&&next=='*'){mode=5;out.append("/*");i+=2;continue;}
             if(c=='$') {int end=sql.indexOf('$',i+1);if(end>i && sql.substring(i+1,end).matches("[A-Za-z_0-9]*")){dollar=sql.substring(i,end+1);out.append(dollar);i=end+1;mode=3;continue;}}
-            if(c==':' && next==':'){out.append("::");i+=2;continue;}
+            if(c==':' && next==':'){postgresCast=true;out.append("::");i+=2;continue;}
             if(c==':' && i>0 && sql.charAt(i-1)==':'){out.append(c);i++;continue;}
             if(c==':' && (Character.isLetter(next)||next=='_')){
                 int j=i+2;while(j<sql.length()&&(Character.isLetterOrDigit(sql.charAt(j))||sql.charAt(j)=='_'))j++;
@@ -610,7 +612,7 @@ public final class EntityProcessor extends AbstractProcessor {
             out.append(c);i++;
         }
         if(mode==1||mode==2||mode==3||mode==5)throw new IllegalArgumentException("Unclosed SQL string/comment in @Query");
-        return new Compiled(out.toString(),List.copyOf(names));
+        return new Compiled(out.toString(),List.copyOf(names),postgresCast);
     }
     private boolean supported(String type){return switch(type){
         case "java.lang.String","java.util.UUID","int","java.lang.Integer","long","java.lang.Long","short","java.lang.Short","float","java.lang.Float","double","java.lang.Double","boolean","java.lang.Boolean","java.math.BigDecimal","java.time.LocalDate","java.time.LocalDateTime","java.time.Instant","java.time.OffsetDateTime"->true;
