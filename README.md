@@ -427,7 +427,24 @@ class BjormMappings {
 }
 ```
 
-The adapter creates the `Bjorm` bean using `TransactionAwareDataSourceProxy`; if no mapper beans are registered, it discovers generated mappers via ServiceLoader. Calls to injected `Bjorm` from a Spring `@Transactional` method participate in Spring-managed JDBC connections. Do **not** nest `db.tx` within Spring-managed transactions; use the Spring transaction boundary or BJORM's explicit transaction, never both.
+The adapter creates the `Bjorm` bean using `TransactionAwareDataSourceProxy`; if no mapper beans are registered, it discovers generated mappers via ServiceLoader. Calls to injected `Bjorm` from a Spring `@Transactional` method participate in Spring-managed JDBC connections.
+
+Operations requiring several statements or a cursor (such as
+`insertReturning` with children, `updateReturning`, `upsertReturning`,
+`batchDelete`, `batchUpdateReturning`, `forEach` and `withStream`)
+**join an existing framework-managed JDBC transaction** rather than
+attempting a nested commit or rollback. If invoked without one, BJORM
+opens and closes its own transaction. **Explicit application boundaries**
+`db.tx(...)` and `db.txResult(...)` still reject nesting: use the
+Spring transaction boundary *or* a BJORM explicit transaction, never both.
+For an externally owned connection, the framework owns commit/rollback;
+do not catch a persistence exception and then assume the transaction can
+safely commit without marking it rollback-only.
+
+A real-driver JUnit integration test exercises this contract through
+`DataSourceTransactionManager` and `TransactionAwareDataSourceProxy` on
+PostgreSQL 17 and MySQL 8.4, including successful version updates and
+rollback of inserted/modified rows.
 
 For schema-per-tenant applications, opt in to **fail-closed** Spring bean wiring:
 

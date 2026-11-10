@@ -99,6 +99,9 @@ class BjormSpringTransactionTest {
         template.execute(status -> {
             assertEquals(1,tenant.execute("UPDATE items SET label=?",ps->ps.setString(1,"one")));
             assertEquals(1,tenant.execute("UPDATE items SET label=?",ps->ps.setString(1,"two")));
+            // An operation requiring BJORM's multi-statement contract must
+            // participate in Spring's already-bound transaction, not nest it.
+            tenant.batchDelete(java.util.List.of());
             assertEquals(1,spy.borrowed.get(),"Spring-bound physical connection reused");
             assertEquals(0,spy.commits.get(),"BJORM must not commit Spring transaction");
             assertThrows(IllegalStateException.class,()->tenant.tx(tx->{}),
@@ -106,7 +109,7 @@ class BjormSpringTransactionTest {
             return null;
         });
         assertEquals(1,spy.commits.get(),"Spring manager commits exactly once");
-        assertEquals(2,spy.searches.get(),"Every statement is scoped to the authorized schema");
+        assertEquals(3,spy.searches.get(),"Each BJORM operation, including the batch, is tenant-scoped");
         assertEquals(2,spy.writes.get());
         assertTrue(spy.autoCommit.get(),"Spring manager restores JDBC auto-commit");
 
@@ -117,6 +120,6 @@ class BjormSpringTransactionTest {
         assertEquals("force rollback",failure.getMessage());
         assertEquals(1,spy.rollbacks.get(),"Spring controls rollback and BJORM does not override it");
         assertEquals(1,spy.commits.get(),"No commit on failed Spring transaction");
-        assertEquals(3,spy.searches.get(),"Tenant context applied to rollback transaction");
+        assertEquals(4,spy.searches.get(),"Tenant context applied to rollback transaction");
     }
 }

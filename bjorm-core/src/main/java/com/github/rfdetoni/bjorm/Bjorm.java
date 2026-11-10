@@ -261,21 +261,21 @@ public final class Bjorm implements Operations {
     public <T> T insertReturning(T entity) {
         Objects.requireNonNull(entity);
         if(mapper(entity.getClass()).children().isEmpty()) return withConnection(c->insert(c,entity));
-        return txResult(tx->tx.insertReturning(entity));
+        return operationTxResult(tx->tx.insertReturning(entity));
     }
     public <T> int update(T entity) {Objects.requireNonNull(entity);return withConnection(c->update(c,entity));}
     public <T> int delete(T entity) {
         Objects.requireNonNull(entity);
         if(mapper(entity.getClass()).children().isEmpty()) return withConnection(c->delete(c,entity));
-        return txResult(tx->tx.delete(entity));
+        return operationTxResult(tx->tx.delete(entity));
     }
     public <T> int upsert(T entity) {
         requireReturnForImmutable(entity);
         EntityMapper<T> m=mapper(entity.getClass());
-        // A MySQL versioned UPSERT consists of a failed duplicate INSERT and an
-        // optimistic UPDATE: the two JDBC statements must share a transaction.
+        // Versioned MySQL UPSERT uses a guarded atomic statement followed
+        // by a readback in a transaction; participate in Spring's boundary.
         if(m.optimisticLocking() && "mysql".equals(dialect.name()))
-            return txResult(tx->tx.upsert(entity));
+            return operationTxResult(tx->tx.upsert(entity));
         if(m.children().isEmpty()) return withConnection(c->upsert(c,entity));
         return txResult(tx->tx.upsert(entity));
     }
@@ -287,7 +287,7 @@ public final class Bjorm implements Operations {
             upsertPrepared(c,prepared);
             return prepared;
         });
-        return txResult(tx->tx.upsertReturning(entity));
+        return operationTxResult(tx->tx.upsertReturning(entity));
     }
     public <T> T find(Class<T> type,Object id) {
         Objects.requireNonNull(id,"id required for find()");
@@ -392,30 +392,43 @@ public final class Bjorm implements Operations {
     public <T> void forEach(Class<T> type,SqlPredicate where,Consumer<T> consumer) {
         forEach(select(type).whereNullable(where),consumer);
     }
-    public <T> void forEach(Select<T> query,Consumer<T> consumer) { tx(tx->tx.forEach(query,consumer)); }
+    public <T> void forEach(Select<T> query,Consumer<T> consumer) {
+        operationTxResult(tx->{tx.forEach(query,consumer);return null;});
+    }
     public <T,R> R withStream(Select<T> query,Function<Stream<T>,R> work) {
         Objects.requireNonNull(query,"query");
         Objects.requireNonNull(work,"work");
-        return txResult(tx->tx.withStream(query,work));
+        return operationTxResult(tx->tx.withStream(query,work));
     }
-    public <T> void scan(String sql,StatementBinder binder,RowMapper<T> mapper,Consumer<T> consumer) {requireNativeSqlPermission();tx(tx->tx.scan(sql,binder,mapper,consumer));}
-    public <T> void batchInsert(List<T> values) {tx(tx->tx.batchInsert(values));}
-    public <T> List<T> batchInsertReturning(List<T> values) {return txResult(tx->tx.batchInsertReturning(values));}
-    public <T> void batchUpdate(List<T> values) {tx(tx->tx.batchUpdate(values));}
-    public <T> void batchDelete(List<T> values) {tx(tx->tx.batchDelete(values));}
-    public <T> List<T> batchUpsertReturning(List<T> values) {return txResult(tx->tx.batchUpsertReturning(values));}
-    public <T> List<T> batchUpdateReturning(List<T> values) {return txResult(tx->tx.batchUpdateReturning(values));}
-    public <T> T updateReturning(T entity) {return txResult(tx->tx.updateReturning(entity));}
+    public <T> void scan(String sql,StatementBinder binder,RowMapper<T> mapper,Consumer<T> consumer) {
+        requireNativeSqlPermission();
+        operationTxResult(tx->{tx.scan(sql,binder,mapper,consumer);return null;});
+    }
+    public <T> void batchInsert(List<T> values) {operationTxResult(tx->{tx.batchInsert(values);return null;});}
+    public <T> List<T> batchInsertReturning(List<T> values) {return operationTxResult(tx->tx.batchInsertReturning(values));}
+    public <T> void batchUpdate(List<T> values) {operationTxResult(tx->{tx.batchUpdate(values);return null;});}
+    public <T> void batchDelete(List<T> values) {operationTxResult(tx->{tx.batchDelete(values);return null;});}
+    public <T> List<T> batchUpsertReturning(List<T> values) {return operationTxResult(tx->tx.batchUpsertReturning(values));}
+    public <T> List<T> batchUpdateReturning(List<T> values) {return operationTxResult(tx->tx.batchUpdateReturning(values));}
+    public <T> T updateReturning(T entity) {return operationTxResult(tx->tx.updateReturning(entity));}
     public <T> int updateBy(Class<T> type,Map<String,?> changes,SqlPredicate predicate) {
-        return txResult(tx->tx.updateBy(type,changes,predicate));
+        return operationTxResult(tx->tx.updateBy(type,changes,predicate));
     }
     public <T> int deleteBy(Class<T> type,SqlPredicate predicate) {
-        return txResult(tx->tx.deleteBy(type,predicate));
+        return operationTxResult(tx->tx.deleteBy(type,predicate));
     }
 
     /** Explicit transaction. Use TransactionAwareDataSourceProxy for framework-managed calls, not nested db.tx. */
     public void tx(Consumer<Transaction> work) {txResult(tx->{work.accept(tx);return null;});}
     public <R> R txResult(Function<Transaction,R> work) {
+        return transactionResult(work,false);
+    }
+    /** Internal multi-statement operations may join a framework-owned transaction.
+     * Explicit db.tx/txResult still refuse nesting. */
+    private <R> R operationTxResult(Function<Transaction,R> work) {
+        return transactionResult(work,true);
+    }
+    private <R> R transactionResult(Function<Transaction,R> work,boolean joinExisting) {
         Objects.requireNonNull(work);
         requireTenant();
         try(Connection c=dataSource.getConnection()) {
@@ -431,27 +444,28 @@ public final class Bjorm implements Operations {
                         throw new IllegalStateException("JDBC driver did not activate the tenant catalog");
                 }
             boolean previous=c.getAutoCommit();
-            if(!previous) throw new IllegalStateException("Connection already transactional; do not nest Bjorm.tx in another transaction");
-            c.setAutoCommit(false);
+            if(!previous && !joinExisting)
+                throw new IllegalStateException("Connection already transactional; do not nest Bjorm.tx in another transaction");
+            if(previous)c.setAutoCommit(false);
             Transaction tx=new Transaction(c);
             Throwable failure=null;
             try {
                 if(postgresTenant())applyPostgresTenant(c);
                 R result=work.apply(tx);
-                c.commit();
+                if(previous)c.commit();
                 return result;
             } catch(RuntimeException|Error e) {
                 failure=e;
-                try {c.rollback();}catch(SQLException rollback){e.addSuppressed(rollback);}
+                if(previous)try {c.rollback();}catch(SQLException rollback){e.addSuppressed(rollback);}
                 throw e;
             } catch(SQLException e) {
                 failure=e;
-                try {c.rollback();}catch(SQLException rollback){e.addSuppressed(rollback);}
+                if(previous)try {c.rollback();}catch(SQLException rollback){e.addSuppressed(rollback);}
                 throw new BjormException("Commit failed",e);
             } finally {
                 tx.active=false;
                 tx.identityMap.clear();
-                try {c.setAutoCommit(previous);} catch(SQLException restore) {
+                try {if(previous)c.setAutoCommit(true);} catch(SQLException restore) {
                     if(failure!=null)failure.addSuppressed(restore);
                     else throw new BjormException("Could not restore connection state",restore);
                 }
