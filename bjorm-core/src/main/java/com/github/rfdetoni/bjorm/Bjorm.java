@@ -239,7 +239,12 @@ public final class Bjorm implements Operations {
     }
     public <T> int upsert(T entity) {
         requireReturnForImmutable(entity);
-        if(mapper(entity.getClass()).children().isEmpty()) return withConnection(c->upsert(c,entity));
+        EntityMapper<T> m=mapper(entity.getClass());
+        // A MySQL versioned UPSERT consists of a failed duplicate INSERT and an
+        // optimistic UPDATE: the two JDBC statements must share a transaction.
+        if(m.optimisticLocking() && "mysql".equals(dialect.name()))
+            return txResult(tx->tx.upsert(entity));
+        if(m.children().isEmpty()) return withConnection(c->upsert(c,entity));
         return txResult(tx->tx.upsert(entity));
     }
     public <T> T upsertReturning(T entity) {
@@ -446,11 +451,54 @@ public final class Bjorm implements Operations {
         // PK-only conflict checks are consequently safe only for textual/UUID IDs.
         if("mysql".equals(dialect.name()) && !(m.id(entity) instanceof UUID || m.id(entity) instanceof String))
             throw new UnsupportedOperationException("MySQL UPSERT requires UUID/String primary key; use insert/update for numeric IDs");
+        if("mysql".equals(dialect.name()) && m.optimisticLocking())
+            return mysqlVersionedUpsert(c,m,entity);
         try(PreparedStatement ps=prepare(c,m.upsertSql(dialect))) {
             m.bindUpsert(ps,entity,dialect);
             int changed=executeUpdateObserved(ps);
             if(m.optimisticLocking() && changed==0) throw new OptimisticLockException("Stale upsert: "+m.type().getName());
             return changed;
+        }
+    }
+    /**
+     * MySQL 8.4 performs compare-and-swap inside one atomic INSERT ... ON
+     * DUPLICATE KEY UPDATE. The generated dialect SQL rejects stale version
+     * and secondary-UNIQUE collisions by assigning NULL to a NOT NULL PK,
+     * so the JDBC statement itself never commits an unrelated update.
+     *
+     * A locking lookup is performed only on error code 1048 (NOT NULL
+     * violation) to distinguish stale versions from secondary-key conflicts.
+     * It executes inside the caller-owned transaction; the SQL exception is
+     * otherwise preserved for the application to handle.
+     */
+    private <T> int mysqlVersionedUpsert(Connection c,EntityMapper<T> mapper,T prepared) throws SQLException {
+        if(c.getAutoCommit())
+            throw new IllegalStateException("MySQL versioned UPSERT must execute inside a transaction");
+        if(mapper.versionColumn()==null)
+            throw new IllegalArgumentException("Versioned entity mapper has no generated version metadata");
+        try(PreparedStatement ps=prepare(c,mapper.upsertSql(dialect))) {
+            mapper.bindUpsert(ps,prepared,dialect);
+            int affected=executeUpdateObserved(ps);
+            // MySQL returns 1 for insert, 2 for changed UPDATE.
+            if(affected==1 || affected==2)return affected;
+            if(affected==0)
+                throw new OptimisticLockException("Stale upsert: "+mapper.type().getName());
+            throw new SQLException("Unexpected MySQL UPSERT affected row count: "+affected);
+        } catch(SQLException failure) {
+            // 1048 / 23000 is the deliberately invalid NULL PK in the CAS
+            // guard. Other SQL errors (including deadlocks) are not rewritten.
+            if(failure.getErrorCode()!=1048 || !"23000".equals(failure.getSQLState()))
+                throw failure;
+            String sql="SELECT "+mapper.versionColumn()+" FROM "+mapper.table()+
+                " WHERE "+mapper.columnFor(mapper.idProperty())+" = ? FOR UPDATE";
+            try(PreparedStatement ps=prepareRead(c,sql)) {
+                mapper.bindId(ps,1,mapper.id(prepared),dialect);
+                try(ResultSet rs=executeQueryObserved(ps)) {
+                    if(rs.next() && !Objects.equals(rs.getObject(1),mapper.versionValue(prepared)))
+                        throw new OptimisticLockException("Stale upsert: "+mapper.type().getName());
+                }
+            }
+            throw failure;
         }
     }
     private <T> T persistGraph(Connection c,T entity,boolean upserting,IdentityHashMap<Object,Boolean> visited) throws SQLException {

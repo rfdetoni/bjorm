@@ -247,8 +247,17 @@ var tuned = new BjormOptions(30, 10_000, 128, 128); // timeout, buffered rows, f
 `updateBy/deleteBy` deliberately reject versioned entities and mapped child
 graphs because set-based SQL would bypass version checks or child persistence.
 Use `updateReturning`, `batchUpdateReturning` and `batchDelete` for those
-cases. Versioned MySQL UPSERT remains explicitly unsupported until its
-correct compare-and-swap contract is implemented. The update-returning API
+cases. Versioned MySQL UPSERT is implemented with **one atomic INSERT ... ON DUPLICATE KEY
+UPDATE**, whose generated primary-key guard compares both the primary key and
+expected `@Version`. On success the stored version is incremented by one;
+stale versions throw `OptimisticLockException`, while secondary UNIQUE-key
+violations retain the database constraint error. A locking version lookup
+runs only when the guard rejects the statement, allowing BJORM to classify
+the failure without exposing sensitive SQL parameters. MySQL/InnoDB may still
+report a deadlock or lock timeout under contention; these database errors
+are propagated without an unsafe blind retry. For MySQL UPSERT, use
+UUID/String primary keys. Numeric identity keys still require explicit
+INSERT or UPDATE. The update-returning API
 re-reads the stored entity within the transaction, so it costs an additional
 SELECT, but never fabricates a new version after a failed UPDATE.
 
@@ -590,9 +599,10 @@ In Spring Boot 4: set `bjorm.dialect: mysql` (default: `postgresql`).
 - **MySQL 8.4**: store UUIDs in `CHAR(36)`, native JSON and
   `ON DUPLICATE KEY UPDATE` with row aliases.
 - `FULL OUTER JOIN` is not available on MySQL; explicitly rejected.
-- MySQL upsert with `@Version` is refused. For application-assigned UUID/String
-  primary keys, a PK-equality guard rejects a duplicate secondary UNIQUE key
-  instead of updating another entity. Numeric primary-key upsert is refused
+- With `@Version`, MySQL performs a transaction-scoped INSERT-first CAS
+  UPDATE; stale versions raise `OptimisticLockException`. Without versioning,
+  a PK-equality guard rejects duplicate secondary UNIQUE keys instead of
+  updating another entity. Numeric primary-key upsert remains unsupported
   because `AUTO_INCREMENT` may generate a key on UPDATE-to-NULL.
 - Compiled `@Query` UUID parameters and scalar UUID results use the active
   dialect (PostgreSQL native UUID, MySQL `CHAR(36)`).

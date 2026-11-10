@@ -69,6 +69,10 @@ public interface EntityMapper<T> extends RowMapper<T> {
     default boolean generatedId() { return false; }
     default void acceptGeneratedId(ResultSet keys,T entity) throws SQLException {}
     default boolean optimisticLocking() { return false; }
+    /** Generated optimistic version column, used to classify MySQL CAS failures. */
+    default String versionColumn() { return null; }
+    /** Version captured in the submitted entity; no reflective field access. */
+    default Object versionValue(T entity) { return null; }
     /** UPSERT must re-read DB-generated/immutable columns instead of returning stale caller values. */
     default boolean upsertNeedsReload() { return optimisticLocking(); }
     default void bindDelete(PreparedStatement ps, T entity) throws SQLException { bindId(ps, 1, id(entity)); }

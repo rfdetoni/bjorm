@@ -6,6 +6,8 @@ import java.io.PrintWriter;
 import java.sql.*;
 import java.time.Instant;
 import java.util.*;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Logger;
 
 /** Executed only with disposable MySQL 8.4 DB; intentionally owns its fixture tables. */
@@ -33,7 +35,7 @@ public final class MySqlIntegrationTest {
             st.execute("CREATE TABLE bjorm_it_audit(id CHAR(36) PRIMARY KEY,label VARCHAR(255),createdAt TIMESTAMP(6) NULL,updatedAt TIMESTAMP(6) NULL)");
             st.execute("CREATE TABLE bjorm_it_audit_pojo(id CHAR(36) PRIMARY KEY,label VARCHAR(255),createdAt TIMESTAMP(6) NULL,updatedAt TIMESTAMP(6) NULL)");
             st.execute("CREATE TABLE bjorm_it_columns(id CHAR(36) PRIMARY KEY,read_only VARCHAR(255),server_val VARCHAR(255) DEFAULT 'server-default')");
-            st.execute("CREATE TABLE bjorm_it_instants(id CHAR(36) PRIMARY KEY,label VARCHAR(255),occurred_at TIMESTAMP(6) NULL,version INT NOT NULL DEFAULT 0)");
+            st.execute("CREATE TABLE bjorm_it_instants(id CHAR(36) PRIMARY KEY,label VARCHAR(255) UNIQUE,occurred_at TIMESTAMP(6) NULL,version INT NOT NULL DEFAULT 0)");
             st.execute("CREATE TABLE bjorm_it_documents(id CHAR(36) PRIMARY KEY,payload JSON)");
             st.execute("CREATE TABLE bjorm_it_auto_long(id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,label VARCHAR(255))");
             st.execute("CREATE TABLE bjorm_it_static(id CHAR(36) PRIMARY KEY,label VARCHAR(255))");
@@ -101,6 +103,61 @@ public final class MySqlIntegrationTest {
                 "MySQL generated Instant update roundtrip");
             ItInstant refreshed=db.updateReturning(new ItInstant(savedInstant.id(),"refreshed",testTime,1));
             check(refreshed.version()==2,"MySQL version updateReturning re-read");
+            // Versioned MySQL UPSERT: insert and compare-and-swap update are both
+            // performed in a transaction. Stale writes must not change the row.
+            ItInstant firstUpsert=db.upsertReturning(new ItInstant(null,"upsert-created",testTime,0));
+            check(firstUpsert.id()!=null && firstUpsert.version()==0,
+                "MySQL versioned UPSERT inserts a previously missing PK");
+            ItInstant upsertModified=db.upsertReturning(new ItInstant(savedInstant.id(),"CAS updated",testTime,2));
+            check(upsertModified.version()==3 &&
+                db.find(ItInstant.class,savedInstant.id()).label().equals("CAS updated"),
+                "MySQL versioned UPSERT updates by ID and expected version");
+            try {
+                db.upsertReturning(new ItInstant(savedInstant.id(),"stale overwrite",testTime,2));
+                throw new AssertionError("stale MySQL UPSERT was accepted");
+            } catch(OptimisticLockException expected) {}
+            check(db.find(ItInstant.class,savedInstant.id()).version()==3 &&
+                db.find(ItInstant.class,savedInstant.id()).label().equals("CAS updated"),
+                "stale MySQL UPSERT preserves both data and version");
+            UUID secondaryConflict=UUID.randomUUID();
+            try {
+                db.upsertReturning(new ItInstant(secondaryConflict,"CAS updated",testTime,0));
+                throw new AssertionError("secondary UNIQUE key should fail");
+            } catch(BjormException expected) {
+                check(expected.getCause() instanceof SQLException &&
+                    "23000".equals(((SQLException)expected.getCause()).getSQLState()),
+                    "secondary MySQL UNIQUE conflict remains a SQL integrity error, not stale PK");
+            }
+            check(db.find(ItInstant.class,secondaryConflict)==null &&
+                db.find(ItInstant.class,savedInstant.id()).version()==3,
+                "secondary key duplicate never updates unrelated PK");
+            CountDownLatch startCas=new CountDownLatch(1);
+            AtomicInteger winners=new AtomicInteger();
+            AtomicInteger stale=new AtomicInteger();
+            try(ExecutorService concurrent=Executors.newFixedThreadPool(2)) {
+                List<Future<?>> attempts=new ArrayList<>();
+                for(int i=0;i<2;i++) {
+                    final int worker=i;
+                    attempts.add(concurrent.submit(()->{
+                        try {
+                            startCas.await();
+                            db.upsertReturning(new ItInstant(savedInstant.id(),
+                                "winner-"+worker,testTime,3));
+                            winners.incrementAndGet();
+                        } catch(OptimisticLockException expected) {
+                            stale.incrementAndGet();
+                        } catch(InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                            throw new IllegalStateException(e);
+                        }
+                    }));
+                }
+                startCas.countDown();
+                for(Future<?> attempt:attempts)attempt.get();
+            }
+            check(winners.get()==1 && stale.get()==1 &&
+                db.find(ItInstant.class,savedInstant.id()).version()==4,
+                "concurrent MySQL CAS permits exactly one update per expected version");
             ItInstant nullTime=db.insertReturning(new ItInstant(null,"Null",null,0));
             check(db.find(ItInstant.class,nullTime.id()).occurredAt()==null,
                 "MySQL nullable Instant roundtrip");

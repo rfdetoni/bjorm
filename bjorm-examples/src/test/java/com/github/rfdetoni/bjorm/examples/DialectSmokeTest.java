@@ -64,12 +64,13 @@ public final class DialectSmokeTest {
         } catch(UnsupportedOperationException expected) {
             check(expected.getMessage().contains("FULL OUTER"),"MySQL join error");
         }
-        try {
-            mysql.upsertReturning(new ItProduct(id,"x",java.math.BigDecimal.ONE,Status.ACTIVE,0));
-            throw new AssertionError("Versioned MySQL upsert should fail safely");
-        } catch(UnsupportedOperationException expected) {
-            check(expected.getMessage().contains("@Version"),"MySQL versioned upsert rejection");
-        }
+        check(mysql.upsert(new ItProduct(id,"x",java.math.BigDecimal.ONE,Status.ACTIVE,0))==1,
+            "MySQL @Version UPSERT can INSERT atomically when PK is absent");
+        check(p.sql.startsWith("INSERT INTO bjorm_it_products"),
+            "MySQL @Version UPSERT generates single INSERT");
+        check(p.sql.contains("version = bjorm_new.version") &&
+              p.sql.contains("version = bjorm_it_products.version + 1"),
+            "single MySQL DML compares supplied version before incrementing");
         int connectionsBefore = p.binds.size();
         try {
             new ProductQueries_Bjorm(mysql).literalSafety(id);
