@@ -311,6 +311,7 @@ public final class Bjorm implements Operations {
     public <T> void batchUpdate(List<T> values) {tx(tx->tx.batchUpdate(values));}
     public <T> void batchDelete(List<T> values) {tx(tx->tx.batchDelete(values));}
     public <T> List<T> batchUpsertReturning(List<T> values) {return txResult(tx->tx.batchUpsertReturning(values));}
+    public <T> List<T> batchUpdateReturning(List<T> values) {return txResult(tx->tx.batchUpdateReturning(values));}
     public <T> T updateReturning(T entity) {return txResult(tx->tx.updateReturning(entity));}
     public <T> int updateBy(Class<T> type,Map<String,?> changes,SqlPredicate predicate) {
         return txResult(tx->tx.updateBy(type,changes,predicate));
@@ -900,6 +901,23 @@ public final class Bjorm implements Operations {
             return saved;
         });}
         public <T> void batchUpdate(List<T> list) {use(c->{Bjorm.this.batch(c,list,true);return null;});}
+        public <T> List<T> batchUpdateReturning(List<T> values) {return use(c->{
+            Objects.requireNonNull(values);
+            List<T> refreshed=new ArrayList<>(values.size());
+            Class<?> expected=null;
+            for(T value:values) {
+                Objects.requireNonNull(value,"batchUpdate entity");
+                if(expected==null)expected=value.getClass();
+                else if(value.getClass()!=expected)throw new IllegalArgumentException("Batch requires one entity type");
+                EntityMapper<T> mapper=Bjorm.this.mapper(value.getClass());
+                if(Bjorm.this.update(c,value)==0)
+                    throw new IllegalStateException("Batch update affected no row: "+mapper.type().getName());
+                T current=Bjorm.this.find(c,mapper.type(),mapper.id(value));
+                if(current==null)throw new IllegalStateException("Updated entity cannot be reloaded");
+                refreshed.add(current);
+            }
+            return List.copyOf(refreshed);
+        });}
         public <T> void batchDelete(List<T> values) {use(c->{
             Objects.requireNonNull(values);
             Class<?> expected=null;
