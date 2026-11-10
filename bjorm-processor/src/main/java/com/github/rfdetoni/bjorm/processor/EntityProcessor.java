@@ -574,10 +574,14 @@ public final class EntityProcessor extends AbstractProcessor {
                 w.write("public String "+e[0]+"(){return \""+e[1]+"\";}\n");
             w.write("public void bindInsert(java.sql.PreparedStatement ps,"+clazz+" value) throws java.sql.SQLException {bindInsert(ps,value,com.github.rfdetoni.bjorm.SqlDialects.POSTGRESQL);}\n");
             w.write("public void bindInsert(java.sql.PreparedStatement ps,"+clazz+" value,com.github.rfdetoni.bjorm.SqlDialect dialect) throws java.sql.SQLException {\n");
+            for(EmbeddedSpec embedded:embeddeds)
+                w.write("if("+embedded.read()+"==null)throw new IllegalArgumentException(\"@Embedded "+embedded.property()+" is required\");\n");
             int insIndex=1;for(int j=0;j<cols.size();j++)if(!cols.get(j).generated()&&cols.get(j).insertable())
                 w.write(writeColumn(cols.get(j),insIndex++,j,"dialect")+"\n");
             w.write("}\npublic void bindUpdate(java.sql.PreparedStatement ps,"+clazz+" value) throws java.sql.SQLException {bindUpdate(ps,value,com.github.rfdetoni.bjorm.SqlDialects.POSTGRESQL);}\n");
             w.write("public void bindUpdate(java.sql.PreparedStatement ps,"+clazz+" value,com.github.rfdetoni.bjorm.SqlDialect dialect) throws java.sql.SQLException {\n");
+            for(EmbeddedSpec embedded:embeddeds)
+                w.write("if("+embedded.read()+"==null)throw new IllegalArgumentException(\"@Embedded "+embedded.property()+" is required\");\n");
             int index=1;
             for(int i=0;i<cols.size();i++)if(i!=id&&i!=version&&cols.get(i).updatable()&&!cols.get(i).createdAt())
                 w.write(writeColumn(cols.get(i),index++,i,"dialect")+"\n");
@@ -594,18 +598,54 @@ public final class EntityProcessor extends AbstractProcessor {
             w.write("public "+clazz+" read(java.sql.ResultSet rs) throws java.sql.SQLException {return readAt(rs,1); }\n");
             w.write("public "+clazz+" readAt(java.sql.ResultSet rs,int offset) throws java.sql.SQLException {\n");
             if(record){
-                List<String> args=new ArrayList<>();int offset=1;
+                List<String> args=new ArrayList<>();int columnCursor=0;
                 for(RecordComponentElement component:entity.getRecordComponents()){
-                    if(component.getAnnotation(Transient.class)!=null)args.add(defaultValue(component.asType().toString()));
+                    if(component.getAnnotation(Transient.class)!=null)
+                        args.add(defaultValue(component.asType().toString()));
                     else if(component.getAnnotation(Children.class)!=null)args.add("java.util.List.of()");
                     else if(component.getAnnotation(ManyToOne.class)!=null)args.add("null");
-                    else {int n=offset++-1;args.add(readColumn(cols.get(n),"(offset+"+n+")",n));}
+                    else if(component.getAnnotation(Embedded.class)!=null) {
+                        String field=component.getSimpleName().toString();
+                        EmbeddedSpec embedded=embeddeds.stream().filter(e->e.property().equals(field))
+                            .findFirst().orElseThrow();
+                        args.add(embeddedReadExpression(embedded,cols,columnCursor));
+                        columnCursor+=embedded.columnCount();
+                    } else {
+                        int index=columnCursor++;
+                        args.add(readColumn(cols.get(index),"(offset+"+index+")",index));
+                    }
                 }
                 w.write("return new "+clazz+"("+String.join(", ",args)+");\n");
+            } else {
+                w.write(clazz+" value = new "+clazz+"();\n");
+                int columnCursor=0;
+                for(Element field:pojoFields(entity)) {
+                    if(field.getAnnotation(Children.class)!=null || field.getAnnotation(ManyToOne.class)!=null)
+                        continue;
+                    if(field.getAnnotation(Embedded.class)!=null) {
+                        String name=field.getSimpleName().toString();
+                        EmbeddedSpec embedded=embeddeds.stream().filter(e->e.property().equals(name))
+                            .findFirst().orElseThrow();
+                        w.write(embedded.setter()+"("+embeddedReadExpression(embedded,cols,columnCursor)+");\n");
+                        columnCursor+=embedded.columnCount();
+                    } else {
+                        int index=columnCursor++;
+                        w.write(cols.get(index).write()+"("+readColumn(cols.get(index),
+                            "(offset+"+index+")",index)+");\n");
+                    }
+                }
+                w.write("return value;\n");
             }
-            else {w.write(clazz+" value = new "+clazz+"();\n");for(int i=0;i<cols.size();i++)w.write(cols.get(i).write()+"("+readColumn(cols.get(i),"(offset+"+i+")",i)+");\n");w.write("return value;\n");}
             w.write("}\n}\n");
         }
+    }
+    private String embeddedReadExpression(EmbeddedSpec embedded,List<Col> cols,int start) {
+        List<String> arguments=new ArrayList<>(embedded.columnCount());
+        for(int i=0;i<embedded.columnCount();i++) {
+            int index=start+i;
+            arguments.add(readColumn(cols.get(index),"(offset+"+index+")",index));
+        }
+        return "new "+embedded.type()+"("+String.join(", ",arguments)+")";
     }
     /** Transient record components do not consume JDBC column positions. */
     private static String defaultValue(String type) {
