@@ -2,6 +2,9 @@
 
 ## 0.3.18-SNAPSHOT
 
+- Expose `Operations.params(Object...)` for reusable, dialect-aware native SQL parameter binding without repeated application-specific `StatementBinder` loops. Snapshot values before execution to avoid mutable-varargs races; available within transactions.
+- Add JDBC-spy regression for captured values, UUIDs, Instant timestamps and transaction usage, plus PostgreSQL/MySQL native-parameter integration coverage.
+
 - Fix compile-time generated entity binders and readers for `java.time.Instant` on PostgreSQL/MySQL, handling null values and avoiding unsupported JDBC `setObject(Instant)` and `getObject(Instant.class)`.
 - Add cross-dialect integration coverage for record insertion, versioned update, nullable timestamp and roundtrip.
 
