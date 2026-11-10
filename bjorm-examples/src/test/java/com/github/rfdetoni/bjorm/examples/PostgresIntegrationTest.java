@@ -47,7 +47,7 @@ public final class PostgresIntegrationTest {
             st.execute("CREATE TABLE bjorm_it_audit (id uuid PRIMARY KEY, label text, createdAt timestamptz, updatedAt timestamptz)");
             st.execute("CREATE TABLE bjorm_it_audit_pojo (id uuid PRIMARY KEY, label text, createdAt timestamptz, updatedAt timestamptz)");
             st.execute("CREATE TABLE bjorm_it_documents (id uuid PRIMARY KEY, payload jsonb)");
-            st.execute("CREATE TABLE bjorm_it_orders (id uuid PRIMARY KEY, description text)");
+            st.execute("CREATE TABLE bjorm_it_orders (id uuid PRIMARY KEY, description text, customerId uuid REFERENCES bjorm_it_users(id))");
             // FK RESTRICT: cascade here is implemented by BJORM, not delegated to PostgreSQL.
             st.execute("CREATE TABLE bjorm_it_order_lines (id uuid PRIMARY KEY, orderId uuid NOT NULL REFERENCES bjorm_it_orders(id), sku text)");
             st.execute("CREATE TABLE bjorm_it_order_notes (id uuid PRIMARY KEY, orderId uuid NOT NULL REFERENCES bjorm_it_orders(id), note text, version integer NOT NULL DEFAULT 0)");
@@ -63,7 +63,7 @@ public final class PostgresIntegrationTest {
             st.execute("CREATE TABLE bjorm_it_record_parents (id uuid PRIMARY KEY, label text)");
             st.execute("CREATE TABLE bjorm_it_record_children (id uuid PRIMARY KEY, parentId uuid NOT NULL REFERENCES bjorm_it_record_parents(id), label text)");
         }
-        Bjorm db=Bjorm.open(ds,ItUser_BjormMapper.INSTANCE,ItProduct_BjormMapper.INSTANCE,ItDocument_BjormMapper.INSTANCE,ItOrder_BjormMapper.INSTANCE,ItOrderInner_BjormMapper.INSTANCE,ItOrderOuter_BjormMapper.INSTANCE,ItOrderLine_BjormMapper.INSTANCE,ItOrderNote_BjormMapper.INSTANCE,AutoUuidRecord_BjormMapper.INSTANCE,AutoStringRecord_BjormMapper.INSTANCE,AutoLongRecord_BjormMapper.INSTANCE,AutoIntRecord_BjormMapper.INSTANCE,AutoUuidPojo_BjormMapper.INSTANCE,AutoParentRecord_BjormMapper.INSTANCE,AutoChildRecord_BjormMapper.INSTANCE,InheritedPatient_BjormMapper.INSTANCE,ItTypedJson_BjormMapper.INSTANCE,ItInstant_BjormMapper.INSTANCE,
+        Bjorm db=Bjorm.open(ds,ItUser_BjormMapper.INSTANCE,ItProduct_BjormMapper.INSTANCE,ItDocument_BjormMapper.INSTANCE,ItOrder_BjormMapper.INSTANCE,ItOrderInner_BjormMapper.INSTANCE,ItOrderOuter_BjormMapper.INSTANCE,ItOrderWithCustomer_BjormMapper.INSTANCE,ItOrderLine_BjormMapper.INSTANCE,ItOrderNote_BjormMapper.INSTANCE,AutoUuidRecord_BjormMapper.INSTANCE,AutoStringRecord_BjormMapper.INSTANCE,AutoLongRecord_BjormMapper.INSTANCE,AutoIntRecord_BjormMapper.INSTANCE,AutoUuidPojo_BjormMapper.INSTANCE,AutoParentRecord_BjormMapper.INSTANCE,AutoChildRecord_BjormMapper.INSTANCE,InheritedPatient_BjormMapper.INSTANCE,ItTypedJson_BjormMapper.INSTANCE,ItInstant_BjormMapper.INSTANCE,
             MappedColumns_BjormMapper.INSTANCE,OrdinalEvent_BjormMapper.INSTANCE,
             ItAuditRecord_BjormMapper.INSTANCE,ItAuditPojo_BjormMapper.INSTANCE,
             ExplicitAssignedRecord_BjormMapper.INSTANCE,ExplicitIdentityRecord_BjormMapper.INSTANCE,
@@ -329,6 +329,29 @@ public final class PostgresIntegrationTest {
             try{db.update(product);throw new AssertionError("stale update not detected");}catch(OptimisticLockException expected){}
             db.tx(tx->tx.batchInsert(List.of(new ItUser(UUID.randomUUID(),"Batch1",1),new ItUser(UUID.randomUUID(),"Batch2",2))));
             check(db.list(ItUser.class,ItUser_.name.in(List.of("Batch1","Batch2"))).size()==2,"batch committed");
+            ItOrderWithCustomer mixedOrder=new ItOrderWithCustomer();
+            mixedOrder.setCustomerId(invoiceCustomer.id());
+            mixedOrder.setDescription("Combined order");
+            ItOrderLine mixedLine=new ItOrderLine();
+            mixedLine.setSku("COMBINED");
+            mixedOrder.getLines().add(mixedLine);
+            db.insert(mixedOrder);
+            java.util.concurrent.atomic.AtomicInteger mixedQueries=new java.util.concurrent.atomic.AtomicInteger();
+            Bjorm observedGraph=db.observeSql((operation,nanos,ok)->{
+                if(operation==SqlOperation.QUERY)mixedQueries.incrementAndGet();
+            });
+            ItOrderWithCustomer mixedLoaded=observedGraph.find(ItOrderWithCustomer.class,mixedOrder.getId());
+            check(mixedLoaded.getCustomer()!=null &&
+                mixedLoaded.getCustomer().id().equals(invoiceCustomer.id()) &&
+                mixedLoaded.getLines().size()==1 &&
+                mixedLoaded.getLines().getFirst().getSku().equals("COMBINED"),
+                "PostgreSQL graph hydrates @ManyToOne and @Children together");
+            check(mixedQueries.get()==1,
+                "combined PostgreSQL eager graph must use one SQL, not N+1");
+            check(db.delete(mixedOrder)==1 && db.find(ItOrderWithCustomer.class,mixedOrder.getId())==null,
+                "combined graph cascade does not delete referenced customer");
+            check(db.find(ItUser.class,invoiceCustomer.id())!=null,
+                "referenced customer is not cascaded by graph delete");
             ItOrder order = new ItOrder();
             order.setDescription("First order");
             ItOrderLine line = new ItOrderLine();
