@@ -48,6 +48,18 @@ public interface Operations {
     int execute(String sql, StatementBinder binder);
     <T> void forEach(Class<T> type, SqlPredicate predicate, java.util.function.Consumer<T> consumer);
     <T> void forEach(Select<T> query, java.util.function.Consumer<T> consumer);
+    /**
+     * Resource-scoped, sequential cursor stream. The JDBC ResultSet and
+     * PreparedStatement close when the callback returns or throws.
+     * Do not retain the stream past the callback. Only flat mapped entities
+     * are supported; graph relations require forEach with eager hydration.
+     */
+    <T,R> R withStream(Select<T> query,
+        java.util.function.Function<java.util.stream.Stream<T>,R> work);
+    default <T,R> R withStream(Class<T> type,SqlPredicate where,
+            java.util.function.Function<java.util.stream.Stream<T>,R> work) {
+        return withStream(select(type).whereNullable(where),work);
+    }
     <T> void scan(String sql, StatementBinder binder, RowMapper<T> mapper, java.util.function.Consumer<T> consumer);
     <T> void batchInsert(List<T> entities);
     <T> void batchUpdate(List<T> entities);

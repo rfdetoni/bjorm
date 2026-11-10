@@ -92,6 +92,8 @@ public final class PostgresIntegrationTest {
             tenantA.insert(new ItUser(sharedId,"Alice A",11));
             tenantB.insert(new ItUser(sharedId,"Alice B",22));
             check(tenantA.find(ItUser.class,sharedId).name().equals("Alice A"),"tenant A isolation");
+            long scopedCount=tenantA.withStream(tenantA.select(ItUser.class).limit(5),rows->rows.count());
+            check(scopedCount==1,"PostgreSQL transaction-bound streamed tenant SELECT");
             try {
                 tenantA.execute("UPDATE bjorm_tenant_b.bjorm_it_users SET age=777 WHERE id=?",
                     tenantA.params(sharedId));

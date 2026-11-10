@@ -42,6 +42,7 @@ public final class AdvancedSmokeTest {
         final List<Call> calls=new ArrayList<>();
         final List<Integer> fetchSizes=new ArrayList<>();
         final AtomicInteger connections=new AtomicInteger(),commits=new AtomicInteger(),rollbacks=new AtomicInteger();
+        final AtomicInteger closedResultSets=new AtomicInteger(),closedStatements=new AtomicInteger();
         int updateResult=1;
         boolean noRows=false;
         final UUID id=UUID.randomUUID();
@@ -92,7 +93,8 @@ public final class AdvancedSmokeTest {
                 }
                 case "getGeneratedKeys"->result(new Object[]{42L});
                 case "setFetchSize"->{fetchSizes.add((Integer)a[0]);yield null;}
-                case "close","clearParameters","setQueryTimeout","setMaxRows"->null;
+                case "close"->{closedStatements.incrementAndGet();yield null;}
+                case "clearParameters","setQueryTimeout","setMaxRows"->null;
                 default->throw new UnsupportedOperationException("PreparedStatement."+m.getName());
             });
         }
@@ -100,7 +102,7 @@ public final class AdvancedSmokeTest {
             final int[] cursor={-1};final boolean[] wasNull={false};
             return (ResultSet)proxy(ResultSet.class,(p,m,a)->switch(m.getName()){
                 case "next"->row!=null && ++cursor[0]==0;
-                case "close"->null;
+                case "close"->{closedResultSets.incrementAndGet();yield null;}
                 case "wasNull"->wasNull[0];
                 case "getObject","getString","getBigDecimal","getInt","getLong","getBoolean","getShort","getDouble","getFloat"->{
                     Object value=row[(Integer)a[0]-1];wasNull[0]=value==null;
@@ -256,6 +258,28 @@ public final class AdvancedSmokeTest {
         db.scan("SELECT id, name FROM products WHERE name = ?", ps->ps.setString(1,"Pencil"),ProductSummary_BjormRowMapper.INSTANCE,
             row->check(row.name().equals("Pencil"),"native projection cursor"));
         check(spy.last().binds().get(1).equals("Pencil"),"streamed projection bind");
+        int closedBefore=spy.closedResultSets.get(), statementsBefore=spy.closedStatements.get();
+        long streamed=db.withStream(db.select(Product.class),
+            rows->rows.filter(item->item.getName().equals("Pencil")).count());
+        check(streamed==1,"mapped sequential Stream uses cursor without materializing all rows");
+        check(spy.closedResultSets.get()==closedBefore+1 &&
+              spy.closedStatements.get()==statementsBefore+1,
+              "mapped Stream always closes ResultSet and PreparedStatement");
+        int rolledBefore=spy.rollbacks.get();
+        try {
+            db.withStream(db.select(Product.class),rows->{
+                rows.findFirst();
+                throw new IllegalStateException("consumer failed");
+            });
+            throw new AssertionError("stream callback exception was swallowed");
+        } catch(IllegalStateException expected) {
+            check(expected.getMessage().equals("consumer failed"),"callback failure propagated");
+        }
+        check(spy.rollbacks.get()==rolledBefore+1 &&
+              spy.closedResultSets.get()==closedBefore+2 &&
+              spy.closedStatements.get()==statementsBefore+2,
+              "callback failure rolls back and closes JDBC resources");
+
         // FindOne must return Optional, fetch a single row server-side, and bind filters.
         Optional<Product> first=db.findOne(Product.class,Product_.name.eq("Pencil"));
         check(first.isPresent() && first.get().getName().equals("Pencil"),"findOne maps matching entity");
