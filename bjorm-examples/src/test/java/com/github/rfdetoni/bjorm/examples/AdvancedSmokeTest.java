@@ -197,6 +197,8 @@ public final class AdvancedSmokeTest {
         check(spy.last().sql().equals("SELECT COUNT(*) FROM products WHERE name = ?"),"count uses single SQL aggregate");
         check(spy.last().binds().equals(Map.of(1,"Pencil")),"count predicate bound");
         check(db.exists(Product.class,Product_.name.eq("Pencil")),"exists returns true");
+        check(spy.last().sql().equals("SELECT 1 FROM products WHERE name = ? LIMIT 1"),"exists does not count all rows");
+        check(spy.last().binds().equals(Map.of(1,"Pencil")),"exists predicate bound");
         try {
             db.lockOne(Product.class,Product_.name.eq("Pencil"),LockMode.UPDATE);
             throw new AssertionError("row locks must require active transaction");
@@ -213,8 +215,6 @@ public final class AdvancedSmokeTest {
                 "transaction FOR SHARE returns existing row");
             check(spy.last().sql().endsWith("LIMIT 1 FOR SHARE"),"shared row lock SQL");
         });
-        check(spy.last().sql().equals("SELECT 1 FROM products WHERE name = ? LIMIT 1"),"exists does not count all rows");
-        check(spy.last().binds().equals(Map.of(1,"Pencil")),"exists predicate bound");
         spy.noRows=true;
         check(!db.exists(Product.class,Product_.name.eq("missing")),"exists returns false for empty result");
         check(db.findOne(Product.class,Product_.name.eq("missing")).isEmpty(),"findOne returns empty Optional");
