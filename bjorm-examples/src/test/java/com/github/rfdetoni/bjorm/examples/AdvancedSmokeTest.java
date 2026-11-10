@@ -298,11 +298,11 @@ public final class AdvancedSmokeTest {
         check(spy.last().binds().equals(Map.of(1,"Pencil")),"findFields binds filter");
         List<BigDecimal> prices=db.findColumn(Product.class,"price",BigDecimal.class,Product_.name.eq("Pencil"));
         check(prices.equals(List.of(new BigDecimal("12.50"))),"findColumn reads scalar using generated mapper");
+        check(spy.last().sql().equals("SELECT unit_price FROM products WHERE name = ?"),"findColumn selects only requested column");
         check(db.findColumn(Product.class,"version",int.class).equals(List.of(0)),
             "primitive int.class is boxed for scalarList");
         check(db.findColumnOne(Product.class,"version",int.class).orElseThrow()==0,
             "primitive int.class is boxed for scalarOne");
-        check(spy.last().sql().equals("SELECT unit_price FROM products WHERE name = ?"),"findColumn selects only requested column");
         check(db.findColumnOne(Product.class,"name",String.class,Product_.name.eq("Pencil")).orElseThrow().equals("Pencil"),"findColumnOne typed Optional");
         check(spy.last().sql().equals("SELECT name FROM products WHERE name = ? LIMIT ?"),"findColumnOne limits at database");
         check(db.select(Product.class).fields("name").values(String.class).equals(List.of("Pencil")),"DSL values without Map");
