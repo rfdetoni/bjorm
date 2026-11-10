@@ -326,6 +326,10 @@ public final class EntityProcessor extends AbstractProcessor {
             for(int i=0;i<cols.size();i++)w.write("case \""+cols.get(i).column()+"\" -> "+(i+1)+";\n");
             w.write("default -> throw new IllegalArgumentException(\"Unknown mapped column: \"+sqlColumn);};}\n");
             w.write("public boolean optimisticLocking(){return "+(version>=0)+";}\n");
+            if(version>=0){
+                w.write("public String versionColumn(){return \""+cols.get(version).column()+"\";}\n");
+                w.write("public Object versionValue("+clazz+" entity){return "+cols.get(version).read().replace("value.","entity.")+";}\n");
+            }
             w.write("public boolean upsertNeedsReload(){return "+
                 (version>=0||cols.stream().anyMatch(c->c.createdAt()||!c.insertable()))+";}\n");
             w.write("public boolean generatedId(){return "+cols.get(id).generated()+";}\n");
