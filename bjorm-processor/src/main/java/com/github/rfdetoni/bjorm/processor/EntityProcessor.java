@@ -615,8 +615,8 @@ public final class EntityProcessor extends AbstractProcessor {
                         args.add(embeddedReadExpression(embedded,cols,columnCursor));
                         columnCursor+=embedded.columnCount();
                     } else {
-                        int index=columnCursor++;
-                        args.add(readColumn(cols.get(index),"(offset+"+index+")",index));
+                        int colIndex=columnCursor++;
+                        args.add(readColumn(cols.get(colIndex),"(offset+"+colIndex+")",colIndex));
                     }
                 }
                 w.write("return new "+clazz+"("+String.join(", ",args)+");\n");
@@ -633,9 +633,9 @@ public final class EntityProcessor extends AbstractProcessor {
                         w.write(embedded.setter()+"("+embeddedReadExpression(embedded,cols,columnCursor)+");\n");
                         columnCursor+=embedded.columnCount();
                     } else {
-                        int index=columnCursor++;
-                        w.write(cols.get(index).write()+"("+readColumn(cols.get(index),
-                            "(offset+"+index+")",index)+");\n");
+                        int colIndex=columnCursor++;
+                        w.write(cols.get(colIndex).write()+"("+readColumn(cols.get(colIndex),
+                            "(offset+"+colIndex+")",colIndex)+");\n");
                     }
                 }
                 w.write("return value;\n");
