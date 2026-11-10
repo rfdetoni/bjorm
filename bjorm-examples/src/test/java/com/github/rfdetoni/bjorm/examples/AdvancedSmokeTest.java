@@ -373,6 +373,26 @@ public final class AdvancedSmokeTest {
         check(ItOrderInner_BjormMapper.INSTANCE.children().getFirst().joinType()==JoinType.INNER,"annotated INNER");
         check(ItOrderOuter_BjormMapper.INSTANCE.children().get(0).joinType()==JoinType.RIGHT,"annotated RIGHT");
         check(ItOrderOuter_BjormMapper.INSTANCE.children().get(1).joinType()==JoinType.FULL,"annotated FULL");
+        EnumMap<SqlOperation,AtomicInteger> events=new EnumMap<>(SqlOperation.class);
+        for(SqlOperation kind:SqlOperation.values())events.put(kind,new AtomicInteger());
+        Bjorm observed=db.observeSql((kind,durationNanos,success)->{
+            check(durationNanos>=0,"JDBC duration must be nonnegative");
+            check(success,"test spy JDBC operation succeeds");
+            events.get(kind).incrementAndGet();
+        });
+        observed.count(Product.class,null);
+        observed.execute("UPDATE products SET name=? WHERE id=?",observed.params("metrics",spy.id));
+        observed.batchInsert(List.of(new AutoUuidRecord(UUID.randomUUID(),"metrics-1"),
+            new AutoUuidRecord(UUID.randomUUID(),"metrics-2")));
+        check(events.get(SqlOperation.QUERY).get()>0,"observer sees SELECT execution");
+        check(events.get(SqlOperation.UPDATE).get()>0,"observer sees UPDATE execution");
+        check(events.get(SqlOperation.BATCH).get()>0,"observer sees executeBatch");
+        check(db.execute("UPDATE products SET name=? WHERE id=?",db.params("unobserved",spy.id))==1,
+            "unobserved BJORM stays fully functional");
+        check(db.observeSql((kind,nanos,success)->{
+            throw new IllegalStateException("metrics exporter unavailable");
+        }).execute("UPDATE products SET name=? WHERE id=?",db.params("safe",spy.id))==1,
+            "broken metrics export must never alter JDBC success");
         System.out.println("PASS: POJO, projection, findOne, selected properties, @Query, DSL, locking, generated IDs, batch and transactions");
     }
 }

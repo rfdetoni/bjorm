@@ -162,6 +162,35 @@ untrusted native SQL. Prefer per-tenant DB grants when tenants are mutually
 untrusted; a connection with access to every schema can still execute
 fully-qualified native SQL if the application exposes it.
 
+## Opt-in SQL execution metrics without sensitive data
+
+`Bjorm.observeSql(SqlObserver)` creates an immutable view that tracks the
+duration of individual JDBC `executeQuery`, `executeUpdate` and
+`executeBatch` calls. When no observer is configured, those JDBC calls
+remain direct, without timing or callback allocations.
+
+```java
+Bjorm monitored = db.observeSql((operation, durationNanos, succeeded) -> {
+    if (durationNanos >= 100_000_000L) {
+        metrics.recordSlowQuery(operation.name(), durationNanos, succeeded);
+    }
+});
+```
+
+The observer only receives an enum (`QUERY`, `UPDATE`, `BATCH`),
+duration in nanoseconds and a success flag. It **never receives SQL text,
+bound values, secrets, tenant schemas or exception messages**. This safe
+interface is suitable for metrics cardinality control and slow-call counters.
+A listener that throws a normal runtime exception cannot abort or mask the
+JDBC call. A listener is synchronous and should not block or perform expensive
+work; record a counter or publish to a buffered metrics sink.
+
+Timing ends when JDBC `executeQuery` returns: it **does not include** the
+time spent consuming ResultSet rows or rendering entities, and successful
+execution does not imply semantic success of each batch row. Monitor full
+request latency separately. Dynamic tenant views inherit the observer from
+the scoped root; each tenant still uses isolated JDBC connection state.
+
 ## Transaction-local identity reuse
 
 BJORM now keeps a **small first-level identity cache only for `tx.find(Type,id)`**
