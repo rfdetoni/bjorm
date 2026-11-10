@@ -70,6 +70,15 @@ public final class DialectSmokeTest {
         } catch(UnsupportedOperationException expected) {
             check(expected.getMessage().contains("@Version"),"MySQL versioned upsert rejection");
         }
+        int connectionsBefore = p.binds.size();
+        try {
+            new ProductQueries_Bjorm(mysql).literalSafety(id);
+            throw new AssertionError("PostgreSQL :: cast accepted on MySQL");
+        } catch(UnsupportedOperationException expected) {
+            check(expected.getMessage().contains("PostgreSQL"),"explicit dialect error for native cast");
+        }
+        check(new SqlCastQueries_Bjorm(mysql).safeLiteral()==null,
+            "PostgreSQL cast tokens in SQL strings/comments are not executable dialect requirements");
         check(SqlDialects.named("mysql")==SqlDialects.MYSQL,"named mysql");
         check(SqlDialects.named("postgresql")==SqlDialects.POSTGRESQL,"named pg");
         System.out.println("PASS: SQL dialect abstraction, UUID binding, MySQL JSON/UPSERT, unsupported semantics");
