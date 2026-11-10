@@ -37,6 +37,8 @@ public final class PostgresIntegrationTest {
             st.execute("CREATE TABLE bjorm_tenant_b.bjorm_it_users (id uuid PRIMARY KEY, name text NOT NULL, age integer NOT NULL)");
             st.execute("CREATE TABLE bjorm_it_instants (id uuid PRIMARY KEY, label text, occurred_at timestamptz, version integer NOT NULL DEFAULT 0)");
             st.execute("CREATE TABLE bjorm_it_products (id uuid PRIMARY KEY, name text, unit_price numeric(18,2), status text, version integer NOT NULL DEFAULT 0)");
+            st.execute("CREATE TABLE bjorm_it_columns (id uuid PRIMARY KEY, read_only text NOT NULL, server_val text DEFAULT 'server-default')");
+            st.execute("CREATE TABLE bjorm_it_ordinal (id uuid PRIMARY KEY, status integer, label text)");
             st.execute("CREATE TABLE bjorm_it_documents (id uuid PRIMARY KEY, payload jsonb)");
             st.execute("CREATE TABLE bjorm_it_orders (id uuid PRIMARY KEY, description text)");
             // FK RESTRICT: cascade here is implemented by BJORM, not delegated to PostgreSQL.
@@ -51,7 +53,8 @@ public final class PostgresIntegrationTest {
             st.execute("CREATE TABLE bjorm_it_record_parents (id uuid PRIMARY KEY, label text)");
             st.execute("CREATE TABLE bjorm_it_record_children (id uuid PRIMARY KEY, parentId uuid NOT NULL REFERENCES bjorm_it_record_parents(id), label text)");
         }
-        Bjorm db=Bjorm.open(ds,ItUser_BjormMapper.INSTANCE,ItProduct_BjormMapper.INSTANCE,ItDocument_BjormMapper.INSTANCE,ItOrder_BjormMapper.INSTANCE,ItOrderInner_BjormMapper.INSTANCE,ItOrderOuter_BjormMapper.INSTANCE,ItOrderLine_BjormMapper.INSTANCE,ItOrderNote_BjormMapper.INSTANCE,AutoUuidRecord_BjormMapper.INSTANCE,AutoStringRecord_BjormMapper.INSTANCE,AutoLongRecord_BjormMapper.INSTANCE,AutoIntRecord_BjormMapper.INSTANCE,AutoUuidPojo_BjormMapper.INSTANCE,AutoParentRecord_BjormMapper.INSTANCE,AutoChildRecord_BjormMapper.INSTANCE,InheritedPatient_BjormMapper.INSTANCE,ItTypedJson_BjormMapper.INSTANCE,ItInstant_BjormMapper.INSTANCE);
+        Bjorm db=Bjorm.open(ds,ItUser_BjormMapper.INSTANCE,ItProduct_BjormMapper.INSTANCE,ItDocument_BjormMapper.INSTANCE,ItOrder_BjormMapper.INSTANCE,ItOrderInner_BjormMapper.INSTANCE,ItOrderOuter_BjormMapper.INSTANCE,ItOrderLine_BjormMapper.INSTANCE,ItOrderNote_BjormMapper.INSTANCE,AutoUuidRecord_BjormMapper.INSTANCE,AutoStringRecord_BjormMapper.INSTANCE,AutoLongRecord_BjormMapper.INSTANCE,AutoIntRecord_BjormMapper.INSTANCE,AutoUuidPojo_BjormMapper.INSTANCE,AutoParentRecord_BjormMapper.INSTANCE,AutoChildRecord_BjormMapper.INSTANCE,InheritedPatient_BjormMapper.INSTANCE,ItTypedJson_BjormMapper.INSTANCE,ItInstant_BjormMapper.INSTANCE,
+            MappedColumns_BjormMapper.INSTANCE,OrdinalEvent_BjormMapper.INSTANCE);
         UUID id=UUID.randomUUID();ItUser alice=new ItUser(id,"BJORM",34);
         try {
             Bjorm required=Bjorm.tenantRequired(ds,BjormOptions.defaults(),SqlDialects.POSTGRESQL,ItUser_BjormMapper.INSTANCE);
@@ -127,6 +130,16 @@ public final class PostgresIntegrationTest {
             check(db.findOne(ItUser.class,ItUser_.name.eq("missing")).isEmpty(),"findOne missing record");
             check(db.count(ItUser.class,ItUser_.name.eq("BJORM")) == 1L, "mapped count predicate");
             check(db.count(ItUser.class,null) >= 1L, "mapped total count");
+            MappedColumns mapped=db.insertReturning(new MappedColumns(null,"immutable","ignored",77,"never-persist"));
+            MappedColumns columns=db.find(MappedColumns.class,mapped.id());
+            check("immutable".equals(columns.readOnly()) && "server-default".equals(columns.serverValue()) &&
+                columns.localCounter()==0 && columns.localHint()==null,
+                "PostgreSQL transient and generated column metadata roundtrip");
+            try {db.updateBy(MappedColumns.class,Map.of("readOnly","mutated"),MappedColumns_.id.eq(mapped.id()));
+                throw new AssertionError("read-only column updated");}
+            catch(IllegalArgumentException expected) {}
+            OrdinalEvent ordinal=db.insertReturning(new OrdinalEvent(null,Status.INACTIVE,"enum ordinal"));
+            check(db.find(OrdinalEvent.class,ordinal.id()).status()==Status.INACTIVE,"PostgreSQL numeric enum roundtrip");
             UUID bulkId=UUID.randomUUID();
             db.batchUpsertReturning(List.of(new ItUser(bulkId,"NativeBatch",10)));
             check(db.find(ItUser.class,bulkId).age()==10,"batchUpsertReturning inserts");
@@ -257,6 +270,8 @@ public final class PostgresIntegrationTest {
                 st.execute("DROP SCHEMA IF EXISTS bjorm_tenant_a CASCADE");
                 st.execute("DROP SCHEMA IF EXISTS bjorm_tenant_b CASCADE");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_users");
+                st.execute("DROP TABLE IF EXISTS bjorm_it_columns");
+                st.execute("DROP TABLE IF EXISTS bjorm_it_ordinal");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_products");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_instants");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_documents");
