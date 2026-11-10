@@ -29,6 +29,8 @@ public final class MySqlIntegrationTest {
         };
         try(Connection c=source.getConnection();Statement st=c.createStatement()){
             st.execute("CREATE TABLE bjorm_it_users(id CHAR(36) PRIMARY KEY,name VARCHAR(255) UNIQUE,age INT NOT NULL)");
+            st.execute("CREATE TABLE bjorm_it_ordinal(id CHAR(36) PRIMARY KEY,status INT,label VARCHAR(255))");
+            st.execute("CREATE TABLE bjorm_it_columns(id CHAR(36) PRIMARY KEY,read_only VARCHAR(255),server_val VARCHAR(255) DEFAULT 'server-default')");
             st.execute("CREATE TABLE bjorm_it_instants(id CHAR(36) PRIMARY KEY,label VARCHAR(255),occurred_at TIMESTAMP(6) NULL,version INT NOT NULL DEFAULT 0)");
             st.execute("CREATE TABLE bjorm_it_documents(id CHAR(36) PRIMARY KEY,payload JSON)");
             st.execute("CREATE TABLE bjorm_it_auto_long(id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,label VARCHAR(255))");
@@ -41,7 +43,7 @@ public final class MySqlIntegrationTest {
                 ItUser_BjormMapper.INSTANCE,ItDocument_BjormMapper.INSTANCE,
                 AutoLongRecord_BjormMapper.INSTANCE,ItOrder_BjormMapper.INSTANCE,
                 ItOrderLine_BjormMapper.INSTANCE,ItOrderNote_BjormMapper.INSTANCE,
-                ItInstant_BjormMapper.INSTANCE);
+                ItInstant_BjormMapper.INSTANCE,MappedColumns_BjormMapper.INSTANCE,OrdinalEvent_BjormMapper.INSTANCE);
             Instant testTime=Instant.parse("2026-11-10T10:20:30Z");
             ItInstant savedInstant=db.insertReturning(new ItInstant(null,"Original",testTime,0));
             check(testTime.equals(db.find(ItInstant.class,savedInstant.id()).occurredAt()),
@@ -50,12 +52,28 @@ public final class MySqlIntegrationTest {
                 "MySQL generated UPDATE Instant");
             check(testTime.plusSeconds(60).equals(db.find(ItInstant.class,savedInstant.id()).occurredAt()),
                 "MySQL generated Instant update roundtrip");
+            ItInstant refreshed=db.updateReturning(new ItInstant(savedInstant.id(),"refreshed",testTime,1));
+            check(refreshed.version()==2,"MySQL version updateReturning re-read");
             ItInstant nullTime=db.insertReturning(new ItInstant(null,"Null",null,0));
             check(db.find(ItInstant.class,nullTime.id()).occurredAt()==null,
                 "MySQL nullable Instant roundtrip");
+            MappedColumns mapped=db.insertReturning(new MappedColumns(null,"read-only","ignored",3,"transient"));
+            MappedColumns reloadedCols=db.find(MappedColumns.class,mapped.id());
+            check("read-only".equals(reloadedCols.readOnly()) && "server-default".equals(reloadedCols.serverValue()) &&
+                reloadedCols.localCounter()==0,"MySQL read-only/generated/transient mapping");
+            OrdinalEvent ordinal=db.insertReturning(new OrdinalEvent(null,Status.INACTIVE,"mysql ordinal"));
+            check(db.find(OrdinalEvent.class,ordinal.id()).status()==Status.INACTIVE,"MySQL enum ordinal");
             ItUser original=db.insertReturning(new ItUser(null,"MySQL user",33));
             check(original.id()!=null && original.id().version()==7,"v7 generated");
             check(db.find(ItUser.class,original.id()).age()==33,"MySQL UUID read from CHAR(36)");
+            check(db.updateBy(ItUser.class,Map.of("age",35),ItUser_.id.eq(original.id()))==1,
+                "MySQL native updateBy");
+            check(db.find(ItUser.class,original.id()).age()==35,"MySQL bulk property roundtrip");
+            UUID upsertId=UUID.randomUUID();
+            db.batchUpsertReturning(List.of(new ItUser(upsertId,"batch-mysql",30)));
+            check(db.find(ItUser.class,upsertId)!=null,"MySQL native batchUpsert");
+            db.batchDelete(List.of(new ItUser(upsertId,"batch-mysql",30)));
+            check(db.find(ItUser.class,upsertId)==null,"MySQL native batchDelete");
             db.upsertReturning(new ItUser(original.id(),"Updated",34));
             check(db.find(ItUser.class,original.id()).name().equals("Updated"),"MySQL native upsert");
             check(original.id().equals(new ItQueries_Bjorm(db).findUserId(original.id()).orElseThrow()),
@@ -102,6 +120,7 @@ public final class MySqlIntegrationTest {
         }finally {
             try(Connection c=source.getConnection();Statement st=c.createStatement()){
                 for(String name:List.of("bjorm_it_order_notes","bjorm_it_order_lines","bjorm_it_orders",
+                    "bjorm_it_columns","bjorm_it_ordinal",
                     "bjorm_it_instants","bjorm_it_documents","bjorm_it_auto_long","bjorm_it_users"))
                     st.execute("DROP TABLE IF EXISTS "+name);
             }
