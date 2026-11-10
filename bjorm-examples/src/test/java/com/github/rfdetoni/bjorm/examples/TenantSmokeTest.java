@@ -82,7 +82,7 @@ public final class TenantSmokeTest {
         try {scoped.forTenant("company_b");throw new AssertionError("tenant rebind allowed");}
         catch(IllegalStateException expected) {}
         check(scoped.execute("UPDATE users SET name='x'",ps->{})==1,"tenant-scoped update");
-        check(pg.events.contains("SET LOCAL search_path TO \"company_a\", pg_catalog"),"scoped PostgreSQL search_path");
+        check(pg.events.contains("SET LOCAL search_path TO pg_catalog, \"company_a\", pg_temp"),"scoped PostgreSQL search_path");
         check(pg.events.contains("commit") && pg.autoCommit,"PG auto-transaction restores auto-commit");
         int writes=pg.events.size();
         pg.failWrite=true;
