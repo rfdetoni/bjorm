@@ -63,5 +63,15 @@ public interface EntityMapper<T> extends RowMapper<T> {
     default void acceptGeneratedId(ResultSet keys,T entity) throws SQLException {}
     default boolean optimisticLocking() { return false; }
     default void bindDelete(PreparedStatement ps, T entity) throws SQLException { bindId(ps, 1, id(entity)); }
+    /** Allow generator to emit vendor JSON placeholder casts, no reflection. */
+    default String bulkParameterSql(String property,SqlDialect dialect) {
+        columnFor(property);
+        return "?";
+    }
+    /** Encode generated custom JSON fields before binding through a safe prepared statement. */
+    default Object bulkParameterValue(String property,Object value) {
+        columnFor(property);
+        return value;
+    }
     default String table() { return ""; }
 }

@@ -31,8 +31,14 @@ public final class PostgresIntegrationTest {
         // Use an expendable test database. Never run against an existing schema with fixture table names.
         try(Connection c=ds.getConnection();Statement st=c.createStatement()){
             st.execute("CREATE TABLE bjorm_it_users (id uuid PRIMARY KEY, name text NOT NULL, age integer NOT NULL)");
+            st.execute("CREATE SCHEMA bjorm_tenant_a");
+            st.execute("CREATE SCHEMA bjorm_tenant_b");
+            st.execute("CREATE TABLE bjorm_tenant_a.bjorm_it_users (id uuid PRIMARY KEY, name text NOT NULL, age integer NOT NULL)");
+            st.execute("CREATE TABLE bjorm_tenant_b.bjorm_it_users (id uuid PRIMARY KEY, name text NOT NULL, age integer NOT NULL)");
             st.execute("CREATE TABLE bjorm_it_instants (id uuid PRIMARY KEY, label text, occurred_at timestamptz, version integer NOT NULL DEFAULT 0)");
             st.execute("CREATE TABLE bjorm_it_products (id uuid PRIMARY KEY, name text, unit_price numeric(18,2), status text, version integer NOT NULL DEFAULT 0)");
+            st.execute("CREATE TABLE bjorm_it_columns (id uuid PRIMARY KEY, read_only text NOT NULL, server_val text DEFAULT 'server-default')");
+            st.execute("CREATE TABLE bjorm_it_ordinal (id uuid PRIMARY KEY, status integer, label text)");
             st.execute("CREATE TABLE bjorm_it_documents (id uuid PRIMARY KEY, payload jsonb)");
             st.execute("CREATE TABLE bjorm_it_orders (id uuid PRIMARY KEY, description text)");
             // FK RESTRICT: cascade here is implemented by BJORM, not delegated to PostgreSQL.
@@ -47,9 +53,26 @@ public final class PostgresIntegrationTest {
             st.execute("CREATE TABLE bjorm_it_record_parents (id uuid PRIMARY KEY, label text)");
             st.execute("CREATE TABLE bjorm_it_record_children (id uuid PRIMARY KEY, parentId uuid NOT NULL REFERENCES bjorm_it_record_parents(id), label text)");
         }
-        Bjorm db=Bjorm.open(ds,ItUser_BjormMapper.INSTANCE,ItProduct_BjormMapper.INSTANCE,ItDocument_BjormMapper.INSTANCE,ItOrder_BjormMapper.INSTANCE,ItOrderInner_BjormMapper.INSTANCE,ItOrderOuter_BjormMapper.INSTANCE,ItOrderLine_BjormMapper.INSTANCE,ItOrderNote_BjormMapper.INSTANCE,AutoUuidRecord_BjormMapper.INSTANCE,AutoStringRecord_BjormMapper.INSTANCE,AutoLongRecord_BjormMapper.INSTANCE,AutoIntRecord_BjormMapper.INSTANCE,AutoUuidPojo_BjormMapper.INSTANCE,AutoParentRecord_BjormMapper.INSTANCE,AutoChildRecord_BjormMapper.INSTANCE,InheritedPatient_BjormMapper.INSTANCE,ItTypedJson_BjormMapper.INSTANCE,ItInstant_BjormMapper.INSTANCE);
+        Bjorm db=Bjorm.open(ds,ItUser_BjormMapper.INSTANCE,ItProduct_BjormMapper.INSTANCE,ItDocument_BjormMapper.INSTANCE,ItOrder_BjormMapper.INSTANCE,ItOrderInner_BjormMapper.INSTANCE,ItOrderOuter_BjormMapper.INSTANCE,ItOrderLine_BjormMapper.INSTANCE,ItOrderNote_BjormMapper.INSTANCE,AutoUuidRecord_BjormMapper.INSTANCE,AutoStringRecord_BjormMapper.INSTANCE,AutoLongRecord_BjormMapper.INSTANCE,AutoIntRecord_BjormMapper.INSTANCE,AutoUuidPojo_BjormMapper.INSTANCE,AutoParentRecord_BjormMapper.INSTANCE,AutoChildRecord_BjormMapper.INSTANCE,InheritedPatient_BjormMapper.INSTANCE,ItTypedJson_BjormMapper.INSTANCE,ItInstant_BjormMapper.INSTANCE,
+            MappedColumns_BjormMapper.INSTANCE,OrdinalEvent_BjormMapper.INSTANCE);
         UUID id=UUID.randomUUID();ItUser alice=new ItUser(id,"BJORM",34);
         try {
+            Bjorm required=Bjorm.tenantRequired(ds,BjormOptions.defaults(),SqlDialects.POSTGRESQL,ItUser_BjormMapper.INSTANCE);
+            try {required.find(ItUser.class,UUID.randomUUID());throw new AssertionError("unscoped access accepted");}
+            catch(IllegalStateException expected) {}
+            Bjorm tenantA=required.forTenant("bjorm_tenant_a"),tenantB=required.forTenant("bjorm_tenant_b");
+            UUID sharedId=UUID.randomUUID();
+            tenantA.insert(new ItUser(sharedId,"Alice A",11));
+            tenantB.insert(new ItUser(sharedId,"Alice B",22));
+            check(tenantA.find(ItUser.class,sharedId).name().equals("Alice A"),"tenant A isolation");
+            check(tenantB.find(ItUser.class,sharedId).name().equals("Alice B"),"tenant B isolation");
+            check(db.find(ItUser.class,sharedId)==null,"PostgreSQL tenant scope never leaks into public");
+            tenantA.tx(tx->tx.updateBy(ItUser.class,Map.of("age",33),ItUser_.id.eq(sharedId)));
+            check(tenantA.find(ItUser.class,sharedId).age()==33 &&
+                tenantB.find(ItUser.class,sharedId).age()==22,"tenant-local transaction mutations");
+            check(tenantA.deleteBy(ItUser.class,ItUser_.id.eq(sharedId))==1,"tenant-local bulk delete");
+            check(tenantA.find(ItUser.class,sharedId)==null &&
+                tenantB.find(ItUser.class,sharedId)!=null,"deletion cannot cross tenants");
             Instant time=Instant.parse("2026-11-10T10:20:30Z");
             ItInstant savedInstant=db.insertReturning(new ItInstant(null,"Original",time,0));
             check(db.find(ItInstant.class,savedInstant.id()).occurredAt().equals(time),
@@ -58,6 +81,13 @@ public final class PostgresIntegrationTest {
                 "PostgreSQL generated UPDATE Instant");
             check(db.find(ItInstant.class,savedInstant.id()).occurredAt().equals(time.plusSeconds(60)),
                 "PostgreSQL generated Instant update roundtrip");
+            ItInstant refreshed=db.updateReturning(new ItInstant(savedInstant.id(),"Updated again",time,1));
+            check(refreshed.version()==2,"updateReturning refreshes database version");
+            ItInstant upserted=db.upsertReturning(new ItInstant(savedInstant.id(),"Upserted",time,2));
+            check(upserted.version()==3,"versioned UPSERT returns committed increment");
+            try {db.updateReturning(new ItInstant(savedInstant.id(),"stale",time,1));
+                throw new AssertionError("stale update should fail");
+            } catch(OptimisticLockException expected) {}
             ItInstant absentTime=db.insertReturning(new ItInstant(null,"Null",null,0));
             check(db.find(ItInstant.class,absentTime.id()).occurredAt()==null,
                 "PostgreSQL generated nullable Instant roundtrip");
@@ -100,6 +130,31 @@ public final class PostgresIntegrationTest {
             check(db.findOne(ItUser.class,ItUser_.name.eq("missing")).isEmpty(),"findOne missing record");
             check(db.count(ItUser.class,ItUser_.name.eq("BJORM")) == 1L, "mapped count predicate");
             check(db.count(ItUser.class,null) >= 1L, "mapped total count");
+            MappedColumns mapped=db.insertReturning(new MappedColumns(null,"immutable","ignored",77,"never-persist"));
+            MappedColumns columns=db.find(MappedColumns.class,mapped.id());
+            check("immutable".equals(columns.readOnly()) && "server-default".equals(columns.serverValue()) &&
+                columns.localCounter()==0 && columns.localHint()==null,
+                "PostgreSQL transient and generated column metadata roundtrip");
+            try {db.updateBy(MappedColumns.class,Map.of("readOnly","mutated"),MappedColumns_.id.eq(mapped.id()));
+                throw new AssertionError("read-only column updated");}
+            catch(IllegalArgumentException expected) {}
+            OrdinalEvent ordinal=db.insertReturning(new OrdinalEvent(null,Status.INACTIVE,"enum ordinal"));
+            check(db.find(OrdinalEvent.class,ordinal.id()).status()==Status.INACTIVE,"PostgreSQL numeric enum roundtrip");
+            UUID bulkId=UUID.randomUUID();
+            db.batchUpsertReturning(List.of(new ItUser(bulkId,"NativeBatch",10)));
+            check(db.find(ItUser.class,bulkId).age()==10,"batchUpsertReturning inserts");
+            check(db.updateBy(ItUser.class,Map.of("age",99),ItUser_.id.eq(bulkId))==1,
+                "mapped updateBy parameters");
+            check(db.find(ItUser.class,bulkId).age()==99,"mapped updateBy values persisted");
+            db.batchDelete(List.of(new ItUser(bulkId,"NativeBatch",99)));
+            check(db.find(ItUser.class,bulkId)==null,"batchDelete removes entity");
+            UUID secondaryId=UUID.randomUUID();
+            db.insert(new ItUser(secondaryId,"deleteBy",1));
+            check(db.deleteBy(ItUser.class,ItUser_.id.eq(secondaryId))==1 &&
+                db.find(ItUser.class,secondaryId)==null,"predicate deleteBy");
+            try {db.deleteBy(ItProduct.class,ItProduct_.name.eq("anything"));
+                throw new AssertionError("versioned bulk delete accepted");}
+            catch(IllegalArgumentException expected) {}
             UUID secondId=UUID.randomUUID();
             db.insert(new ItUser(secondId,"Cursor User",20));
             UUID lower=db.select(ItUser.class).orderBy(db.primaryKeyOrder(ItUser.class,false))
@@ -212,7 +267,11 @@ public final class PostgresIntegrationTest {
                 st.execute("DROP TABLE IF EXISTS bjorm_it_order_lines");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_order_notes");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_orders");
+                st.execute("DROP SCHEMA IF EXISTS bjorm_tenant_a CASCADE");
+                st.execute("DROP SCHEMA IF EXISTS bjorm_tenant_b CASCADE");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_users");
+                st.execute("DROP TABLE IF EXISTS bjorm_it_columns");
+                st.execute("DROP TABLE IF EXISTS bjorm_it_ordinal");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_products");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_instants");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_documents");

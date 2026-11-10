@@ -15,7 +15,11 @@ public final class DialectSmokeTest {
         DataSource source(){
             return (DataSource)proxy(DataSource.class,(o,m,a)->{
                 if(!m.getName().equals("getConnection"))throw new UnsupportedOperationException(m.getName());
+                final boolean[] autoCommit={true};
                 return proxy(Connection.class,(c,cm,ca)->switch(cm.getName()){
+                    case "getAutoCommit" -> autoCommit[0];
+                    case "setAutoCommit" -> {autoCommit[0]=(boolean)ca[0];yield null;}
+                    case "commit","rollback" -> null;
                     case "prepareStatement" -> {
                         sql=(String)ca[0];binds.clear();
                         yield proxy(PreparedStatement.class,(ps,pm,pa)->switch(pm.getName()){

@@ -51,6 +51,26 @@ public interface Operations {
     <T> void scan(String sql, StatementBinder binder, RowMapper<T> mapper, java.util.function.Consumer<T> consumer);
     <T> void batchInsert(List<T> entities);
     <T> void batchUpdate(List<T> entities);
+    /** Delete graphs in a single transaction, checking optimistic versions per entity. */
+    <T> void batchDelete(List<T> entities);
+    /** Atomic batch UPSERT; returns generated IDs and reloaded versioned entities. */
+    <T> List<T> batchUpsertReturning(List<T> entities);
+    /** Atomic per-row updates with reloaded versions; unlike JDBC executeBatch, returns database state. */
+    <T> List<T> batchUpdateReturning(List<T> entities);
+    /** Bulk operation using only compile-time mapped property identifiers. Requires a predicate. */
+    <T> int updateBy(Class<T> type, Map<String,?> changes, SqlPredicate predicate);
+    /** Bulk delete; deliberately disallowed for mapped child graphs or versioned entities. */
+    <T> int deleteBy(Class<T> type, SqlPredicate predicate);
+    /** Update and re-fetch the committed shape (including incremented @Version). */
+    <T> T updateReturning(T entity);
+    default <T> void batchUpsert(List<T> entities) {
+        Objects.requireNonNull(entities);
+        for (T entity : entities) {
+            Objects.requireNonNull(entity);
+            // Always use batchUpsertReturning when newly generated IDs must be observed.
+        }
+        batchUpsertReturning(entities);
+    }
     default <T> List<T> list(Class<T> type) { return list(type, null); }
     default <T> Select<T> select(Class<T> type) { return new Select<>(this, type); }
     default <T> Optional<T> findOne(Class<T> type, SqlPredicate where) {

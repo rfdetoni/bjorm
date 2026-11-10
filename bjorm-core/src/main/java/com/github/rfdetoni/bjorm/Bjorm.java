@@ -12,6 +12,20 @@ public final class Bjorm implements Operations {
     private final BjormOptions options;
     private final SqlDialect dialect;
     private final Map<Class<?>, EntityMapper<?>> mappers;
+    private final boolean tenantRequired;
+    private final String tenantSchema;
+    private static final java.util.regex.Pattern TENANT_IDENTIFIER =
+        java.util.regex.Pattern.compile("[A-Za-z_][A-Za-z_0-9]{0,62}");
+
+    /** Immutable tenant-bound view. Never share an unscoped connection in tenant-required mode. */
+    private Bjorm(Bjorm source, String tenantSchema) {
+        this.dataSource=source.dataSource;
+        this.options=source.options;
+        this.dialect=source.dialect;
+        this.mappers=source.mappers;
+        this.tenantRequired=true;
+        this.tenantSchema=tenantSchema;
+    }
     private Bjorm(DataSource dataSource,BjormOptions options,SqlDialect dialect,EntityMapper<?>... registered) {
         this.dataSource = Objects.requireNonNull(dataSource, "dataSource");
         this.options = Objects.requireNonNull(options, "options");
@@ -20,6 +34,8 @@ public final class Bjorm implements Operations {
         for(EntityMapper<?> m : registered) if(byType.putIfAbsent(m.type(), m)!=null)
             throw new IllegalArgumentException("Duplicate mapper: " + m.type());
         mappers = Map.copyOf(byType);
+        tenantRequired=false;
+        tenantSchema=null;
     }
     /** Discover compile-time generated mappers once at startup via Java ServiceLoader. */
     public static Bjorm open(DataSource dataSource) {
@@ -44,6 +60,25 @@ public final class Bjorm implements Operations {
             return new Bjorm(source,options,dialect,discovered.toArray(EntityMapper<?>[]::new));
         }
         return new Bjorm(source,options,dialect,mappers);
+    }
+    /** A root BJORM instance that refuses all JDBC calls until explicitly scoped to a tenant. */
+    public static Bjorm tenantRequired(DataSource source, BjormOptions options,
+                                       SqlDialect dialect, EntityMapper<?>... registered) {
+        return new Bjorm(open(source,options,dialect,registered),null);
+    }
+    public static Bjorm tenantRequired(DataSource source) {
+        return new Bjorm(open(source),null);
+    }
+    /** Tenant schema must come from an authorized server-side tenant registry, not request input. */
+    public Bjorm forTenant(String schema) {
+        if (!tenantRequired) throw new IllegalStateException("forTenant requires a tenantRequired BJORM root");
+        Objects.requireNonNull(schema,"schema");
+        if (!TENANT_IDENTIFIER.matcher(schema).matches() ||
+            schema.toLowerCase(Locale.ROOT).startsWith("pg_") || Set.of("public","information_schema","mysql",
+                "performance_schema","sys","pg_catalog").contains(schema.toLowerCase(Locale.ROOT)))
+            throw new IllegalArgumentException("Unsafe tenant schema identifier");
+        if(tenantSchema!=null)throw new IllegalStateException("Cannot rebind an already-scoped BJORM instance");
+        return new Bjorm(this,schema);
     }
     public SqlDialect dialect(){return dialect;}
     private PreparedStatement prepare(Connection c,String sql) throws SQLException {
@@ -79,9 +114,56 @@ public final class Bjorm implements Operations {
         return (EntityMapper<T>)mapper;
     }
     @FunctionalInterface private interface JdbcWork<R> {R run(Connection c) throws SQLException;}
+    private void requireTenant() {
+        if(tenantRequired && tenantSchema==null)
+            throw new IllegalStateException("Tenant required: call forTenant(authorizedSchema) before a JDBC operation");
+    }
+    private boolean postgresTenant() {
+        return tenantRequired && "postgresql".equals(dialect.name());
+    }
+    private boolean mysqlTenant() {
+        return tenantRequired && "mysql".equals(dialect.name());
+    }
+    /** SET LOCAL is transaction-scoped; omitting public prevents accidental cross-schema fallback. */
+    private void applyPostgresTenant(Connection c) throws SQLException {
+        try (Statement statement=c.createStatement()) {
+            statement.execute("SET LOCAL search_path TO pg_catalog, \"" + tenantSchema + "\", pg_temp");
+        }
+    }
     private <R> R withConnection(JdbcWork<R> work) {
-        try(Connection c=dataSource.getConnection()) {return work.run(c);}
-        catch(SQLException e) {throw new BjormException("JDBC operation failed",e);}
+        requireTenant();
+        try(Connection c=dataSource.getConnection()) {
+            if(!tenantRequired)return work.run(c);
+            if(postgresTenant()) {
+                boolean ownTransaction=c.getAutoCommit();
+                if(ownTransaction)c.setAutoCommit(false);
+                try {
+                    applyPostgresTenant(c);
+                    R result=work.run(c);
+                    if(ownTransaction)c.commit();
+                    return result;
+                } catch(SQLException|RuntimeException|Error e) {
+                    if(ownTransaction)try {c.rollback();}catch(SQLException ex){e.addSuppressed(ex);}
+                    throw e;
+                } finally {
+                    if(ownTransaction)c.setAutoCommit(true);
+                }
+            }
+            if(mysqlTenant()) {
+                String previous=c.getCatalog();
+                if(previous==null || previous.isBlank())
+                    throw new IllegalStateException("Cannot restore MySQL catalog: connection has no original catalog");
+                try {
+                    c.setCatalog(tenantSchema);
+                    if(!tenantSchema.equals(c.getCatalog()))
+                        throw new IllegalStateException("JDBC driver did not activate the tenant catalog");
+                    return work.run(c);
+                } finally {
+                    c.setCatalog(previous);
+                }
+            }
+            throw new UnsupportedOperationException("Tenant isolation not supported by dialect: "+dialect.name());
+        } catch(SQLException e) {throw new BjormException("JDBC operation failed",e);}
     }
     public <T> void insert(T entity) {
         requireReturnForImmutable(entity);
@@ -111,8 +193,9 @@ public final class Bjorm implements Operations {
     }
     public <T> T upsertReturning(T entity) {
         Objects.requireNonNull(entity);
-        if(mapper(entity.getClass()).children().isEmpty()) return withConnection(c->{
-            T prepared=this.<T>mapper(entity.getClass()).materializeInsert(entity);
+        EntityMapper<T> m=mapper(entity.getClass());
+        if(m.children().isEmpty() && !m.optimisticLocking()) return withConnection(c->{
+            T prepared=m.materializeInsert(entity);
             upsertPrepared(c,prepared);
             return prepared;
         });
@@ -226,18 +309,41 @@ public final class Bjorm implements Operations {
     public <T> void batchInsert(List<T> values) {tx(tx->tx.batchInsert(values));}
     public <T> List<T> batchInsertReturning(List<T> values) {return txResult(tx->tx.batchInsertReturning(values));}
     public <T> void batchUpdate(List<T> values) {tx(tx->tx.batchUpdate(values));}
+    public <T> void batchDelete(List<T> values) {tx(tx->tx.batchDelete(values));}
+    public <T> List<T> batchUpsertReturning(List<T> values) {return txResult(tx->tx.batchUpsertReturning(values));}
+    public <T> List<T> batchUpdateReturning(List<T> values) {return txResult(tx->tx.batchUpdateReturning(values));}
+    public <T> T updateReturning(T entity) {return txResult(tx->tx.updateReturning(entity));}
+    public <T> int updateBy(Class<T> type,Map<String,?> changes,SqlPredicate predicate) {
+        return txResult(tx->tx.updateBy(type,changes,predicate));
+    }
+    public <T> int deleteBy(Class<T> type,SqlPredicate predicate) {
+        return txResult(tx->tx.deleteBy(type,predicate));
+    }
 
     /** Explicit transaction. Use TransactionAwareDataSourceProxy for framework-managed calls, not nested db.tx. */
     public void tx(Consumer<Transaction> work) {txResult(tx->{work.accept(tx);return null;});}
     public <R> R txResult(Function<Transaction,R> work) {
         Objects.requireNonNull(work);
+        requireTenant();
         try(Connection c=dataSource.getConnection()) {
+            if(tenantRequired && !postgresTenant() && !mysqlTenant())
+                throw new UnsupportedOperationException("Tenant isolation not supported by dialect: "+dialect.name());
+            String previousCatalog=mysqlTenant()?c.getCatalog():null;
+            if(mysqlTenant() && (previousCatalog==null || previousCatalog.isBlank()))
+                throw new IllegalStateException("Cannot restore MySQL catalog: connection has no original catalog");
+            try {
+                if(mysqlTenant()) {
+                    c.setCatalog(tenantSchema);
+                    if(!tenantSchema.equals(c.getCatalog()))
+                        throw new IllegalStateException("JDBC driver did not activate the tenant catalog");
+                }
             boolean previous=c.getAutoCommit();
             if(!previous) throw new IllegalStateException("Connection already transactional; do not nest Bjorm.tx in another transaction");
             c.setAutoCommit(false);
             Transaction tx=new Transaction(c);
             Throwable failure=null;
             try {
+                if(postgresTenant())applyPostgresTenant(c);
                 R result=work.apply(tx);
                 c.commit();
                 return result;
@@ -255,6 +361,9 @@ public final class Bjorm implements Operations {
                     if(failure!=null)failure.addSuppressed(restore);
                     else throw new BjormException("Could not restore connection state",restore);
                 }
+            }
+            } finally {
+                if(mysqlTenant())c.setCatalog(previousCatalog);
             }
         } catch(SQLException e) {throw new BjormException("Transaction failed",e);}
     }
@@ -337,6 +446,46 @@ public final class Bjorm implements Operations {
             }
         }
         return delete(c,entity);
+    }
+    /** Strong guard against accidental whole-table writes and bypassed optimistic locking. */
+    private <T> void requireBulkSafe(Class<T> type,SqlPredicate predicate) {
+        Objects.requireNonNull(predicate,"A typed WHERE predicate is required for bulk mutation");
+        if(predicate.sql().isBlank())throw new IllegalArgumentException("Empty WHERE predicate");
+        EntityMapper<T> m=mapper(type);
+        if(m.optimisticLocking())
+            throw new IllegalArgumentException("Bulk mutation bypasses @Version; use batchUpdate/batchDelete");
+        if(!m.children().isEmpty())
+            throw new IllegalArgumentException("Bulk mutation bypasses entity graph semantics; use batch operations");
+    }
+    private <T> int updateBy(Connection c,Class<T> type,Map<String,?> changes,SqlPredicate predicate) throws SQLException {
+        requireBulkSafe(type,predicate);
+        Objects.requireNonNull(changes,"changes");
+        if(changes.isEmpty())throw new IllegalArgumentException("At least one changed property required");
+        EntityMapper<T> m=mapper(type);
+        StringJoiner assignments=new StringJoiner(", ");
+        List<Object> values=new ArrayList<>(changes.size());
+        for(var entry:changes.entrySet()) {
+            String property=Objects.requireNonNull(entry.getKey(),"property");
+            if(property.equals(m.idProperty())) throw new IllegalArgumentException("Bulk mutation cannot alter @Id");
+            String column=m.columnFor(property); // generated mapping; rejects unknown input
+            assignments.add(column+" = "+m.bulkParameterSql(property,dialect));
+            values.add(m.bulkParameterValue(property,entry.getValue()));
+        }
+        String sql="UPDATE "+m.table()+" SET "+assignments+" WHERE "+predicate.sql();
+        try(PreparedStatement ps=prepare(c,sql)) {
+            int i=1;
+            for(Object value:values)dialect.bindValue(ps,i++,value);
+            for(Object value:predicate.params())dialect.bindValue(ps,i++,value);
+            return ps.executeUpdate();
+        }
+    }
+    private <T> int deleteBy(Connection c,Class<T> type,SqlPredicate predicate) throws SQLException {
+        requireBulkSafe(type,predicate);
+        EntityMapper<T> m=mapper(type);
+        try(PreparedStatement ps=prepare(c,"DELETE FROM "+m.table()+" WHERE "+predicate.sql())) {
+            bindPredicate(ps,predicate);
+            return ps.executeUpdate();
+        }
     }
     private <T> int update(Connection c,T entity) throws SQLException {
         EntityMapper<T> m=mapper(entity.getClass());
@@ -642,7 +791,7 @@ public final class Bjorm implements Operations {
                 if(updating)m.bindUpdate(ps,entity,dialect);
                 else { requireReturnForImmutable(entity); m.bindInsert(ps,m.materializeInsert(entity),dialect); }
                 ps.addBatch();
-                if(++pending==256){validateBatch(ps.executeBatch(),m,updating);pending=0;}
+                if(++pending==options.batchSize()){validateBatch(ps.executeBatch(),m,updating);pending=0;}
             }
             if(pending>0)validateBatch(ps.executeBatch(),m,updating);
         }
@@ -666,7 +815,12 @@ public final class Bjorm implements Operations {
         }
         public <T> void insert(T value) {requireReturnForImmutable(value);insertReturning(value);}
         public <T> T insertReturning(T value) {return use(c->Bjorm.this.persistGraph(c,value,false,new IdentityHashMap<>()));}
-        public <T> T upsertReturning(T value) {return use(c->Bjorm.this.persistGraph(c,value,true,new IdentityHashMap<>()));}
+        public <T> T upsertReturning(T value) {return use(c->{
+            T persisted=Bjorm.this.persistGraph(c,value,true,new IdentityHashMap<>());
+            EntityMapper<T> mapper=Bjorm.this.mapper(value.getClass());
+            return mapper.optimisticLocking()
+                ?Bjorm.this.find(c,mapper.type(),mapper.id(persisted)):persisted;
+        });}
         public <T> int upsert(T value) {requireReturnForImmutable(value);return use(c->{
             EntityMapper<T> mapper=Bjorm.this.mapper(value.getClass());
             if(mapper.children().isEmpty()) return Bjorm.this.upsert(c,value);
@@ -674,6 +828,19 @@ public final class Bjorm implements Operations {
             return 1;
         });}
         public <T> int update(T value) {return use(c->Bjorm.this.update(c,value));}
+        public <T> T updateReturning(T value) {return use(c->{
+            Objects.requireNonNull(value);
+            EntityMapper<T> mapper=Bjorm.this.mapper(value.getClass());
+            if(Bjorm.this.update(c,value)==0)
+                return null;
+            return Bjorm.this.find(c,mapper.type(),mapper.id(value));
+        });}
+        public <T> int updateBy(Class<T> type,Map<String,?> changes,SqlPredicate predicate) {
+            return use(c->Bjorm.this.updateBy(c,type,changes,predicate));
+        }
+        public <T> int deleteBy(Class<T> type,SqlPredicate predicate) {
+            return use(c->Bjorm.this.deleteBy(c,type,predicate));
+        }
         public <T> int delete(T value) {return use(c->Bjorm.this.removeGraph(c,value,new HashSet<>()));}
         public <T> T find(Class<T> type,Object id) {
             Objects.requireNonNull(id,"id required for find()");
@@ -734,5 +901,48 @@ public final class Bjorm implements Operations {
             return saved;
         });}
         public <T> void batchUpdate(List<T> list) {use(c->{Bjorm.this.batch(c,list,true);return null;});}
+        public <T> List<T> batchUpdateReturning(List<T> values) {return use(c->{
+            Objects.requireNonNull(values);
+            List<T> refreshed=new ArrayList<>(values.size());
+            Class<?> expected=null;
+            for(T value:values) {
+                Objects.requireNonNull(value,"batchUpdate entity");
+                if(expected==null)expected=value.getClass();
+                else if(value.getClass()!=expected)throw new IllegalArgumentException("Batch requires one entity type");
+                EntityMapper<T> mapper=Bjorm.this.mapper(value.getClass());
+                if(Bjorm.this.update(c,value)==0)
+                    throw new IllegalStateException("Batch update affected no row: "+mapper.type().getName());
+                T current=Bjorm.this.find(c,mapper.type(),mapper.id(value));
+                if(current==null)throw new IllegalStateException("Updated entity cannot be reloaded");
+                refreshed.add(current);
+            }
+            return List.copyOf(refreshed);
+        });}
+        public <T> void batchDelete(List<T> values) {use(c->{
+            Objects.requireNonNull(values);
+            Class<?> expected=null;
+            for(T value:values) {
+                Objects.requireNonNull(value,"batchDelete entity");
+                if(expected==null)expected=value.getClass();
+                else if(value.getClass()!=expected)throw new IllegalArgumentException("Batch requires one entity type");
+                Bjorm.this.removeGraph(c,value,new HashSet<>());
+            }
+            return null;
+        });}
+        public <T> List<T> batchUpsertReturning(List<T> values) {return use(c->{
+            Objects.requireNonNull(values);
+            List<T> persisted=new ArrayList<>(values.size());
+            Class<?> expected=null;
+            for(T value:values) {
+                Objects.requireNonNull(value,"batchUpsert entity");
+                if(expected==null)expected=value.getClass();
+                else if(value.getClass()!=expected)throw new IllegalArgumentException("Batch requires one entity type");
+                T prepared=Bjorm.this.persistGraph(c,value,true,new IdentityHashMap<>());
+                EntityMapper<T> mapper=Bjorm.this.mapper(value.getClass());
+                persisted.add(mapper.optimisticLocking()
+                    ?Bjorm.this.find(c,mapper.type(),mapper.id(prepared)):prepared);
+            }
+            return List.copyOf(persisted);
+        });}
     }
 }
