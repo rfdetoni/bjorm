@@ -68,5 +68,10 @@ public interface EntityMapper<T> extends RowMapper<T> {
         columnFor(property);
         return "?";
     }
+    /** Encode generated custom JSON fields before binding through a safe prepared statement. */
+    default Object bulkParameterValue(String property,Object value) {
+        columnFor(property);
+        return value;
+    }
     default String table() { return ""; }
 }
