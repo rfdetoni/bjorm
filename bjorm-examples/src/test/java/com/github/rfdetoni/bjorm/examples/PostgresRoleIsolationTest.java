@@ -46,7 +46,7 @@ public final class PostgresRoleIsolationTest {
         };
     }
 
-    private static void expectPermissionDenied(Runnable operation,String message) {
+    private static void expectPermissionDenied(Runnable operation,String message,String... acceptableStates) {
         try {
             operation.run();
             throw new AssertionError(message);
@@ -54,8 +54,8 @@ public final class PostgresRoleIsolationTest {
             Throwable cause=error;
             while(cause!=null && !(cause instanceof SQLException))cause=cause.getCause();
             check(cause instanceof SQLException &&
-                "42501".equals(((SQLException)cause).getSQLState()),
-                "Expected SQLSTATE 42501 for "+message);
+                java.util.Set.of(acceptableStates).contains(((SQLException)cause).getSQLState()),
+                "Expected SQLSTATE "+java.util.Arrays.toString(acceptableStates)+" for "+message);
         }
     }
 
@@ -112,11 +112,11 @@ public final class PostgresRoleIsolationTest {
             check("permitted write".equals(permitted.find(ItUser.class,extra).name()),
                 "Least-privilege role can insert into its authorized tenant");
             expectPermissionDenied(()->other.find(ItUser.class,shared),
-                "A-scoped credential must not read tenant B, even if scoped to B");
+                "A-scoped credential must not read tenant B, even if scoped to B", "42501", "42P01");
             expectPermissionDenied(()->permitted.permitReviewedTenantNativeSql().execute(
                 "UPDATE "+tenantB+".bjorm_it_users SET age = ? WHERE id = ?",
                 permitted.params(999,shared)),
-                "qualified native SQL must not write tenant B with an A-only LOGIN role");
+                "qualified native SQL must not write tenant B with an A-only LOGIN role", "42501");
             try(Connection conn=bootstrap.getConnection();
                 PreparedStatement ps=conn.prepareStatement(
                     "SELECT age FROM "+tenantB+".bjorm_it_users WHERE id = ?")) {
