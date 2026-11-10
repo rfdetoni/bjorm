@@ -69,6 +69,8 @@ public interface EntityMapper<T> extends RowMapper<T> {
     default boolean generatedId() { return false; }
     default void acceptGeneratedId(ResultSet keys,T entity) throws SQLException {}
     default boolean optimisticLocking() { return false; }
+    /** UPSERT must re-read DB-generated/immutable columns instead of returning stale caller values. */
+    default boolean upsertNeedsReload() { return optimisticLocking(); }
     default void bindDelete(PreparedStatement ps, T entity) throws SQLException { bindId(ps, 1, id(entity)); }
     /** Allow generator to emit vendor JSON placeholder casts, no reflection. */
     default String bulkParameterSql(String property,SqlDialect dialect) {
