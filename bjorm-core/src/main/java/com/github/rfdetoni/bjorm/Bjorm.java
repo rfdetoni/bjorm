@@ -12,6 +12,20 @@ public final class Bjorm implements Operations {
     private final BjormOptions options;
     private final SqlDialect dialect;
     private final Map<Class<?>, EntityMapper<?>> mappers;
+    private final boolean tenantRequired;
+    private final String tenantSchema;
+    private static final java.util.regex.Pattern TENANT_IDENTIFIER =
+        java.util.regex.Pattern.compile("[A-Za-z_][A-Za-z_0-9]{0,62}");
+
+    /** Immutable tenant-bound view. Never share an unscoped connection in tenant-required mode. */
+    private Bjorm(Bjorm source, String tenantSchema) {
+        this.dataSource=source.dataSource;
+        this.options=source.options;
+        this.dialect=source.dialect;
+        this.mappers=source.mappers;
+        this.tenantRequired=true;
+        this.tenantSchema=tenantSchema;
+    }
     private Bjorm(DataSource dataSource,BjormOptions options,SqlDialect dialect,EntityMapper<?>... registered) {
         this.dataSource = Objects.requireNonNull(dataSource, "dataSource");
         this.options = Objects.requireNonNull(options, "options");
@@ -20,6 +34,8 @@ public final class Bjorm implements Operations {
         for(EntityMapper<?> m : registered) if(byType.putIfAbsent(m.type(), m)!=null)
             throw new IllegalArgumentException("Duplicate mapper: " + m.type());
         mappers = Map.copyOf(byType);
+        tenantRequired=false;
+        tenantSchema=null;
     }
     /** Discover compile-time generated mappers once at startup via Java ServiceLoader. */
     public static Bjorm open(DataSource dataSource) {
@@ -44,6 +60,24 @@ public final class Bjorm implements Operations {
             return new Bjorm(source,options,dialect,discovered.toArray(EntityMapper<?>[]::new));
         }
         return new Bjorm(source,options,dialect,mappers);
+    }
+    /** A root BJORM instance that refuses all JDBC calls until explicitly scoped to a tenant. */
+    public static Bjorm tenantRequired(DataSource source, BjormOptions options,
+                                       SqlDialect dialect, EntityMapper<?>... registered) {
+        return new Bjorm(open(source,options,dialect,registered),null);
+    }
+    public static Bjorm tenantRequired(DataSource source) {
+        return new Bjorm(open(source),null);
+    }
+    /** Tenant schema must come from an authorized server-side tenant registry, not request input. */
+    public Bjorm forTenant(String schema) {
+        if (!tenantRequired) throw new IllegalStateException("forTenant requires a tenantRequired BJORM root");
+        Objects.requireNonNull(schema,"schema");
+        if (!TENANT_IDENTIFIER.matcher(schema).matches() ||
+            schema.startsWith("pg_") || Set.of("public","information_schema","mysql",
+                "performance_schema","sys","pg_catalog").contains(schema.toLowerCase(Locale.ROOT)))
+            throw new IllegalArgumentException("Unsafe tenant schema identifier");
+        return new Bjorm(this,schema);
     }
     public SqlDialect dialect(){return dialect;}
     private PreparedStatement prepare(Connection c,String sql) throws SQLException {
@@ -79,9 +113,56 @@ public final class Bjorm implements Operations {
         return (EntityMapper<T>)mapper;
     }
     @FunctionalInterface private interface JdbcWork<R> {R run(Connection c) throws SQLException;}
+    private void requireTenant() {
+        if(tenantRequired && tenantSchema==null)
+            throw new IllegalStateException("Tenant required: call forTenant(authorizedSchema) before a JDBC operation");
+    }
+    private boolean postgresTenant() {
+        return tenantRequired && "postgresql".equals(dialect.name());
+    }
+    private boolean mysqlTenant() {
+        return tenantRequired && "mysql".equals(dialect.name());
+    }
+    /** SET LOCAL is transaction-scoped; omitting public prevents accidental cross-schema fallback. */
+    private void applyPostgresTenant(Connection c) throws SQLException {
+        try (Statement statement=c.createStatement()) {
+            statement.execute("SET LOCAL search_path TO \"" + tenantSchema + "\", pg_catalog");
+        }
+    }
     private <R> R withConnection(JdbcWork<R> work) {
-        try(Connection c=dataSource.getConnection()) {return work.run(c);}
-        catch(SQLException e) {throw new BjormException("JDBC operation failed",e);}
+        requireTenant();
+        try(Connection c=dataSource.getConnection()) {
+            if(!tenantRequired)return work.run(c);
+            if(postgresTenant()) {
+                boolean ownTransaction=c.getAutoCommit();
+                if(ownTransaction)c.setAutoCommit(false);
+                try {
+                    applyPostgresTenant(c);
+                    R result=work.run(c);
+                    if(ownTransaction)c.commit();
+                    return result;
+                } catch(SQLException|RuntimeException|Error e) {
+                    if(ownTransaction)try {c.rollback();}catch(SQLException ex){e.addSuppressed(ex);}
+                    throw e;
+                } finally {
+                    if(ownTransaction)c.setAutoCommit(true);
+                }
+            }
+            if(mysqlTenant()) {
+                String previous=c.getCatalog();
+                if(previous==null || previous.isBlank())
+                    throw new IllegalStateException("Cannot restore MySQL catalog: connection has no original catalog");
+                try {
+                    c.setCatalog(tenantSchema);
+                    if(!tenantSchema.equals(c.getCatalog()))
+                        throw new IllegalStateException("JDBC driver did not activate the tenant catalog");
+                    return work.run(c);
+                } finally {
+                    c.setCatalog(previous);
+                }
+            }
+            throw new UnsupportedOperationException("Tenant isolation not supported by dialect: "+dialect.name());
+        } catch(SQLException e) {throw new BjormException("JDBC operation failed",e);}
     }
     public <T> void insert(T entity) {
         requireReturnForImmutable(entity);
@@ -231,10 +312,25 @@ public final class Bjorm implements Operations {
     public void tx(Consumer<Transaction> work) {txResult(tx->{work.accept(tx);return null;});}
     public <R> R txResult(Function<Transaction,R> work) {
         Objects.requireNonNull(work);
+        requireTenant();
         try(Connection c=dataSource.getConnection()) {
+            if(tenantRequired && !postgresTenant() && !mysqlTenant())
+                throw new UnsupportedOperationException("Tenant isolation not supported by dialect: "+dialect.name());
+            String previousCatalog=mysqlTenant()?c.getCatalog():null;
+            if(mysqlTenant() && (previousCatalog==null || previousCatalog.isBlank()))
+                throw new IllegalStateException("Cannot restore MySQL catalog: connection has no original catalog");
+            if(mysqlTenant()) {
+                c.setCatalog(tenantSchema);
+                if(!tenantSchema.equals(c.getCatalog())) {
+                    c.setCatalog(previousCatalog);
+                    throw new IllegalStateException("JDBC driver did not activate the tenant catalog");
+                }
+            }
+            try {
             boolean previous=c.getAutoCommit();
             if(!previous) throw new IllegalStateException("Connection already transactional; do not nest Bjorm.tx in another transaction");
             c.setAutoCommit(false);
+            if(postgresTenant())applyPostgresTenant(c);
             Transaction tx=new Transaction(c);
             Throwable failure=null;
             try {
@@ -255,6 +351,9 @@ public final class Bjorm implements Operations {
                     if(failure!=null)failure.addSuppressed(restore);
                     else throw new BjormException("Could not restore connection state",restore);
                 }
+            }
+            } finally {
+                if(mysqlTenant())c.setCatalog(previousCatalog);
             }
         } catch(SQLException e) {throw new BjormException("Transaction failed",e);}
     }
