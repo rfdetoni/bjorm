@@ -263,6 +263,19 @@ public final class Bjorm implements Operations {
         if(mapper(entity.getClass()).children().isEmpty()) return withConnection(c->insert(c,entity));
         return operationTxResult(tx->tx.insertReturning(entity));
     }
+    private <T> T detachedWriteCopy(T entity) {
+        Objects.requireNonNull(entity,"entity");
+        EntityMapper<T> mapper=mapper(entity.getClass());
+        if(!mapper.children().isEmpty())
+            throw new UnsupportedOperationException("Detached writes do not support child graphs; immutable/copy-on-write graph persistence is required");
+        return mapper.copyForWrite(entity);
+    }
+    public <T> T insertDetached(T entity) {
+        return insertReturning(detachedWriteCopy(entity));
+    }
+    public <T> T upsertDetached(T entity) {
+        return upsertReturning(detachedWriteCopy(entity));
+    }
     public <T> int update(T entity) {Objects.requireNonNull(entity);return withConnection(c->update(c,entity));}
     public <T> int delete(T entity) {
         Objects.requireNonNull(entity);
@@ -1167,6 +1180,12 @@ public final class Bjorm implements Operations {
             Bjorm.this.persistGraph(c,value,true,new IdentityHashMap<>());
             return 1;
         });}
+        public <T> T insertDetached(T value) {
+            return insertReturning(Bjorm.this.detachedWriteCopy(value));
+        }
+        public <T> T upsertDetached(T value) {
+            return upsertReturning(Bjorm.this.detachedWriteCopy(value));
+        }
         public <T> int update(T value) {return useWrite(c->Bjorm.this.update(c,value));}
         public <T> T updateReturning(T value) {return useWrite(c->{
             Objects.requireNonNull(value);
