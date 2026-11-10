@@ -741,6 +741,7 @@ public final class Bjorm implements Operations {
                .append(" = p").append(index).append('.')
                .append(target.columnFor(target.idProperty()));
         }
+        boolean firstOrder=true;
         for(SqlOrder order:query.sorting()) {
             String field=order.column();
             int separator=field.lastIndexOf('.');
@@ -748,8 +749,9 @@ public final class Bjorm implements Operations {
                 throw new IllegalArgumentException("@ManyToOne ORDER BY supports only root columns: "+field);
             String column=separator<0?field:field.substring(separator+1);
             root.columnIndex(column); // generated validation, never interpolate arbitrary values
-            sql.append(sql.indexOf(" ORDER BY ")<0?" ORDER BY ":", ")
+            sql.append(firstOrder?" ORDER BY ":", ")
                .append("r.").append(column).append(order.descending()?" DESC":" ASC");
+            firstOrder=false;
         }
         try(PreparedStatement ps=prepareRead(c,sql.toString())) {
             if(bounded)boundRows(ps);
