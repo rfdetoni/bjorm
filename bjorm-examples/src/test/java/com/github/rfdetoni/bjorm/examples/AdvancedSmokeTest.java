@@ -323,6 +323,24 @@ public final class AdvancedSmokeTest {
         check(spy.last().sql().equals("SELECT id, name FROM products"),"record projection selects exactly two columns");
         check(db.select(Product.class).fields("id","name").first(ProductSummary_BjormRowMapper.INSTANCE).isPresent(),"first typed record projection");
         check(db.select(Product.class).where(Product_.name.eq("Pencil")).first().isPresent(),"DSL first entity");
+        int beforeCache=spy.calls.size();
+        db.tx(tx -> {
+            Product cached=tx.find(Product.class,spy.id);
+            Product same=tx.find(Product.class,spy.id);
+            check(cached==same,"same transaction find returns same Java object");
+            check(spy.calls.size()==beforeCache+1,"second find uses no SQL");
+            tx.update(cached);
+            Product refreshed=tx.find(Product.class,spy.id);
+            check(refreshed!=cached,"write invalidates transaction first-level cache");
+            check(spy.calls.size()==beforeCache+3,"UPDATE and reload execute one SQL each");
+            tx.execute("UPDATE products SET name=? WHERE id=?",tx.params("native",spy.id));
+            Product afterNative=tx.find(Product.class,spy.id);
+            check(afterNative!=refreshed,"opaque native SQL invalidates cached objects");
+        });
+        db.tx(tx -> {
+            Product inNewTx=tx.find(Product.class,spy.id);
+            check(inNewTx!=null,"new transaction loads entity again");
+        });
         int startConns=spy.connections.get();
         db.tx(tx -> {
             check(tx.count(Product.class,Product_.name.eq("Pencil"))==3L,"count stays in transaction");

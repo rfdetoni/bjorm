@@ -357,6 +357,7 @@ public final class Bjorm implements Operations {
                 throw new BjormException("Commit failed",e);
             } finally {
                 tx.active=false;
+                tx.identityMap.clear();
                 try {c.setAutoCommit(previous);} catch(SQLException restore) {
                     if(failure!=null)failure.addSuppressed(restore);
                     else throw new BjormException("Could not restore connection state",restore);
@@ -815,28 +816,33 @@ public final class Bjorm implements Operations {
         private final Connection c;
         private final Thread owner=Thread.currentThread();
         private volatile boolean active=true;
+        /** Per transaction and therefore per Bjorm tenant context; never shared between requests. */
+        private final Map<Class<?>,Map<Object,Object>> identityMap=new HashMap<>();
         private Transaction(Connection c) {this.c=c;}
         public SqlDialect dialect(){return Bjorm.this.dialect;}
         private <T> T use(JdbcWork<T> work) {
             if(!active||owner!=Thread.currentThread())throw new IllegalStateException("Transaction no longer active or accessed from a different thread");
             try{return work.run(c);}catch(SQLException e){throw new BjormException("Transaction JDBC operation failed",e);}
         }
+        private <T> T useWrite(JdbcWork<T> work) {
+            return use(c->{identityMap.clear();return work.run(c);});
+        }
         public <T> void insert(T value) {requireReturnForImmutable(value);insertReturning(value);}
-        public <T> T insertReturning(T value) {return use(c->Bjorm.this.persistGraph(c,value,false,new IdentityHashMap<>()));}
-        public <T> T upsertReturning(T value) {return use(c->{
+        public <T> T insertReturning(T value) {return useWrite(c->Bjorm.this.persistGraph(c,value,false,new IdentityHashMap<>()));}
+        public <T> T upsertReturning(T value) {return useWrite(c->{
             T persisted=Bjorm.this.persistGraph(c,value,true,new IdentityHashMap<>());
             EntityMapper<T> mapper=Bjorm.this.mapper(value.getClass());
             return mapper.optimisticLocking() || mapper.upsertNeedsReload()
                 ?Bjorm.this.find(c,mapper.type(),mapper.id(persisted)):persisted;
         });}
-        public <T> int upsert(T value) {requireReturnForImmutable(value);return use(c->{
+        public <T> int upsert(T value) {requireReturnForImmutable(value);return useWrite(c->{
             EntityMapper<T> mapper=Bjorm.this.mapper(value.getClass());
             if(mapper.children().isEmpty()) return Bjorm.this.upsert(c,value);
             Bjorm.this.persistGraph(c,value,true,new IdentityHashMap<>());
             return 1;
         });}
-        public <T> int update(T value) {return use(c->Bjorm.this.update(c,value));}
-        public <T> T updateReturning(T value) {return use(c->{
+        public <T> int update(T value) {return useWrite(c->Bjorm.this.update(c,value));}
+        public <T> T updateReturning(T value) {return useWrite(c->{
             Objects.requireNonNull(value);
             EntityMapper<T> mapper=Bjorm.this.mapper(value.getClass());
             if(Bjorm.this.update(c,value)==0)
@@ -844,21 +850,29 @@ public final class Bjorm implements Operations {
             return Bjorm.this.find(c,mapper.type(),mapper.id(value));
         });}
         public <T> int updateBy(Class<T> type,Map<String,?> changes,SqlPredicate predicate) {
-            return use(c->Bjorm.this.updateBy(c,type,changes,predicate));
+            return useWrite(c->Bjorm.this.updateBy(c,type,changes,predicate));
         }
         public <T> int deleteBy(Class<T> type,SqlPredicate predicate) {
-            return use(c->Bjorm.this.deleteBy(c,type,predicate));
+            return useWrite(c->Bjorm.this.deleteBy(c,type,predicate));
         }
-        public <T> int delete(T value) {return use(c->Bjorm.this.removeGraph(c,value,new HashSet<>()));}
+        public <T> int delete(T value) {return useWrite(c->Bjorm.this.removeGraph(c,value,new HashSet<>()));}
         public <T> T find(Class<T> type,Object id) {
             Objects.requireNonNull(id,"id required for find()");
-            return use(c->Bjorm.this.find(c,type,id));
+            return use(c->{
+                // Limit identity reuse to this thread-confined transaction. Writes and opaque
+                // native SQL invalidate the map, so no result can outlive a transaction.
+                Map<Object,Object> rows=identityMap.get(type);
+                if(rows!=null && rows.containsKey(id))return type.cast(rows.get(id));
+                T result=Bjorm.this.find(c,type,id);
+                if(result!=null)identityMap.computeIfAbsent(type,ignored->new HashMap<>()).put(id,result);
+                return result;
+            });
         }
         public <T> List<T> list(Class<T> type,SqlPredicate where) {return list(select(type).whereNullable(where));}
         public <T> long count(Class<T> type,SqlPredicate where) {return use(c->Bjorm.this.count(c,type,where));}
         public <T> boolean exists(Class<T> type,SqlPredicate where) {return use(c->Bjorm.this.exists(c,type,where));}
         public <T> boolean lockOne(Class<T> type,SqlPredicate where,LockMode mode) {
-            return use(c->Bjorm.this.lockOne(c,type,where,mode));
+            return useWrite(c->Bjorm.this.lockOne(c,type,where,mode));
         }
         public <T> List<T> list(Select<T> query) {return use(c->Bjorm.this.list(c,query));}
         public <T> Optional<T> first(Select<T> query) {query.limit(1);return use(c->{if(!mapper(query.type()).children().isEmpty()){List<T> values=Bjorm.this.list(c,query);return values.stream().findFirst();}return Bjorm.this.first(c,query,null,mapper(query.type()));});}
@@ -883,14 +897,14 @@ public final class Bjorm implements Operations {
             query.limit(1);
             return use(c->Bjorm.this.scalarOne(c,query,property,type));
         }
-        public <T> List<T> query(String sql,StatementBinder bind,RowMapper<T> mapper) {return use(c->Bjorm.this.query(c,sql,bind,mapper));}
-        public <T> T one(String sql,StatementBinder bind,RowMapper<T> mapper) {return use(c->Bjorm.this.one(c,sql,bind,mapper));}
-        public int execute(String sql,StatementBinder bind) {return use(c->Bjorm.this.execute(c,sql,bind));}
+        public <T> List<T> query(String sql,StatementBinder bind,RowMapper<T> mapper) {return useWrite(c->Bjorm.this.query(c,sql,bind,mapper));}
+        public <T> T one(String sql,StatementBinder bind,RowMapper<T> mapper) {return useWrite(c->Bjorm.this.one(c,sql,bind,mapper));}
+        public int execute(String sql,StatementBinder bind) {return useWrite(c->Bjorm.this.execute(c,sql,bind));}
         public <T> void forEach(Class<T> type,SqlPredicate where,Consumer<T> consumer) {forEach(select(type).whereNullable(where),consumer);}
         public <T> void forEach(Select<T> query,Consumer<T> consumer) {use(c->{Bjorm.this.forEach(c,query,consumer);return null;});}
-        public <T> void scan(String sql,StatementBinder binder,RowMapper<T> mapper,Consumer<T> consumer) {use(c->{Bjorm.this.scan(c,sql,binder,mapper,consumer);return null;});}
-        public <T> void batchInsert(List<T> list) {use(c->{Bjorm.this.batch(c,list,false);return null;});}
-        public <T> List<T> batchInsertReturning(List<T> list) {return use(c->{
+        public <T> void scan(String sql,StatementBinder binder,RowMapper<T> mapper,Consumer<T> consumer) {useWrite(c->{Bjorm.this.scan(c,sql,binder,mapper,consumer);return null;});}
+        public <T> void batchInsert(List<T> list) {useWrite(c->{Bjorm.this.batch(c,list,false);return null;});}
+        public <T> List<T> batchInsertReturning(List<T> list) {return useWrite(c->{
             Objects.requireNonNull(list);
             if(list.isEmpty())return List.of();
             EntityMapper<T> m=mapper(Objects.requireNonNull(list.getFirst()).getClass());
@@ -908,8 +922,8 @@ public final class Bjorm implements Operations {
             Bjorm.this.batch(c,saved,false);
             return saved;
         });}
-        public <T> void batchUpdate(List<T> list) {use(c->{Bjorm.this.batch(c,list,true);return null;});}
-        public <T> List<T> batchUpdateReturning(List<T> values) {return use(c->{
+        public <T> void batchUpdate(List<T> list) {useWrite(c->{Bjorm.this.batch(c,list,true);return null;});}
+        public <T> List<T> batchUpdateReturning(List<T> values) {return useWrite(c->{
             Objects.requireNonNull(values);
             List<T> refreshed=new ArrayList<>(values.size());
             Class<?> expected=null;
@@ -926,7 +940,7 @@ public final class Bjorm implements Operations {
             }
             return List.copyOf(refreshed);
         });}
-        public <T> void batchDelete(List<T> values) {use(c->{
+        public <T> void batchDelete(List<T> values) {useWrite(c->{
             Objects.requireNonNull(values);
             Class<?> expected=null;
             for(T value:values) {
@@ -937,7 +951,7 @@ public final class Bjorm implements Operations {
             }
             return null;
         });}
-        public <T> List<T> batchUpsertReturning(List<T> values) {return use(c->{
+        public <T> List<T> batchUpsertReturning(List<T> values) {return useWrite(c->{
             Objects.requireNonNull(values);
             List<T> persisted=new ArrayList<>(values.size());
             Class<?> expected=null;
