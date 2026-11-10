@@ -20,6 +20,7 @@ java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.UuidV7Concu
 java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.StaticSchemaSmokeTest
 java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.GraphQuerySmokeTest
 java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.ManyToOneSmokeTest
+java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.EmbeddedSmokeTest
 java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.GraphSharedRelationSmokeTest
 java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.AnnotatedJoinSmokeTest
 java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.DialectSmokeTest
@@ -110,6 +111,20 @@ if ! grep -q '@ManyToOne foreign key must match target @Id type' "$OUT/toone-neg
   echo 'Unexpected @ManyToOne compile diagnostic:' >&2
   cat "$OUT/toone-negative.log" >&2
   exit 1
+fi
+cat > "$OUT/InvalidEmbedded.java" <<'JAVA'
+import com.github.rfdetoni.bjorm.*;
+import java.util.UUID;
+@Table("invalid_embedded")
+public record InvalidEmbedded(@Id UUID id, String label, @Embedded String address) {}
+JAVA
+if javac -cp "$OUT/core:$OUT/example" -processorpath "$OUT/core:$OUT/processor" \
+  -processor com.github.rfdetoni.bjorm.processor.EntityProcessor \
+  -d "$OUT/example" "$OUT/InvalidEmbedded.java" 2>"$OUT/embedded-negative.log"; then
+  echo 'FAIL: annotation processor accepted non-record embedded value' >&2; exit 1
+fi
+if ! grep -q '@Embedded requires a public record value type' "$OUT/embedded-negative.log"; then
+  cat "$OUT/embedded-negative.log" >&2; exit 1
 fi
 if grep -R -l 'import org\.springframework' bjorm-core/src/main/java bjorm-processor/src/main/java; then
   echo 'FAIL: framework dependency leaked into BJORM core/processor' >&2; exit 1
