@@ -76,10 +76,10 @@ public final class Bjorm implements Operations {
     /** A root BJORM instance that refuses all JDBC calls until explicitly scoped to a tenant. */
     public static Bjorm tenantRequired(DataSource source, BjormOptions options,
                                        SqlDialect dialect, EntityMapper<?>... registered) {
-        return new Bjorm(open(source,options,dialect,registered),null);
+        return new Bjorm(open(source,options,dialect,registered),(String)null);
     }
     public static Bjorm tenantRequired(DataSource source) {
-        return new Bjorm(open(source),null);
+        return new Bjorm(open(source),(String)null);
     }
     /** Tenant schema must come from an authorized server-side tenant registry, not request input. */
     public Bjorm forTenant(String schema) {
