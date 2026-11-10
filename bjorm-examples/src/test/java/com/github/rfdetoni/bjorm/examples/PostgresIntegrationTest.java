@@ -92,6 +92,13 @@ public final class PostgresIntegrationTest {
             tenantA.insert(new ItUser(sharedId,"Alice A",11));
             tenantB.insert(new ItUser(sharedId,"Alice B",22));
             check(tenantA.find(ItUser.class,sharedId).name().equals("Alice A"),"tenant A isolation");
+            try {
+                tenantA.execute("UPDATE bjorm_tenant_b.bjorm_it_users SET age=777 WHERE id=?",
+                    tenantA.params(sharedId));
+                throw new AssertionError("tenant A crossed schema via native SQL");
+            } catch(SecurityException expected) {}
+            check(tenantB.find(ItUser.class,sharedId).age()==22,
+                "qualified native SQL cannot alter a different tenant");
             tenantA.tx(tx -> {
                 ItUser first=tx.find(ItUser.class,sharedId);
                 check(first==tx.find(ItUser.class,sharedId),"tenant A transaction reuses identity");
