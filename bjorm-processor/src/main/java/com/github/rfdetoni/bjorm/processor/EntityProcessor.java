@@ -65,6 +65,11 @@ public final class EntityProcessor extends AbstractProcessor {
         if(record){
             for(RecordComponentElement c:entity.getRecordComponents()){
                 String prop=c.getSimpleName().toString();
+                if(c.getAnnotation(Transient.class)!=null) {
+                    if(c.getAnnotation(Id.class)!=null || c.getAnnotation(Version.class)!=null || c.getAnnotation(Children.class)!=null)
+                        {error(c,"@Transient cannot annotate an ID, version or relation");return;}
+                    continue;
+                }
                 if(c.getAnnotation(Children.class)!=null) {relations.add(relation(c,"value."+prop+"()"));continue;}
                 Id idAnn=c.getAnnotation(Id.class);
                 cols.add(new Col(prop,colName(c,prop),c.asType().toString(),"value."+prop+"()","",idAnn!=null,c.getAnnotation(Version.class)!=null,databaseId(idAnn,c.asType().toString()),c.getAnnotation(Json.class)!=null,autoUuid(idAnn,c.asType().toString()),jsonCodec(c),c.asType()));
@@ -163,7 +168,7 @@ public final class EntityProcessor extends AbstractProcessor {
         Set<String> names=new HashSet<>();
         for(TypeElement t:hierarchy)for(Element field:t.getEnclosedElements()) {
             if(field.getKind()!=ElementKind.FIELD||field.getModifiers().contains(Modifier.STATIC)||
-               field.getModifiers().contains(Modifier.TRANSIENT))continue;
+               field.getModifiers().contains(Modifier.TRANSIENT)||field.getAnnotation(Transient.class)!=null)continue;
             if(!names.add(field.getSimpleName().toString()))
                 throw new IllegalArgumentException("Inherited persistent property shadowed: "+field.getSimpleName());
             fields.add(field);
@@ -337,7 +342,8 @@ public final class EntityProcessor extends AbstractProcessor {
             if(record){
                 List<String> args=new ArrayList<>();int offset=1;
                 for(RecordComponentElement component:entity.getRecordComponents()){
-                    if(component.getAnnotation(Children.class)!=null)args.add("java.util.List.of()");
+                    if(component.getAnnotation(Transient.class)!=null)args.add(defaultValue(component.asType().toString()));
+                    else if(component.getAnnotation(Children.class)!=null)args.add("java.util.List.of()");
                     else {int n=offset++-1;args.add(readColumn(cols.get(n),"(offset+"+n+")",n));}
                 }
                 w.write("return new "+clazz+"("+String.join(", ",args)+");\n");
@@ -345,6 +351,20 @@ public final class EntityProcessor extends AbstractProcessor {
             else {w.write(clazz+" value = new "+clazz+"();\n");for(int i=0;i<cols.size();i++)w.write(cols.get(i).write()+"("+readColumn(cols.get(i),"(offset+"+i+")",i)+");\n");w.write("return value;\n");}
             w.write("}\n}\n");
         }
+    }
+    /** Transient record components do not consume JDBC column positions. */
+    private static String defaultValue(String type) {
+        return switch(type) {
+            case "boolean" -> "false";
+            case "char" -> "'\\\\0'";
+            case "long" -> "0L";
+            case "float" -> "0f";
+            case "double" -> "0d";
+            case "byte" -> "(byte)0";
+            case "short" -> "(short)0";
+            case "int" -> "0";
+            default -> "null";
+        };
     }
     private String recordArguments(TypeElement entity,String replacementProperty,String replacement) {
         List<String> args=new ArrayList<>();
