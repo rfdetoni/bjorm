@@ -127,7 +127,7 @@ public final class Bjorm implements Operations {
     /** SET LOCAL is transaction-scoped; omitting public prevents accidental cross-schema fallback. */
     private void applyPostgresTenant(Connection c) throws SQLException {
         try (Statement statement=c.createStatement()) {
-            statement.execute("SET LOCAL search_path TO \"" + tenantSchema + "\", pg_catalog");
+            statement.execute("SET LOCAL search_path TO pg_catalog, \"" + tenantSchema + "\", pg_temp");
         }
     }
     private <R> R withConnection(JdbcWork<R> work) {
@@ -330,21 +330,19 @@ public final class Bjorm implements Operations {
             String previousCatalog=mysqlTenant()?c.getCatalog():null;
             if(mysqlTenant() && (previousCatalog==null || previousCatalog.isBlank()))
                 throw new IllegalStateException("Cannot restore MySQL catalog: connection has no original catalog");
-            if(mysqlTenant()) {
-                c.setCatalog(tenantSchema);
-                if(!tenantSchema.equals(c.getCatalog())) {
-                    c.setCatalog(previousCatalog);
-                    throw new IllegalStateException("JDBC driver did not activate the tenant catalog");
-                }
-            }
             try {
+                if(mysqlTenant()) {
+                    c.setCatalog(tenantSchema);
+                    if(!tenantSchema.equals(c.getCatalog()))
+                        throw new IllegalStateException("JDBC driver did not activate the tenant catalog");
+                }
             boolean previous=c.getAutoCommit();
             if(!previous) throw new IllegalStateException("Connection already transactional; do not nest Bjorm.tx in another transaction");
             c.setAutoCommit(false);
-            if(postgresTenant())applyPostgresTenant(c);
             Transaction tx=new Transaction(c);
             Throwable failure=null;
             try {
+                if(postgresTenant())applyPostgresTenant(c);
                 R result=work.apply(tx);
                 c.commit();
                 return result;
