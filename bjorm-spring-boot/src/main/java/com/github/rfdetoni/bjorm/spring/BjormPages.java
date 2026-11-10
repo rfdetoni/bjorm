@@ -19,17 +19,28 @@ import java.util.Objects;
 public final class BjormPages {
     private final Bjorm db;
     private final long maxOffset;
+    private final int maxPageSize;
 
-    public BjormPages(Bjorm db) { this(db, 10_000L); }
-    public BjormPages(Bjorm db, long maxOffset) {
+    public BjormPages(Bjorm db) { this(db, 10_000L, 500); }
+    public BjormPages(Bjorm db, long maxOffset) { this(db, maxOffset, 500); }
+    public BjormPages(Bjorm db, long maxOffset, int maxPageSize) {
         this.db = Objects.requireNonNull(db);
         if(maxOffset < 0) throw new IllegalArgumentException("maxOffset must be non-negative");
+        if(maxPageSize < 1 || maxPageSize == Integer.MAX_VALUE)
+            throw new IllegalArgumentException("maxPageSize must be between 1 and Integer.MAX_VALUE - 1");
         this.maxOffset = maxOffset;
+        this.maxPageSize = maxPageSize;
     }
     public long maxOffset() {return maxOffset;}
+    public int maxPageSize() {return maxPageSize;}
     private void checkOffset(Pageable pageable) {
         if(pageable.isPaged() && pageable.getOffset() > maxOffset)
             throw new IllegalArgumentException("OFFSET " + pageable.getOffset() + " exceeds configured bjorm.pagination.max-offset=" + maxOffset + "; use seekSlice with a cursor");
+        if(pageable.isPaged())checkPageSize(pageable.getPageSize());
+    }
+    private void checkPageSize(int requested) {
+        if(requested < 1 || requested > maxPageSize)
+            throw new IllegalArgumentException("Page size " + requested + " exceeds configured bjorm.pagination.max-page-size=" + maxPageSize);
     }
 
     public <T> Page<T> page(Class<T> type, Pageable pageable) { return page(type, null, pageable); }
@@ -65,8 +76,7 @@ public final class BjormPages {
     }
     public <T> SeekSlice<T> seekSlice(Class<T> type, SqlPredicate predicate, Object afterId,
                                     int pageSize, boolean descending) {
-        if(pageSize < 1 || pageSize == Integer.MAX_VALUE)
-            throw new IllegalArgumentException("Invalid keyset page size");
+        checkPageSize(pageSize);
         SqlPredicate filter = predicate;
         if(afterId != null) {
             SqlPredicate seek = db.seekAfterId(type,afterId,descending);
