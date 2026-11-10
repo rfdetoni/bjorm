@@ -79,6 +79,10 @@ typed predicate and a live transaction. A call with an auto-commit connection
 fails explicitly; doing row locking outside a transaction would silently
 release the lock. A row-missing predicate returns `false`.
 
+The active `SqlDialect.bindValue(...)` handles UUID and `java.time.Instant`
+portably (the latter as a JDBC `Timestamp`); native `db.query` / `db.execute`
+callers can use it in their `StatementBinder` without custom temporal conversions.
+
 For specialized PostgreSQL SQL (CTEs, aggregates with multiple JOINs, JSONB
 expressions and conflict updates by composite key), **use BJORM's existing**
 `db.query(sql, binder, mapper)`, `db.one(...)`, `db.execute(...)` or
