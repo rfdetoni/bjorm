@@ -48,7 +48,7 @@ public final class EntityProcessor extends AbstractProcessor {
         }
         return true;
     }
-    private record Col(String property,String column,String type,String read,String write,boolean id,boolean version,boolean generated,boolean json,boolean uuidV7,String jsonCodec,TypeMirror typeMirror,boolean insertable,boolean updatable) {}
+    private record Col(String property,String column,String type,String read,String write,boolean id,boolean version,boolean generated,boolean json,boolean uuidV7,String jsonCodec,TypeMirror typeMirror,boolean insertable,boolean updatable,boolean enumOrdinal) {}
     private static boolean isNumericId(String type) {return Set.of("int","long","java.lang.Integer","java.lang.Long").contains(type);}
     private static boolean autoUuid(Id id,String type) {return id!=null && !id.assigned() && (id.uuidV7() || ( !id.generated() && Set.of("java.util.UUID","java.lang.String").contains(type)));}
     private static boolean databaseId(Id id,String type) {return id!=null && !id.assigned() && (id.generated() || isNumericId(type));}
@@ -72,7 +72,7 @@ public final class EntityProcessor extends AbstractProcessor {
                 }
                 if(c.getAnnotation(Children.class)!=null) {relations.add(relation(c,"value."+prop+"()"));continue;}
                 Id idAnn=c.getAnnotation(Id.class);
-                cols.add(new Col(prop,colName(c,prop),c.asType().toString(),"value."+prop+"()","",idAnn!=null,c.getAnnotation(Version.class)!=null,databaseId(idAnn,c.asType().toString()),c.getAnnotation(Json.class)!=null,autoUuid(idAnn,c.asType().toString()),jsonCodec(c),c.asType(),c.getAnnotation(Column.class)==null||c.getAnnotation(Column.class).insertable(),c.getAnnotation(Column.class)==null||c.getAnnotation(Column.class).updatable()));
+                cols.add(new Col(prop,colName(c,prop),c.asType().toString(),"value."+prop+"()","",idAnn!=null,c.getAnnotation(Version.class)!=null,databaseId(idAnn,c.asType().toString()),c.getAnnotation(Json.class)!=null,autoUuid(idAnn,c.asType().toString()),jsonCodec(c),c.asType(),c.getAnnotation(Column.class)==null||c.getAnnotation(Column.class).insertable(),c.getAnnotation(Column.class)==null||c.getAnnotation(Column.class).updatable(),c.getAnnotation(EnumOrdinal.class)!=null));
             }
         } else {
             boolean constructor=false;
@@ -89,7 +89,7 @@ public final class EntityProcessor extends AbstractProcessor {
                 String setter="set"+suff;
                 if(getter==null||!hasSetter(entity,setter,type)) {error(el,"POJO needs public getter and setter for "+prop);return;}
                 Id idAnn=el.getAnnotation(Id.class);
-                cols.add(new Col(prop,colName(el,prop),type,"value."+getter+"()","value."+setter,cAnnotated(el,Id.class),cAnnotated(el,Version.class),databaseId(idAnn,type),el.getAnnotation(Json.class)!=null,autoUuid(idAnn,type),jsonCodec(el),el.asType(),el.getAnnotation(Column.class)==null||el.getAnnotation(Column.class).insertable(),el.getAnnotation(Column.class)==null||el.getAnnotation(Column.class).updatable()));
+                cols.add(new Col(prop,colName(el,prop),type,"value."+getter+"()","value."+setter,cAnnotated(el,Id.class),cAnnotated(el,Version.class),databaseId(idAnn,type),el.getAnnotation(Json.class)!=null,autoUuid(idAnn,type),jsonCodec(el),el.asType(),el.getAnnotation(Column.class)==null||el.getAnnotation(Column.class).insertable(),el.getAnnotation(Column.class)==null||el.getAnnotation(Column.class).updatable(),el.getAnnotation(EnumOrdinal.class)!=null));
             }
         }
         if(cols.isEmpty()){error(entity,"@Table requires mapped properties");return;}
@@ -105,6 +105,12 @@ public final class EntityProcessor extends AbstractProcessor {
             Col c=cols.get(i);
             if(!identifier(c.column())||!seen.add(c.column())){error(entity,"Invalid/duplicate column: "+c.column());return;}
             if(!c.json() && !supported(c.type())) {error(entity,"Unsupported JDBC property: "+c.type());return;}
+            if(c.enumOrdinal()) {
+                TypeElement enumType=elements.getTypeElement(c.type());
+                if(c.id() || c.version() || enumType==null || enumType.getKind()!=ElementKind.ENUM) {
+                    error(entity,"@EnumOrdinal requires a non-ID enum field");return;
+                }
+            }
             if(c.json() && (c.id() || c.version())){error(entity,"@Json cannot annotate ID or version columns");return;}
             if(c.json() && !c.type().equals("java.lang.String") &&
                c.jsonCodec().equals("com.github.rfdetoni.bjorm.JsonStringCodec")) {
@@ -205,12 +211,16 @@ public final class EntityProcessor extends AbstractProcessor {
     private String readColumn(Col col,String index,int ordinal) {
         return typedJson(col)
             ?"com.github.rfdetoni.bjorm.JsonValues.read(rs,"+index+",JSON_"+ordinal+")"
-            :reader(123456789,col.type()).replace("123456789",index);
+            :col.enumOrdinal()
+                ?"com.github.rfdetoni.bjorm.EnumValues.read(rs,"+index+","+col.type()+".class)"
+                :reader(123456789,col.type()).replace("123456789",index);
     }
     private String writeColumn(Col col,int param,int ordinal,String dialect) {
         return typedJson(col)
             ?"ps.setString("+param+",com.github.rfdetoni.bjorm.JsonValues.write("+col.read()+",JSON_"+ordinal+"));"
-            :setter(param,col.read(),col.type(),dialect);
+            :col.enumOrdinal()
+                ?"ps.setObject("+param+","+col.read()+"==null?null:"+col.read()+".ordinal());"
+                :setter(param,col.read(),col.type(),dialect);
     }
     private void generateMapper(TypeElement entity,String table,List<Col> cols,int id,int version,boolean record,List<Relation> relations) throws IOException {
         String clazz=entity.getSimpleName().toString(),pkg=packageOf(entity),mapper=clazz+"_BjormMapper";
@@ -263,6 +273,7 @@ public final class EntityProcessor extends AbstractProcessor {
             for(int ci=0;ci<cols.size();ci++) {
                 Col c=cols.get(ci);
                 if(typedJson(c))w.write("case \""+c.property()+"\" -> com.github.rfdetoni.bjorm.JsonValues.write(("+c.type()+")value,JSON_"+ci+");\n");
+                else if(c.enumOrdinal())w.write("case \""+c.property()+"\" -> value==null?null:(("+c.type()+")value).ordinal();\n");
             }
             w.write("default -> {columnFor(property);yield value;}};}\n");
             w.write("public String qualifiedColumns(String alias){return "+String.join("+\", \"+",cols.stream().map(c->"alias+\"."+c.column()+"\"").toList())+";}\n");
