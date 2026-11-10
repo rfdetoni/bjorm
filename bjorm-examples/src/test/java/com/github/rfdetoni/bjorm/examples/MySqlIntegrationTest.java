@@ -45,7 +45,7 @@ public final class MySqlIntegrationTest {
             st.execute("CREATE TABLE bjorm_it_explicit_assigned(id BIGINT PRIMARY KEY,label VARCHAR(255))");
             st.execute("CREATE TABLE bjorm_it_explicit_identity(id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,label VARCHAR(255))");
             st.execute("CREATE TABLE bjorm_it_explicit_uuid(id CHAR(36) PRIMARY KEY,label VARCHAR(255))");
-            st.execute("CREATE TABLE bjorm_it_orders(id CHAR(36) PRIMARY KEY,description VARCHAR(255))");
+            st.execute("CREATE TABLE bjorm_it_orders(id CHAR(36) PRIMARY KEY,description VARCHAR(255),customerId CHAR(36),FOREIGN KEY(customerId) REFERENCES bjorm_it_users(id))");
             st.execute("CREATE TABLE bjorm_it_order_lines(id CHAR(36) PRIMARY KEY,orderId CHAR(36),sku VARCHAR(255),FOREIGN KEY(orderId) REFERENCES bjorm_it_orders(id))");
             st.execute("CREATE TABLE bjorm_it_order_notes(id CHAR(36) PRIMARY KEY,orderId CHAR(36),note VARCHAR(255),version INT NOT NULL DEFAULT 0,FOREIGN KEY(orderId) REFERENCES bjorm_it_orders(id))");
         }
@@ -53,6 +53,7 @@ public final class MySqlIntegrationTest {
             Bjorm db=Bjorm.open(source,BjormOptions.defaults(),SqlDialects.MYSQL,
                 ItUser_BjormMapper.INSTANCE,ItDocument_BjormMapper.INSTANCE,
                 AutoLongRecord_BjormMapper.INSTANCE,ItOrder_BjormMapper.INSTANCE,
+                ItOrderWithCustomer_BjormMapper.INSTANCE,
                 ItOrderLine_BjormMapper.INSTANCE,ItOrderNote_BjormMapper.INSTANCE,
                 ItInstant_BjormMapper.INSTANCE,MappedColumns_BjormMapper.INSTANCE,OrdinalEvent_BjormMapper.INSTANCE,
                 ItAuditRecord_BjormMapper.INSTANCE,ItAuditPojo_BjormMapper.INSTANCE,
@@ -259,6 +260,26 @@ public final class MySqlIntegrationTest {
             check(db.find(ItDocument.class,json.id()).payload().contains("count"),"MySQL native JSON");
             AutoLongRecord serial=db.insertReturning(new AutoLongRecord(null,"serial"));
             check(serial.id()!=null&&serial.id()>0,"MySQL AUTO_INCREMENT key");
+            ItOrderWithCustomer combined=new ItOrderWithCustomer();
+            combined.setDescription("mysql combined graph");
+            combined.setCustomerId(invoiceCustomer.id());
+            ItOrderLine combinedLine=new ItOrderLine();
+            combinedLine.setSku("MIXED");
+            combined.getLines().add(combinedLine);
+            db.insert(combined);
+            java.util.concurrent.atomic.AtomicInteger mixedSelects=new java.util.concurrent.atomic.AtomicInteger();
+            Bjorm observed=db.observeSql((operation,nanos,ok)->{
+                if(operation==SqlOperation.QUERY)mixedSelects.incrementAndGet();
+            });
+            ItOrderWithCustomer combinedLoaded=observed.find(ItOrderWithCustomer.class,combined.getId());
+            check(combinedLoaded.getCustomer()!=null &&
+                combinedLoaded.getCustomer().id().equals(invoiceCustomer.id()) &&
+                combinedLoaded.getLines().size()==1,
+                "MySQL root hydrates Children and ManyToOne in one graph");
+            check(mixedSelects.get()==1,"MySQL combined graph has no N+1 queries");
+            db.delete(combined);
+            check(db.find(ItUser.class,invoiceCustomer.id())!=null,
+                "MySQL graph deletion preserves referenced customer");
             ItOrder parent=new ItOrder();parent.setDescription("mysql graph");
             ItOrderLine child=new ItOrderLine();child.setSku("SKU");parent.getLines().add(child);
             db.insert(parent);
