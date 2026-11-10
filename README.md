@@ -654,11 +654,16 @@ reconstructed at compile time; POJOs require a public getter and setter.
 
 The generated JOIN runs over a CTE containing the root query so root
 `WHERE`, `LIMIT` and `OFFSET` apply before eager hydration.
-This implementation deliberately supports **one direct to-one level**,
-not nested to-one graphs or types that also declare `@Children`.
-Explicit user-written joins cannot be mixed with implicit ManyToOne
-hydration. Use a dedicated projection or a separate mapped query for
-those deeper/combined shapes.
+This implementation supports **one direct to-one level**. A root entity
+may now declare both `@Children` and `@ManyToOne`: BJORM appends the
+parent's columns and JOIN to each `UNION ALL` branch for the sibling child
+collections, and hydrates both associations **in the same SQL statement**.
+The referenced parent is not inserted, updated or deleted transitively.
+Nested `@ManyToOne` references inside child collection types and referenced
+entities with their own graphs are still unsupported and fail explicitly.
+For standalone ManyToOne loading, explicit user-written JOINs cannot be
+mixed with the implicit reference JOIN. Use a dedicated projection for
+nested or customized association shapes.
 
 ## Spring MVC Pageable, Page and Slice
 

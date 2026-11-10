@@ -811,6 +811,21 @@ public final class Bjorm implements Operations {
         // LIMIT/OFFSET on such joins remains rejected by Select.sql().
         if(query.hasJoins())rootSql="SELECT DISTINCT * FROM ("+rootSql+") bjorm_unique_roots";
         int rootColumns=root.columnCount();
+        // Append root @ManyToOne columns AFTER all child slots so existing
+        // discriminator and child slot offsets are preserved across UNION paths.
+        List<ParentRelation<T>> parents=root.parents();
+        ArrayList<EntityMapper<Object>> parentTargets=new ArrayList<>(parents.size());
+        ArrayList<Integer> parentOffsets=new ArrayList<>(parents.size());
+        int parentOffset=rootColumns+2;
+        for(GraphSlot slot:slots)parentOffset+=slot.mapper.columnCount();
+        for(ParentRelation<T> relation:parents) {
+            EntityMapper<Object> target=mapper(relation.targetType());
+            if(!target.children().isEmpty() || !target.parents().isEmpty())
+                throw new UnsupportedOperationException("Nested @ManyToOne target graphs are unsupported");
+            parentTargets.add(target);
+            parentOffsets.add(parentOffset);
+            parentOffset+=target.columnCount();
+        }
         StringBuilder sql=new StringBuilder("WITH roots AS (").append(rootSql).append(") ");
         for(int branch=0;branch<paths.size();branch++) {
             if(branch>0)sql.append(" UNION ALL ");
@@ -821,6 +836,8 @@ public final class Bjorm implements Operations {
                 if(path.contains(i)) sql.append(", ").append(slot.mapper.qualifiedColumns(slot.alias));
                 else for(int col=0;col<slot.mapper.columnCount();col++)sql.append(", NULL");
             }
+            for(int i=0;i<parentTargets.size();i++)
+                sql.append(", ").append(parentTargets.get(i).qualifiedColumns("p"+i));
             sql.append(" FROM roots r");
             for(int i:path) {
                 GraphSlot slot=slots.get(i);
@@ -829,6 +846,14 @@ public final class Bjorm implements Operations {
                 sql.append(' ').append(dialect.join(slot.relation.joinType())).append(' ').append(slot.mapper.table()).append(' ').append(slot.alias)
                    .append(" ON ").append(slot.alias).append('.').append(slot.mapper.columnFor(slot.relation.mappedBy()))
                    .append(" = ").append(parentAlias).append('.').append(parent.columnFor(parent.idProperty()));
+            }
+            for(int i=0;i<parents.size();i++) {
+                ParentRelation<T> relation=parents.get(i);
+                EntityMapper<Object> target=parentTargets.get(i);
+                sql.append(' ').append(dialect.join(relation.joinType())).append(' ')
+                   .append(target.table()).append(" p").append(i)
+                   .append(" ON r.").append(root.columnFor(relation.mappedBy()))
+                   .append(" = p").append(i).append('.').append(target.columnFor(target.idProperty()));
             }
         }
         // Keep all rows belonging to a root contiguous so one root at a time can be emitted.
@@ -854,7 +879,15 @@ public final class Bjorm implements Operations {
                     if(id==null)continue;
                     if(current==null || !Objects.equals(lastId,id)) {
                         if(current!=null)emit.accept((T)finishGraph(current,slots,0));
-                        current=new GraphNode((EntityMapper<Object>)root,root.read(rs));
+                        T value=root.read(rs);
+                        for(int i=0;i<parents.size();i++) {
+                            EntityMapper<Object> target=parentTargets.get(i);
+                            int parentStart=parentOffsets.get(i);
+                            Object targetId=rs.getObject(parentStart+target.idColumnIndex()-1);
+                            Object parent=targetId==null?null:target.readAt(rs,parentStart);
+                            value=root.withParent(value,parents.get(i).property(),parent);
+                        }
+                        current=new GraphNode((EntityMapper<Object>)root,value);
                         lastId=id;
                         groupRows=0;
                     }
@@ -899,6 +932,8 @@ public final class Bjorm implements Operations {
                                    Set<Class<?>> ancestors,List<GraphSlot> slots,List<List<Integer>> paths) {
         if(!ancestors.add(parent.type()))throw new IllegalArgumentException(
             "Recursive @Children type cycle not supported for one-query graph loading: "+parent.type());
+        if(parentSlot!=0 && !parent.parents().isEmpty())
+            throw new UnsupportedOperationException("Nested child @ManyToOne needs an explicit projection");
         if(parent.children().isEmpty())paths.add(List.copyOf(path));
         for(ChildRelation<Object> relation:parent.children()) {
             EntityMapper<Object> child=(EntityMapper<Object>)mapper(relation.childType());

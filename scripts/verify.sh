@@ -20,6 +20,7 @@ java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.UuidV7Concu
 java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.StaticSchemaSmokeTest
 java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.GraphQuerySmokeTest
 java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.ManyToOneSmokeTest
+java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.MixedGraphSmokeTest
 java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.EmbeddedSmokeTest
 java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.GraphSharedRelationSmokeTest
 java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.AnnotatedJoinSmokeTest
