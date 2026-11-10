@@ -102,6 +102,11 @@ public final class PostgresIntegrationTest {
             var fields=db.findFields(ItUser.class,ItUser_.name.eq("BJORM"),"name","age");
             check(fields.size()==1 && fields.getFirst().get("age").equals(34),"named Java properties return only selected columns");
             check(db.findColumnOne(ItUser.class,"name",String.class,ItUser_.age.eq(34)).orElseThrow().equals("BJORM"),"typed scalar projection");
+            java.time.Instant testInstant=java.time.Instant.parse("2026-11-10T10:20:30Z");
+            java.time.Instant returned=db.one("SELECT CAST(? AS TIMESTAMPTZ)",
+                ps->db.dialect().bindValue(ps,1,testInstant),
+                rs->rs.getTimestamp(1).toInstant());
+            check(testInstant.equals(returned),"native BJORM Instant binder PostgreSQL TIMESTAMPTZ");
             check(db.count(ItUser.class, ItUser_.name.eq("BJORM")) == 1L, "real PostgreSQL aggregate COUNT");
             check(db.exists(ItUser.class, ItUser_.name.eq("BJORM")), "real PostgreSQL EXISTS with predicate");
             check(!db.exists(ItUser.class, ItUser_.name.eq("MISSING")), "real PostgreSQL EXISTS false");
