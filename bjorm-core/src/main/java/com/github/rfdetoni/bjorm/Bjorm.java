@@ -461,54 +461,45 @@ public final class Bjorm implements Operations {
         }
     }
     /**
-     * MySQL 8.4 optimistic insert-or-update using only generated binders.
+     * MySQL 8.4 performs compare-and-swap inside one atomic INSERT ... ON
+     * DUPLICATE KEY UPDATE. The generated dialect SQL rejects stale version
+     * and secondary-UNIQUE collisions by assigning NULL to a NOT NULL PK,
+     * so the JDBC statement itself never commits an unrelated update.
      *
-     * INSERT first: for a missing primary key this is the single write. A
-     * duplicate key (errno 1062) is followed by the normal generated
-     * UPDATE ... WHERE id=? AND version=? to compare-and-swap atomically.
-     * Another row's UNIQUE constraint can also fail INSERT; if the PK is
-     * absent the original SQL exception is preserved, never misreported as
-     * an optimistic conflict.
-     *
-     * Caller must hold an explicit transaction. On UPDATE count=0, the
-     * locking read distinguishes stale version from secondary-key conflict.
-     * No SELECT-then-INSERT gap and no unguarded ON DUPLICATE KEY UPDATE.
+     * A locking lookup is performed only on error code 1048 (NOT NULL
+     * violation) to distinguish stale versions from secondary-key conflicts.
+     * It executes inside the caller-owned transaction; the SQL exception is
+     * otherwise preserved for the application to handle.
      */
     private <T> int mysqlVersionedUpsert(Connection c,EntityMapper<T> mapper,T prepared) throws SQLException {
         if(c.getAutoCommit())
-            throw new IllegalStateException("MySQL versioned upsert requires a transaction");
-        SQLException insertConflict;
-        try(PreparedStatement ps=prepare(c,mapper.insertSql(dialect))) {
-            mapper.bindInsert(ps,prepared,dialect);
-            int inserted=executeUpdateObserved(ps);
-            if(inserted!=1)throw new SQLException("Unexpected MySQL versioned insert count: "+inserted);
-            return 1;
+            throw new IllegalStateException("MySQL versioned UPSERT must execute inside a transaction");
+        if(mapper.versionColumn()==null)
+            throw new IllegalArgumentException("Versioned entity mapper has no generated version metadata");
+        try(PreparedStatement ps=prepare(c,mapper.upsertSql(dialect))) {
+            mapper.bindUpsert(ps,prepared,dialect);
+            int affected=executeUpdateObserved(ps);
+            // MySQL returns 1 for insert, 2 for changed UPDATE.
+            if(affected==1 || affected==2)return affected;
+            if(affected==0)
+                throw new OptimisticLockException("Stale upsert: "+mapper.type().getName());
+            throw new SQLException("Unexpected MySQL UPSERT affected row count: "+affected);
         } catch(SQLException failure) {
-            // 1062 is ER_DUP_ENTRY, SQLSTATE 23000. Other integrity errors
-            // (e.g. FK, NOT NULL) and timeouts must not trigger an UPDATE.
-            if(failure.getErrorCode()!=1062 || !"23000".equals(failure.getSQLState()))
+            // 1048 / 23000 is the deliberately invalid NULL PK in the CAS
+            // guard. Other SQL errors (including deadlocks) are not rewritten.
+            if(failure.getErrorCode()!=1048 || !"23000".equals(failure.getSQLState()))
                 throw failure;
-            insertConflict=failure;
-        }
-        try(PreparedStatement ps=prepare(c,mapper.updateSql(dialect))) {
-            mapper.bindUpdate(ps,prepared,dialect);
-            int updated=executeUpdateObserved(ps);
-            if(updated==1)return 1;
-            if(updated!=0)
-                throw new SQLException("Unexpected MySQL versioned update count: "+updated);
-        }
-        // A stale row is a domain conflict; a conflicting secondary UNIQUE
-        // key on a different row is the original database constraint error.
-        String sql="SELECT 1 FROM "+mapper.table()+" WHERE "+
-            mapper.columnFor(mapper.idProperty())+" = ? FOR UPDATE";
-        try(PreparedStatement ps=prepareRead(c,sql)) {
-            mapper.bindId(ps,1,mapper.id(prepared),dialect);
-            try(ResultSet rs=executeQueryObserved(ps)) {
-                if(rs.next())
-                    throw new OptimisticLockException("Stale upsert: "+mapper.type().getName());
+            String sql="SELECT "+mapper.versionColumn()+" FROM "+mapper.table()+
+                " WHERE "+mapper.columnFor(mapper.idProperty())+" = ? FOR UPDATE";
+            try(PreparedStatement ps=prepareRead(c,sql)) {
+                mapper.bindId(ps,1,mapper.id(prepared),dialect);
+                try(ResultSet rs=executeQueryObserved(ps)) {
+                    if(rs.next() && !Objects.equals(rs.getObject(1),mapper.versionValue(prepared)))
+                        throw new OptimisticLockException("Stale upsert: "+mapper.type().getName());
+                }
             }
+            throw failure;
         }
-        throw insertConflict;
     }
     private <T> T persistGraph(Connection c,T entity,boolean upserting,IdentityHashMap<Object,Boolean> visited) throws SQLException {
         if(visited.put(entity,Boolean.TRUE)!=null) throw new IllegalArgumentException("Cycle or repeated entity in persistence graph");
