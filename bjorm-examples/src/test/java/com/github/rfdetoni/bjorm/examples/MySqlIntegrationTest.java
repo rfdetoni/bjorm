@@ -31,6 +31,7 @@ public final class MySqlIntegrationTest {
         };
         try(Connection c=source.getConnection();Statement st=c.createStatement()){
             st.execute("CREATE TABLE bjorm_it_users(id CHAR(36) PRIMARY KEY,name VARCHAR(255) UNIQUE,age INT NOT NULL)");
+            st.execute("CREATE TABLE bjorm_it_invoices(id CHAR(36) PRIMARY KEY,customerId CHAR(36),reference VARCHAR(255),FOREIGN KEY(customerId) REFERENCES bjorm_it_users(id))");
             st.execute("CREATE TABLE bjorm_it_ordinal(id CHAR(36) PRIMARY KEY,status INT,label VARCHAR(255))");
             st.execute("CREATE TABLE bjorm_it_audit(id CHAR(36) PRIMARY KEY,label VARCHAR(255),createdAt TIMESTAMP(6) NULL,updatedAt TIMESTAMP(6) NULL)");
             st.execute("CREATE TABLE bjorm_it_audit_pojo(id CHAR(36) PRIMARY KEY,label VARCHAR(255),createdAt TIMESTAMP(6) NULL,updatedAt TIMESTAMP(6) NULL)");
@@ -54,7 +55,32 @@ public final class MySqlIntegrationTest {
                 ItInstant_BjormMapper.INSTANCE,MappedColumns_BjormMapper.INSTANCE,OrdinalEvent_BjormMapper.INSTANCE,
                 ItAuditRecord_BjormMapper.INSTANCE,ItAuditPojo_BjormMapper.INSTANCE,
                 ExplicitAssignedRecord_BjormMapper.INSTANCE,ExplicitIdentityRecord_BjormMapper.INSTANCE,
-                ExplicitUuidRecord_BjormMapper.INSTANCE,StaticSchemaRecord_BjormMapper.INSTANCE);
+                ExplicitUuidRecord_BjormMapper.INSTANCE,StaticSchemaRecord_BjormMapper.INSTANCE,
+                ItInvoice_BjormMapper.INSTANCE,ItInvoiceInner_BjormMapper.INSTANCE,
+                ItInvoicePojo_BjormMapper.INSTANCE);
+            ItUser invoiceCustomer=db.insertReturning(new ItUser(null,"MySQL Invoice Customer",27));
+            ItInvoice invoice=db.insertReturning(new ItInvoice(null,invoiceCustomer.id(),"MYSQL-INV",null));
+            java.util.concurrent.atomic.AtomicInteger queryCount=new java.util.concurrent.atomic.AtomicInteger();
+            Bjorm observed=db.observeSql((operation,duration,ok)->{
+                if(operation==SqlOperation.QUERY)queryCount.incrementAndGet();
+            });
+            check(observed.find(ItInvoice.class,invoice.id()).customer().name().equals("MySQL Invoice Customer"),
+                "MySQL ManyToOne record hydrated");
+            check(queryCount.get()==1,"MySQL eager parent loaded without N+1 SQL");
+            check(db.select(ItInvoice.class).where(ItInvoice_.customerId.eq(invoiceCustomer.id()))
+                .orderBy(ItInvoice_.reference.asc()).limit(1).fetch().getFirst().customer()!=null,
+                "MySQL ManyToOne sorted paging");
+            ItInvoice orphan=db.insertReturning(new ItInvoice(null,null,"MYSQL-NO-CUSTOMER",null));
+            check(db.find(ItInvoice.class,orphan.id()).customer()==null,
+                "MySQL LEFT ManyToOne retains NULL reference");
+            check(db.find(ItInvoiceInner.class,orphan.id())==null,
+                "MySQL INNER ManyToOne filters NULL reference");
+            ItInvoicePojo invoicePojo=new ItInvoicePojo();
+            invoicePojo.setReference("MYSQL-POJO");
+            invoicePojo.setCustomerId(invoiceCustomer.id());
+            db.insert(invoicePojo);
+            check(db.find(ItInvoicePojo.class,invoicePojo.getId()).getCustomer()!=null,
+                "MySQL ManyToOne POJO property hydrated");
             StaticSchemaRecord staticRecord=db.insertReturning(new StaticSchemaRecord(null,"mysql-static"));
             check(db.find(StaticSchemaRecord.class,staticRecord.id()).label().equals("mysql-static"),
                 "MySQL static database schema SELECT");
@@ -226,7 +252,7 @@ public final class MySqlIntegrationTest {
             System.out.println("PASS: MySQL 8.4 CRUD, native upsert, JSON, UUID v7, AUTO_INCREMENT and eager JOIN graph");
         }finally {
             try(Connection c=source.getConnection();Statement st=c.createStatement()){
-                for(String name:List.of("bjorm_it_order_notes","bjorm_it_order_lines","bjorm_it_orders",
+                for(String name:List.of("bjorm_it_invoices","bjorm_it_order_notes","bjorm_it_order_lines","bjorm_it_orders",
                     "bjorm_it_columns","bjorm_it_ordinal","bjorm_it_audit","bjorm_it_audit_pojo",
                     "bjorm_it_explicit_assigned","bjorm_it_explicit_identity","bjorm_it_explicit_uuid",
                     "bjorm_it_static",
