@@ -224,6 +224,24 @@ public final class PostgresIntegrationTest {
             check(auditPojo.getCreatedAt()!=null && auditPojo.getUpdatedAt()!=null &&
                 db.find(ItAuditPojo.class,auditPojo.getId()).getCreatedAt()!=null,
                 "PostgreSQL POJO audit timestamps");
+            Instant pojoAuditBefore=auditPojo.getUpdatedAt();
+            auditPojo.setLabel("rolled-back audit update");
+            try {
+                db.tx(tx->{
+                    tx.update(auditPojo);
+                    throw new IllegalStateException("Rollback audit update");
+                });
+                throw new AssertionError("Expected audit rollback");
+            } catch(IllegalStateException expected) {}
+            check(auditPojo.getUpdatedAt().equals(pojoAuditBefore),
+                "PostgreSQL rollback must not mutate caller POJO @UpdatedAt");
+            check(db.find(ItAuditPojo.class,auditPojo.getId()).getLabel().equals("pojo"),
+                "PostgreSQL rollback restored stored audit POJO");
+            ItAuditPojo committedPojo=db.updateReturning(auditPojo);
+            check(committedPojo.getLabel().equals("rolled-back audit update") &&
+                !committedPojo.getUpdatedAt().isBefore(pojoAuditBefore) &&
+                auditPojo.getUpdatedAt().equals(pojoAuditBefore),
+                "PostgreSQL updateReturning refreshes timestamp without touching caller");
             Instant time=Instant.parse("2026-11-10T10:20:30Z");
             ItInstant savedInstant=db.insertReturning(new ItInstant(null,"Original",time,0));
             check(db.find(ItInstant.class,savedInstant.id()).occurredAt().equals(time),

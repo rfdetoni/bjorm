@@ -524,8 +524,11 @@ public final class EntityProcessor extends AbstractProcessor {
                     w.write("public "+clazz+" materializeUpsert("+clazz+" value){java.time.Instant now=java.time.Instant.now();");
                     w.write("return materializeInsert(new "+clazz+"("+recordArgumentsWith(entity,replacements)+"));}\n");
                 } else {
-                    w.write("public "+clazz+" materializeUpdate("+clazz+" value){java.time.Instant now=java.time.Instant.now();"+
-                        updatedAt.write()+"("+auditTimeExpression(updatedAt)+");return value;}\n");
+                    // Never stamp a caller-owned mutable POJO before JDBC succeeds:
+                    // a failed optimistic update or external rollback must not
+                    // leave a phantom audit timestamp on the in-memory entity.
+                    // The UPDATE binder captures its own timestamp instead.
+                    w.write("public "+clazz+" materializeUpdate("+clazz+" value){return value;}\n");
                     w.write("public "+clazz+" materializeUpsert("+clazz+" value){java.time.Instant now=java.time.Instant.now();"+
                         updatedAt.write()+"("+auditTimeExpression(updatedAt)+");return materializeInsert(value);}\n");
                 }
@@ -608,8 +611,16 @@ public final class EntityProcessor extends AbstractProcessor {
             for(EmbeddedSpec embedded:embeddeds)
                 w.write("if("+embedded.read()+"==null)throw new IllegalArgumentException(\"@Embedded "+embedded.property()+" is required\");\n");
             int index=1;
-            for(int i=0;i<cols.size();i++)if(!keyColumns.contains(i)&&i!=version&&cols.get(i).updatable()&&!cols.get(i).createdAt())
-                w.write(writeColumn(cols.get(i),index++,i,"dialect")+"\n");
+            for(int i=0;i<cols.size();i++)if(!keyColumns.contains(i)&&i!=version&&cols.get(i).updatable()&&!cols.get(i).createdAt()) {
+                Col col=cols.get(i);
+                if(!record && col.updatedAt()) {
+                    // Stamp the JDBC parameter, not the user's POJO.
+                    w.write("dialect.bindValue(ps,"+(index++)+","+
+                        (col.type().equals("java.time.Instant")
+                            ?"java.time.Instant.now()"
+                            :"java.time.LocalDateTime.now(java.time.ZoneOffset.UTC)")+");\n");
+                } else w.write(writeColumn(col,index++,i,"dialect")+"\n");
+            }
             for(int keyColumn:keyColumns)
                 w.write(setter(index++,cols.get(keyColumn).read(),cols.get(keyColumn).type(),"dialect")+"\n");
             if(version>=0)w.write(setter(index++,cols.get(version).read(),cols.get(version).type(),"dialect")+"\n");

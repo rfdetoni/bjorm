@@ -315,7 +315,15 @@ Compile-time audit annotations are also supported: `@CreatedAt` initializes a nu
 UPSERT changes. `@UpdatedAt` initializes a null value on INSERT and stamps
 UPDATE, UPSERT and typed `updateBy` automatically. These timestamps are
 application-clock based, so synchronize clocks or use database timestamps if
-strict cross-node ordering is required. A generated mapper signals when UPSERT
+strict cross-node ordering is required. For a mutable POJO, an ordinary
+**UPDATE** now binds the new `@UpdatedAt` directly to its prepared JDBC
+statement without modifying the caller's object. On failure or rollback
+the original POJO keeps its prior timestamp; use `updateReturning` or
+`find` to obtain the persisted timestamp after commit. INSERT still
+fills generated IDs/audit fields on POJOs before JDBC execution for
+backward compatibility, and UPSERT retains its existing audit
+materialization behavior; neither is covered by the UPDATE-only
+rollback immutability guarantee. A generated mapper signals when UPSERT
 must reload database-generated properties; otherwise record values can be stale.
 
 The annotation processor supports `@Transient` (including record components),
@@ -846,7 +854,10 @@ public class Patient extends BaseEntity {
 // db.insert(new Patient()) automatically creates UUID v7 and binds inherited properties.
 ```
 
-BJORM does **not** mutate created/updated timestamps automatically: lifecycle methods and authenticated-user audit context must be invoked by the domain/service layer. This avoids duplicate or misleading writes during migration.
+Without `@CreatedAt` or `@UpdatedAt`, the framework does not infer or
+change audit fields. With those annotations the generated lifecycle
+rules documented above apply; authenticated-user audit attribution
+remains the responsibility of the domain/service layer.
 
 ## Typed JSON (no Jackson dependency in core)
 

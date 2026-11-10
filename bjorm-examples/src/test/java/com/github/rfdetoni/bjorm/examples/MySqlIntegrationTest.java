@@ -162,6 +162,23 @@ public final class MySqlIntegrationTest {
             check(auditPojo.getCreatedAt()!=null && auditPojo.getUpdatedAt()!=null &&
                 db.find(ItAuditPojo.class,auditPojo.getId()).getUpdatedAt()!=null,
                 "MySQL POJO generated audit timestamps");
+            Instant pojoAuditBefore=auditPojo.getUpdatedAt();
+            auditPojo.setLabel("rollback attempt");
+            try {
+                db.tx(tx->{
+                    tx.update(auditPojo);
+                    throw new IllegalStateException("rollback MySQL audit");
+                });
+                throw new AssertionError("Expected MySQL audit rollback");
+            } catch(IllegalStateException expected) {}
+            check(auditPojo.getUpdatedAt().equals(pojoAuditBefore) &&
+                db.find(ItAuditPojo.class,auditPojo.getId()).getLabel().equals("pojo"),
+                "MySQL rollback leaves original POJO timestamp unchanged");
+            ItAuditPojo refreshedAuditPojo=db.updateReturning(auditPojo);
+            check(refreshedAuditPojo.getLabel().equals("rollback attempt") &&
+                !refreshedAuditPojo.getUpdatedAt().isBefore(pojoAuditBefore) &&
+                auditPojo.getUpdatedAt().equals(pojoAuditBefore),
+                "MySQL update stamps JDBC value without mutating caller POJO");
             Instant testTime=Instant.parse("2026-11-10T10:20:30Z");
             ItInstant savedInstant=db.insertReturning(new ItInstant(null,"Original",testTime,0));
             check(testTime.equals(db.find(ItInstant.class,savedInstant.id()).occurredAt()),
