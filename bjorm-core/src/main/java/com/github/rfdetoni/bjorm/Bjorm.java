@@ -140,6 +140,24 @@ public final class Bjorm implements Operations {
             try (ResultSet rs = ps.executeQuery()) { return rs.next(); }
         }
     }
+    /** Only meaningful on a live transaction. SELECT ... LIMIT 1 FOR UPDATE/SHARE. */
+    public <T> boolean lockOne(Class<T> type, SqlPredicate where, LockMode mode) {
+        return withConnection(c -> lockOne(c,type,where,mode));
+    }
+    private <T> boolean lockOne(Connection c, Class<T> type, SqlPredicate where,
+                                LockMode mode) throws SQLException {
+        Objects.requireNonNull(where, "Row lock requires a predicate");
+        Objects.requireNonNull(mode, "mode");
+        if (c.getAutoCommit())
+            throw new IllegalStateException("BJORM row locking requires an active transaction");
+        EntityMapper<T> m=mapper(type);
+        String sql = "SELECT " + m.columnFor(m.idProperty()) + " FROM " + m.table() +
+            " WHERE " + where.sql() + " LIMIT 1 " + mode.sql();
+        try (PreparedStatement ps = prepare(c,sql)) {
+            bindPredicate(ps,where);
+            try (ResultSet rs=ps.executeQuery()) { return rs.next(); }
+        }
+    }
     private void bindPredicate(PreparedStatement ps, SqlPredicate predicate) throws SQLException {
         if (predicate == null) return;
         int i=1;
@@ -631,6 +649,9 @@ public final class Bjorm implements Operations {
         public <T> List<T> list(Class<T> type,SqlPredicate where) {return list(select(type).whereNullable(where));}
         public <T> long count(Class<T> type,SqlPredicate where) {return use(c->Bjorm.this.count(c,type,where));}
         public <T> boolean exists(Class<T> type,SqlPredicate where) {return use(c->Bjorm.this.exists(c,type,where));}
+        public <T> boolean lockOne(Class<T> type,SqlPredicate where,LockMode mode) {
+            return use(c->Bjorm.this.lockOne(c,type,where,mode));
+        }
         public <T> List<T> list(Select<T> query) {return use(c->Bjorm.this.list(c,query));}
         public <T> Optional<T> first(Select<T> query) {query.limit(1);return use(c->{if(!mapper(query.type()).children().isEmpty()){List<T> values=Bjorm.this.list(c,query);return values.stream().findFirst();}return Bjorm.this.first(c,query,null,mapper(query.type()));});}
         public <T> List<Map<String,Object>> fieldRows(Select<T> query,String[] properties) {
