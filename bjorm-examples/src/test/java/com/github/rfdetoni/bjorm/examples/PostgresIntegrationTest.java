@@ -108,6 +108,12 @@ public final class PostgresIntegrationTest {
             db.tx(tx -> {
                 check(tx.count(ItUser.class, ItUser_.name.eq("BJORM")) == 1L, "transaction COUNT");
                 check(tx.exists(ItUser.class, ItUser_.name.eq("BJORM")), "transaction EXISTS");
+                check(tx.lockOne(ItUser.class, ItUser_.name.eq("BJORM"), LockMode.UPDATE),
+                    "PostgreSQL FOR UPDATE in transaction");
+                check(tx.lockOne(ItUser.class, ItUser_.name.eq("BJORM"), LockMode.SHARE),
+                    "PostgreSQL FOR SHARE in transaction");
+                check(!tx.lockOne(ItUser.class, ItUser_.name.eq("MISSING"), LockMode.UPDATE),
+                    "PostgreSQL lock absent row");
             });
 
             try{db.tx(tx->{tx.insert(new ItUser(UUID.randomUUID(),"SHOULD_ROLLBACK",11));throw new IllegalStateException("rollback");});}catch(IllegalStateException expected){}
