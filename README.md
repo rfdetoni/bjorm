@@ -353,7 +353,34 @@ class BjormMappings {
 }
 ```
 
-The adapter creates the `Bjorm` bean using `TransactionAwareDataSourceProxy`; if no mapper beans are registered, it discovers generated mappers via ServiceLoader. calls to injected `Bjorm` from a Spring `@Transactional` method participate in Spring-managed connections. Do **not** nest `db.tx` within Spring-managed transactions; use the Spring transaction boundary or BJORM's explicit transactions, not both at once. The adapter has not been integration-tested against a running Spring Boot context in the present environment.
+The adapter creates the `Bjorm` bean using `TransactionAwareDataSourceProxy`; if no mapper beans are registered, it discovers generated mappers via ServiceLoader. Calls to injected `Bjorm` from a Spring `@Transactional` method participate in Spring-managed JDBC connections. Do **not** nest `db.tx` within Spring-managed transactions; use the Spring transaction boundary or BJORM's explicit transaction, never both.
+
+For schema-per-tenant applications, opt in to **fail-closed** Spring bean wiring:
+
+```yaml
+bjorm:
+  dialect: postgresql
+  tenant:
+    required: true
+  jdbc:
+    batch-size: 128
+    query-timeout-seconds: 30
+    max-buffered-rows: 100000
+    fetch-size: 128
+```
+
+With `bjorm.tenant.required=true`, the injected `Bjorm` is a tenant-required
+root. Obtain the authorized schema using IAM and call
+`bjorm.forTenant(authorizedSchema)` for every request or job. Methods invoked
+on the unscoped root fail before acquiring a connection, including during
+Spring transactions. `BjormPages` created for the root is also unscoped;
+construct tenant-specific paging helpers from the scoped BJORM instance.
+
+A JUnit integration test exercises Spring's `DataSourceTransactionManager` and
+`TransactionAwareDataSourceProxy` with a simulated JDBC connection, verifying
+connection reuse, rollback propagation, tenant-local PostgreSQL session settings
+and rejection of nested `Bjorm.tx`. It does not replace an application-context
+test or a real end-to-end Boot service test in your target deployment.
 
 ## Tests and benchmarks
 
