@@ -31,6 +31,8 @@ public final class PostgresIntegrationTest {
         // Use an expendable test database. Never run against an existing schema with fixture table names.
         try(Connection c=ds.getConnection();Statement st=c.createStatement()){
             st.execute("CREATE TABLE bjorm_it_users (id uuid PRIMARY KEY, name text NOT NULL, age integer NOT NULL)");
+            st.execute("CREATE SCHEMA bjorm_test");
+            st.execute("CREATE TABLE bjorm_test.bjorm_it_static (id uuid PRIMARY KEY, label text)");
             st.execute("CREATE SCHEMA bjorm_tenant_a");
             st.execute("CREATE SCHEMA bjorm_tenant_b");
             st.execute("CREATE TABLE bjorm_tenant_a.bjorm_it_users (id uuid PRIMARY KEY, name text NOT NULL, age integer NOT NULL)");
@@ -62,9 +64,15 @@ public final class PostgresIntegrationTest {
             MappedColumns_BjormMapper.INSTANCE,OrdinalEvent_BjormMapper.INSTANCE,
             ItAuditRecord_BjormMapper.INSTANCE,ItAuditPojo_BjormMapper.INSTANCE,
             ExplicitAssignedRecord_BjormMapper.INSTANCE,ExplicitIdentityRecord_BjormMapper.INSTANCE,
-            ExplicitUuidRecord_BjormMapper.INSTANCE);
+            ExplicitUuidRecord_BjormMapper.INSTANCE,StaticSchemaRecord_BjormMapper.INSTANCE);
         UUID id=UUID.randomUUID();ItUser alice=new ItUser(id,"BJORM",34);
         try {
+            StaticSchemaRecord fixed=db.insertReturning(new StaticSchemaRecord(null,"initial-static"));
+            check(db.find(StaticSchemaRecord.class,fixed.id()).label().equals("initial-static"),
+                "PostgreSQL fixed-schema INSERT/SELECT");
+            db.upsertReturning(new StaticSchemaRecord(fixed.id(),"updated-static"));
+            check(db.find(StaticSchemaRecord.class,fixed.id()).label().equals("updated-static"),
+                "PostgreSQL fixed-schema UPSERT");
             ExplicitAssignedRecord assigned=db.insertReturning(new ExplicitAssignedRecord(709L,"assigned"));
             check(assigned.id()==709L && db.find(ExplicitAssignedRecord.class,709L).equals(assigned),
                 "PostgreSQL explicit assigned numeric ID");
@@ -327,6 +335,7 @@ public final class PostgresIntegrationTest {
                 st.execute("DROP TABLE IF EXISTS bjorm_it_order_lines");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_order_notes");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_orders");
+                st.execute("DROP SCHEMA IF EXISTS bjorm_test CASCADE");
                 st.execute("DROP SCHEMA IF EXISTS bjorm_tenant_a CASCADE");
                 st.execute("DROP SCHEMA IF EXISTS bjorm_tenant_b CASCADE");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_users");
