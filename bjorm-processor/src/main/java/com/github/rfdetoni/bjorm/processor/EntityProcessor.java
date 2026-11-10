@@ -208,6 +208,7 @@ public final class EntityProcessor extends AbstractProcessor {
             }
         }
         int id=-1,ver=-1,created=-1,updated=-1;
+        List<Integer> keyColumns=new ArrayList<>();
         Set<String> seen=new HashSet<>();
         for(int i=0;i<cols.size();i++){
             Col c=cols.get(i);
@@ -238,10 +239,21 @@ public final class EntityProcessor extends AbstractProcessor {
             }
             if(c.generated() && (!c.id() || !isNumericId(c.type()))){error(entity,"Database-generated IDs require numeric @Id (int/long/Integer/Long)");return;}
             if(c.uuidV7() && (!c.id()||c.generated()||!Set.of("java.util.UUID","java.lang.String").contains(c.type()))){error(entity,"UUID v7 requires a UUID or String @Id");return;}
-            if(c.id()){if(id>=0){error(entity,"Exactly one @Id required");return;}id=i;}
+            if(c.id()){if(id<0)id=i;keyColumns.add(i);}
             if(c.version()){if(ver>=0||c.id()||!Set.of("int","long","java.lang.Integer","java.lang.Long").contains(c.type())){error(entity,"@Version must annotate one integer/long non-id field");return;}ver=i;}
         }
         if(id<0){error(entity,"Missing @Id");return;}
+        if(keyColumns.size()>1) {
+            for(int keyColumn:keyColumns) {
+                Col col=cols.get(keyColumn);
+                if(col.generated() || col.uuidV7()){
+                    error(entity,"Composite @Id components require strategy=ASSIGNED");return;
+                }
+            }
+            if(!relations.isEmpty() || !toOnes.isEmpty()) {
+                error(entity,"Composite @Id cannot use @Children or @ManyToOne graph relationships");return;
+            }
+        }
         if(cols.size()==1){error(entity,"Entity needs a non-id property");return;}
         if(cols.stream().noneMatch(c->!c.id() && c.updatable() && !c.createdAt())){
             error(entity,"Entity requires at least one updatable non-ID column");return;
@@ -261,9 +273,10 @@ public final class EntityProcessor extends AbstractProcessor {
             List<? extends Element> properties=target.getKind()==ElementKind.RECORD
                 ?target.getRecordComponents():pojoFields(target);
             TypeMirror keyType=null;
+            int keyCount=0;
             for(Element property:properties)
-                if(cAnnotated(property,Id.class)){keyType=property.asType();break;}
-            if(keyType==null || !types.isSameType(keyType,fk.typeMirror())) {
+                if(cAnnotated(property,Id.class)){keyType=property.asType();keyCount++;}
+            if(keyCount!=1 || keyType==null || !types.isSameType(keyType,fk.typeMirror())) {
                 error(entity,"@ManyToOne foreign key must match target @Id type: "+toOne.mappedBy());return;
             }
         }
@@ -272,7 +285,7 @@ public final class EntityProcessor extends AbstractProcessor {
             if(!paths.add(mapped.property().replace('.','_'))){
                 error(entity,"Conflicting generated DSL property name: "+mapped.property());return;
             }
-        generateMapper(entity,qualifiedTable,schema,cols,id,ver,record,relations,toOnes,embeddeds);
+        generateMapper(entity,qualifiedTable,schema,cols,id,keyColumns,ver,record,relations,toOnes,embeddeds);
         mapperServices.add(packageOf(entity)+"."+entity.getSimpleName()+"_BjormMapper");
         generatePaths(entity,cols);
     }
@@ -378,7 +391,7 @@ public final class EntityProcessor extends AbstractProcessor {
                 ?"ps.setObject("+param+","+col.read()+"==null?null:"+col.read()+".ordinal());"
                 :setter(param,col.read(),col.type(),dialect);
     }
-    private void generateMapper(TypeElement entity,String table,String schema,List<Col> cols,int id,int version,boolean record,List<Relation> relations,List<ToOne> toOnes,List<EmbeddedSpec> embeddeds) throws IOException {
+    private void generateMapper(TypeElement entity,String table,String schema,List<Col> cols,int id,List<Integer> keyColumns,int version,boolean record,List<Relation> relations,List<ToOne> toOnes,List<EmbeddedSpec> embeddeds) throws IOException {
         String clazz=entity.getSimpleName().toString(),pkg=packageOf(entity),mapper=clazz+"_BjormMapper";
         String conflictTarget=schema.isEmpty()?table:table.substring(schema.length()+1);
         String fields=String.join(", ",cols.stream().map(Col::column).toList());
