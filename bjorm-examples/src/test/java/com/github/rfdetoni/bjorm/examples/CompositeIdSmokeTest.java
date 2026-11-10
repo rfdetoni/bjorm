@@ -4,7 +4,7 @@ import java.util.UUID;
 
 public final class CompositeIdSmokeTest {
     private static void check(boolean ok,String msg){if(!ok)throw new AssertionError(msg);}
-    public static void main(String[] args) {
+    public static void main(String[] args) throws java.sql.SQLException {
         UUID tenant=UUID.randomUUID();
         var mapper=ItCompositeRecord_BjormMapper.INSTANCE;
         var record=new ItCompositeRecord(tenant,"SKU-1","initial",0);
