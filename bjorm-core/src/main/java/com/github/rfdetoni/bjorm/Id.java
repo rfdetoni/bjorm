@@ -10,4 +10,6 @@ public @interface Id {
     boolean uuidV7() default false;
     /** Disable automatic ID assignment (e.g. imported IDs). */
     boolean assigned() default false;
+    /** Preferred explicit strategy for new entities. Do not combine with legacy boolean flags. */
+    IdStrategy strategy() default IdStrategy.INFERRED;
 }

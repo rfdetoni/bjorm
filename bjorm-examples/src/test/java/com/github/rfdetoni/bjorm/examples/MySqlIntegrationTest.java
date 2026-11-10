@@ -36,6 +36,9 @@ public final class MySqlIntegrationTest {
             st.execute("CREATE TABLE bjorm_it_instants(id CHAR(36) PRIMARY KEY,label VARCHAR(255),occurred_at TIMESTAMP(6) NULL,version INT NOT NULL DEFAULT 0)");
             st.execute("CREATE TABLE bjorm_it_documents(id CHAR(36) PRIMARY KEY,payload JSON)");
             st.execute("CREATE TABLE bjorm_it_auto_long(id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,label VARCHAR(255))");
+            st.execute("CREATE TABLE bjorm_it_explicit_assigned(id BIGINT PRIMARY KEY,label VARCHAR(255))");
+            st.execute("CREATE TABLE bjorm_it_explicit_identity(id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,label VARCHAR(255))");
+            st.execute("CREATE TABLE bjorm_it_explicit_uuid(id CHAR(36) PRIMARY KEY,label VARCHAR(255))");
             st.execute("CREATE TABLE bjorm_it_orders(id CHAR(36) PRIMARY KEY,description VARCHAR(255))");
             st.execute("CREATE TABLE bjorm_it_order_lines(id CHAR(36) PRIMARY KEY,orderId CHAR(36),sku VARCHAR(255),FOREIGN KEY(orderId) REFERENCES bjorm_it_orders(id))");
             st.execute("CREATE TABLE bjorm_it_order_notes(id CHAR(36) PRIMARY KEY,orderId CHAR(36),note VARCHAR(255),version INT NOT NULL DEFAULT 0,FOREIGN KEY(orderId) REFERENCES bjorm_it_orders(id))");
@@ -46,7 +49,19 @@ public final class MySqlIntegrationTest {
                 AutoLongRecord_BjormMapper.INSTANCE,ItOrder_BjormMapper.INSTANCE,
                 ItOrderLine_BjormMapper.INSTANCE,ItOrderNote_BjormMapper.INSTANCE,
                 ItInstant_BjormMapper.INSTANCE,MappedColumns_BjormMapper.INSTANCE,OrdinalEvent_BjormMapper.INSTANCE,
-                ItAuditRecord_BjormMapper.INSTANCE,ItAuditPojo_BjormMapper.INSTANCE);
+                ItAuditRecord_BjormMapper.INSTANCE,ItAuditPojo_BjormMapper.INSTANCE,
+                ExplicitAssignedRecord_BjormMapper.INSTANCE,ExplicitIdentityRecord_BjormMapper.INSTANCE,
+                ExplicitUuidRecord_BjormMapper.INSTANCE);
+            ExplicitAssignedRecord assigned=db.insertReturning(new ExplicitAssignedRecord(704L,"assigned"));
+            check(db.find(ExplicitAssignedRecord.class,704L).equals(assigned),"MySQL explicit assigned numeric ID");
+            ExplicitIdentityRecord identity=db.insertReturning(new ExplicitIdentityRecord(null,"identity"));
+            check(identity.id()!=null && identity.id()>0 &&
+                db.find(ExplicitIdentityRecord.class,identity.id()).equals(identity),
+                "MySQL explicit identity key");
+            ExplicitUuidRecord uuidRecord=db.insertReturning(new ExplicitUuidRecord(null,"v7"));
+            check(uuidRecord.id()!=null && uuidRecord.id().version()==7 &&
+                db.find(ExplicitUuidRecord.class,uuidRecord.id()).equals(uuidRecord),
+                "MySQL explicit UUID_V7 key");
             ItAuditRecord audit=db.insertReturning(new ItAuditRecord(null,"mysql-created",null,null));
             ItAuditRecord insertedAudit=db.find(ItAuditRecord.class,audit.id());
             check(insertedAudit.createdAt()!=null && insertedAudit.updatedAt()!=null,
@@ -146,6 +161,7 @@ public final class MySqlIntegrationTest {
             try(Connection c=source.getConnection();Statement st=c.createStatement()){
                 for(String name:List.of("bjorm_it_order_notes","bjorm_it_order_lines","bjorm_it_orders",
                     "bjorm_it_columns","bjorm_it_ordinal","bjorm_it_audit","bjorm_it_audit_pojo",
+                    "bjorm_it_explicit_assigned","bjorm_it_explicit_identity","bjorm_it_explicit_uuid",
                     "bjorm_it_instants","bjorm_it_documents","bjorm_it_auto_long","bjorm_it_users"))
                     st.execute("DROP TABLE IF EXISTS "+name);
             }

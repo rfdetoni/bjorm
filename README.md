@@ -57,6 +57,29 @@ db.tx(tx -> {
 });
 ```
 
+## Explicit primary-key generation strategy
+
+Legacy `@Id` inference remains **unchanged** for source and storage compatibility:
+`UUID` and `String` produce UUIDv7; numeric `int/long` use database identities.
+New records can choose their strategy at compile time:
+
+```java
+public record ExternalRecord(@Id(strategy = IdStrategy.ASSIGNED) Long id, String name) {}
+public record UuidRecord(@Id(strategy = IdStrategy.UUID_V7) UUID id, String name) {}
+public record IdentityRecord(@Id(strategy = IdStrategy.IDENTITY) Long id, String name) {}
+```
+
+Do not combine `strategy` with legacy `generated`, `uuidV7`, or `assigned`
+flags. The annotation processor checks invalid ID types and contradictory
+settings at compilation, rather than generating invalid SQL.
+
+Compiled `@Query` repositories detect PostgreSQL `::` casts only in executable
+SQL, ignoring tokens inside comments and string literals. Attempting to execute
+such a method with the MySQL dialect now fails **before** preparing SQL.
+For cross-dialect queries, use the portable `CAST(expression AS type)` form,
+taking into account vendor-specific type names. Native SQL remains dialect
+specific beyond this targeted safeguard.
+
 ## Native aggregates and row locks (no JdbcClient required)
 
 Use BJORM's generated field predicates for index-friendly COUNT and EXISTS, including

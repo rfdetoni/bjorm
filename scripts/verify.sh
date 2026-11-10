@@ -15,6 +15,7 @@ java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.TenantSmoke
 java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.MappingFlagsSmokeTest
 java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.OrdinalSmokeTest
 java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.AuditSmokeTest
+java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.IdStrategySmokeTest
 java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.GraphQuerySmokeTest
 java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.GraphSharedRelationSmokeTest
 java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.AnnotatedJoinSmokeTest
@@ -57,6 +58,27 @@ if javac -cp "$OUT/core" -processorpath "$OUT/core:$OUT/processor" -processor co
   echo 'FAIL: processor accepted an unbound query parameter' >&2; exit 1
 fi
 grep -q 'Unknown SQL parameter' "$OUT/negative.log"
+# Explicit ID strategies are compile-time contracts, not runtime defaults.
+cat > "$OUT/InvalidIdentityId.java" <<'JAVA'
+import com.github.rfdetoni.bjorm.*;
+import java.util.UUID;
+@Table("invalid_identity_id")
+public record InvalidIdentityId(@Id(strategy=IdStrategy.IDENTITY) UUID id,String name) {}
+JAVA
+if javac -cp "$OUT/core" -processorpath "$OUT/core:$OUT/processor" -processor com.github.rfdetoni.bjorm.processor.EntityProcessor -d "$OUT/example" "$OUT/InvalidIdentityId.java" 2>"$OUT/id-negative.log"; then
+  echo 'FAIL: processor accepted database identity for UUID' >&2; exit 1
+fi
+grep -q 'requires int/long/Integer/Long' "$OUT/id-negative.log"
+cat > "$OUT/InvalidMixedStrategy.java" <<'JAVA'
+import com.github.rfdetoni.bjorm.*;
+import java.util.UUID;
+@Table("invalid_mixed_id")
+public record InvalidMixedStrategy(@Id(strategy=IdStrategy.ASSIGNED,uuidV7=true) UUID id,String name) {}
+JAVA
+if javac -cp "$OUT/core" -processorpath "$OUT/core:$OUT/processor" -processor com.github.rfdetoni.bjorm.processor.EntityProcessor -d "$OUT/example" "$OUT/InvalidMixedStrategy.java" 2>"$OUT/id-negative.log"; then
+  echo 'FAIL: processor accepted conflicting @Id policy flags' >&2; exit 1
+fi
+grep -q 'cannot be combined with legacy' "$OUT/id-negative.log"
 if grep -R -l 'import org\.springframework' bjorm-core/src/main/java bjorm-processor/src/main/java; then
   echo 'FAIL: framework dependency leaked into BJORM core/processor' >&2; exit 1
 fi
