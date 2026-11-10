@@ -128,6 +128,24 @@ fi
 if ! grep -q '@Embedded requires a public record value type' "$OUT/embedded-negative.log"; then
   cat "$OUT/embedded-negative.log" >&2; exit 1
 fi
+# Multi-part primary keys must opt in explicitly; inferred UUID IDs are rejected.
+cat > "$OUT/InvalidCompositeId.java" <<'JAVA'
+import com.github.rfdetoni.bjorm.*;
+import java.util.UUID;
+@Table("invalid_composite_ids")
+public record InvalidCompositeId(
+    @Id UUID tenantId,
+    @Id(strategy=IdStrategy.ASSIGNED) String productId,
+    String name) {}
+JAVA
+if javac -cp "$OUT/core" -processorpath "$OUT/core:$OUT/processor" \
+  -processor com.github.rfdetoni.bjorm.processor.EntityProcessor \
+  -d "$OUT/example" "$OUT/InvalidCompositeId.java" 2>"$OUT/composite-negative.log"; then
+  echo 'FAIL: inferred and assigned composite keys were mixed' >&2; exit 1
+fi
+if ! grep -q 'Composite @Id components require explicit strategy=ASSIGNED' "$OUT/composite-negative.log"; then
+  cat "$OUT/composite-negative.log" >&2; exit 1
+fi
 if grep -R -l 'import org\.springframework' bjorm-core/src/main/java bjorm-processor/src/main/java; then
   echo 'FAIL: framework dependency leaked into BJORM core/processor' >&2; exit 1
 fi
