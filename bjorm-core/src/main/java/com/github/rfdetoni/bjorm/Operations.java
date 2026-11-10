@@ -21,6 +21,8 @@ public interface Operations {
     <T> long count(Class<T> type, SqlPredicate predicate);
     /** SQL SELECT 1 WHERE ... LIMIT 1; uses short-circuit index access when possible. */
     <T> boolean exists(Class<T> type, SqlPredicate predicate);
+    /** Lock at most one matched row in an existing transaction. Returns false if absent. */
+    <T> boolean lockOne(Class<T> type, SqlPredicate predicate, LockMode mode);
     default <T> long count(Class<T> type) { return count(type, null); }
     default <T> boolean exists(Class<T> type) { return exists(type, null); }
     <T> List<T> list(Select<T> query);
