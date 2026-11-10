@@ -32,6 +32,8 @@ public final class MySqlIntegrationTest {
         try(Connection c=source.getConnection();Statement st=c.createStatement()){
             st.execute("CREATE TABLE bjorm_it_users(id CHAR(36) PRIMARY KEY,name VARCHAR(255) UNIQUE,age INT NOT NULL)");
             st.execute("CREATE TABLE bjorm_it_invoices(id CHAR(36) PRIMARY KEY,customerId CHAR(36),reference VARCHAR(255),FOREIGN KEY(customerId) REFERENCES bjorm_it_users(id))");
+            st.execute("CREATE TABLE bjorm_it_embedded_records(id CHAR(36) PRIMARY KEY,label VARCHAR(255),shipping_street VARCHAR(255),shipping_postal VARCHAR(255))");
+            st.execute("CREATE TABLE bjorm_it_embedded_pojos(id CHAR(36) PRIMARY KEY,label VARCHAR(255),billing_street VARCHAR(255),billing_postal VARCHAR(255))");
             st.execute("CREATE TABLE bjorm_it_ordinal(id CHAR(36) PRIMARY KEY,status INT,label VARCHAR(255))");
             st.execute("CREATE TABLE bjorm_it_audit(id CHAR(36) PRIMARY KEY,label VARCHAR(255),createdAt TIMESTAMP(6) NULL,updatedAt TIMESTAMP(6) NULL)");
             st.execute("CREATE TABLE bjorm_it_audit_pojo(id CHAR(36) PRIMARY KEY,label VARCHAR(255),createdAt TIMESTAMP(6) NULL,updatedAt TIMESTAMP(6) NULL)");
@@ -57,7 +59,8 @@ public final class MySqlIntegrationTest {
                 ExplicitAssignedRecord_BjormMapper.INSTANCE,ExplicitIdentityRecord_BjormMapper.INSTANCE,
                 ExplicitUuidRecord_BjormMapper.INSTANCE,StaticSchemaRecord_BjormMapper.INSTANCE,
                 ItInvoice_BjormMapper.INSTANCE,ItInvoiceInner_BjormMapper.INSTANCE,
-                ItInvoicePojo_BjormMapper.INSTANCE);
+                ItInvoicePojo_BjormMapper.INSTANCE,
+                ItEmbeddedRecord_BjormMapper.INSTANCE,ItEmbeddedPojo_BjormMapper.INSTANCE);
             ItUser invoiceCustomer=db.insertReturning(new ItUser(null,"MySQL Invoice Customer",27));
             ItInvoice invoice=db.insertReturning(new ItInvoice(null,invoiceCustomer.id(),"MYSQL-INV",null));
             java.util.concurrent.atomic.AtomicInteger queryCount=new java.util.concurrent.atomic.AtomicInteger();
@@ -81,6 +84,20 @@ public final class MySqlIntegrationTest {
             db.insert(invoicePojo);
             check(db.find(ItInvoicePojo.class,invoicePojo.getId()).getCustomer()!=null,
                 "MySQL ManyToOne POJO property hydrated");
+            ItAddress embeddedAddress=new ItAddress("Rua das Flores","89201");
+            ItEmbeddedRecord embedded=db.insertReturning(new ItEmbeddedRecord(null,"mysql-embedded",embeddedAddress));
+            check(embeddedAddress.equals(db.find(ItEmbeddedRecord.class,embedded.id()).address()),
+                "MySQL flattened embedded record roundtrip");
+            check(db.updateBy(ItEmbeddedRecord.class,Map.of("address.zipCode","89220"),
+                ItEmbeddedRecord_.id.eq(embedded.id()))==1 &&
+                db.find(ItEmbeddedRecord.class,embedded.id()).address().zipCode().equals("89220"),
+                "MySQL embedded nested bulk mapped update");
+            ItEmbeddedPojo embeddedPojo=new ItEmbeddedPojo();
+            embeddedPojo.setLabel("mysql-pojo");
+            embeddedPojo.setBilling(embeddedAddress);
+            db.insert(embeddedPojo);
+            check(db.find(ItEmbeddedPojo.class,embeddedPojo.getId()).getBilling().equals(embeddedAddress),
+                "MySQL POJO embedded value roundtrip");
             StaticSchemaRecord staticRecord=db.insertReturning(new StaticSchemaRecord(null,"mysql-static"));
             check(db.find(StaticSchemaRecord.class,staticRecord.id()).label().equals("mysql-static"),
                 "MySQL static database schema SELECT");
@@ -252,7 +269,7 @@ public final class MySqlIntegrationTest {
             System.out.println("PASS: MySQL 8.4 CRUD, native upsert, JSON, UUID v7, AUTO_INCREMENT and eager JOIN graph");
         }finally {
             try(Connection c=source.getConnection();Statement st=c.createStatement()){
-                for(String name:List.of("bjorm_it_invoices","bjorm_it_order_notes","bjorm_it_order_lines","bjorm_it_orders",
+                for(String name:List.of("bjorm_it_embedded_records","bjorm_it_embedded_pojos","bjorm_it_invoices","bjorm_it_order_notes","bjorm_it_order_lines","bjorm_it_orders",
                     "bjorm_it_columns","bjorm_it_ordinal","bjorm_it_audit","bjorm_it_audit_pojo",
                     "bjorm_it_explicit_assigned","bjorm_it_explicit_identity","bjorm_it_explicit_uuid",
                     "bjorm_it_static",
