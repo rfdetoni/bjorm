@@ -161,6 +161,14 @@ correct compare-and-swap contract is implemented. The update-returning API
 re-reads the stored entity within the transaction, so it costs an additional
 SELECT, but never fabricates a new version after a failed UPDATE.
 
+Compile-time audit annotations are also supported: `@CreatedAt` initializes a null
+`Instant` or UTC `LocalDateTime` on INSERT and is excluded from UPDATE and
+UPSERT changes. `@UpdatedAt` initializes a null value on INSERT and stamps
+UPDATE, UPSERT and typed `updateBy` automatically. These timestamps are
+application-clock based, so synchronize clocks or use database timestamps if
+strict cross-node ordering is required. A generated mapper signals when UPSERT
+must reload database-generated properties; otherwise record values can be stale.
+
 The annotation processor supports `@Transient` (including record components),
 `@Column(value="...", insertable=false, updatable=false)` and opt-in
 `@EnumOrdinal` on enum properties. The ordinal is bounds-checked during reads.
