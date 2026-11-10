@@ -251,10 +251,6 @@ public final class EntityProcessor extends AbstractProcessor {
             if(child==null||!mappedTable(child)) {error(entity,"@Children target must be a @Table entity: "+r.childType());return;}
             if(!types.isSameType(r.foreignKeyType(),cols.get(id).typeMirror())) {error(entity,"@Children mappedBy property must have the same type as parent ID: "+r.mappedBy());return;}
         }
-        if(!relations.isEmpty() && !toOnes.isEmpty()){
-            error(entity,"Combined @Children and @ManyToOne graph loading is not yet supported on one entity");
-            return;
-        }
         for(ToOne toOne:toOnes) {
             Col fk=cols.stream().filter(c->c.property().equals(toOne.mappedBy())).findFirst().orElse(null);
             if(fk==null){error(entity,"@ManyToOne mappedBy requires a scalar FK property: "+toOne.mappedBy());return;}
