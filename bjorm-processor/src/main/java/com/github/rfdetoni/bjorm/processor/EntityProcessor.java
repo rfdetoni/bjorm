@@ -480,6 +480,28 @@ public final class EntityProcessor extends AbstractProcessor {
                 String changes=String.join(", ",cols.stream().filter(c->!c.id()&&c.updatable()&&!c.createdAt()).map(c->"\""+c.column()+"\"").toList());
                 w.write("public String upsertSql(com.github.rfdetoni.bjorm.SqlDialect dialect){return dialect.upsertSql(insertSql(dialect),\""+conflictTarget+"\",\""+cols.get(id).column()+"\",java.util.List.of("+changes+"),"+(version>=0?"\""+cols.get(version).column()+"\"":"null")+");}\n");
             }
+            // Detached mutation-free writes use a compile-time generated POJO copy.
+            // Copy properties through validated getters/setters only; no runtime reflection.
+            // Child graphs are intentionally excluded because their mutable descendants could
+            // otherwise be modified by cascading FK/ID assignment.
+            if(!record) {
+                w.write("public "+clazz+" copyForWrite("+clazz+" value){");
+                if(!relations.isEmpty()) {
+                    w.write("throw new UnsupportedOperationException(\"Detached writes do not support mutable child graphs\");}\n");
+                } else {
+                    w.write(clazz+" copy=new "+clazz+"();");
+                    for(Element member:pojoFields(entity)) {
+                        if(member.getAnnotation(Transient.class)!=null || member.getAnnotation(Children.class)!=null)continue;
+                        String property=member.getSimpleName().toString();
+                        String suffix=Character.toUpperCase(property.charAt(0))+property.substring(1);
+                        String type=member.asType().toString();
+                        String getter=findGetter(entity,suffix,type);
+                        if(getter!=null && hasSetter(entity,"set"+suffix,type))
+                            w.write("copy.set"+suffix+"(value."+getter+"());");
+                    }
+                    w.write("return copy;}\n");
+                }
+            }
             Col createdAt=cols.stream().filter(Col::createdAt).findFirst().orElse(null);
             Col updatedAt=cols.stream().filter(Col::updatedAt).findFirst().orElse(null);
             boolean generateInsert=cols.get(id).uuidV7() || createdAt!=null || updatedAt!=null;

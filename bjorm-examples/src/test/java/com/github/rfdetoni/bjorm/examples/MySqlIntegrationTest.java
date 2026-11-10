@@ -179,6 +179,46 @@ public final class MySqlIntegrationTest {
                 !refreshedAuditPojo.getUpdatedAt().isBefore(pojoAuditBefore) &&
                 auditPojo.getUpdatedAt().equals(pojoAuditBefore),
                 "MySQL update stamps JDBC value without mutating caller POJO");
+            ItAuditPojo detachedSource=new ItAuditPojo();
+            detachedSource.setLabel("detached insert");
+            ItAuditPojo detachedPersisted=db.insertDetached(detachedSource);
+            check(detachedPersisted!=detachedSource && detachedPersisted.getId()!=null &&
+                detachedPersisted.getCreatedAt()!=null && detachedPersisted.getUpdatedAt()!=null &&
+                detachedSource.getId()==null && detachedSource.getCreatedAt()==null &&
+                detachedSource.getUpdatedAt()==null,
+                "MySQL detached INSERT keeps caller unchanged");
+            ItAuditPojo duplicateDetached=new ItAuditPojo();
+            duplicateDetached.setId(detachedPersisted.getId());
+            duplicateDetached.setLabel("duplicate");
+            try {
+                db.insertDetached(duplicateDetached);
+                throw new AssertionError("Expected MySQL duplicate detached INSERT to fail");
+            } catch(BjormException expected) {}
+            check(duplicateDetached.getCreatedAt()==null && duplicateDetached.getUpdatedAt()==null &&
+                db.find(ItAuditPojo.class,detachedPersisted.getId()).getLabel().equals("detached insert"),
+                "MySQL detached INSERT failure cannot stamp caller or change stored row");
+            ItAuditPojo detachedUpsertSource=new ItAuditPojo();
+            detachedUpsertSource.setId(detachedPersisted.getId());
+            detachedUpsertSource.setLabel("detached upsert");
+            ItAuditPojo detachedUpsertPersisted=db.upsertDetached(detachedUpsertSource);
+            check(detachedUpsertPersisted!=detachedUpsertSource &&
+                detachedUpsertSource.getUpdatedAt()==null && detachedUpsertSource.getCreatedAt()==null &&
+                db.find(ItAuditPojo.class,detachedPersisted.getId()).getLabel().equals("detached upsert"),
+                "MySQL detached UPSERT copies timestamps without touching caller");
+            ItAuditPojo rolledBackSource=new ItAuditPojo();
+            rolledBackSource.setLabel("detached rollback");
+            java.util.concurrent.atomic.AtomicReference<UUID> rolledBackId=new java.util.concurrent.atomic.AtomicReference<>();
+            try {
+                db.tx(tx->{
+                    rolledBackId.set(tx.insertDetached(rolledBackSource).getId());
+                    throw new IllegalStateException("detached rollback");
+                });
+                throw new AssertionError("Expected detached rollback");
+            } catch(IllegalStateException expected) {}
+            check(rolledBackSource.getId()==null && rolledBackSource.getCreatedAt()==null &&
+                rolledBackSource.getUpdatedAt()==null && rolledBackId.get()!=null &&
+                db.find(ItAuditPojo.class,rolledBackId.get())==null,
+                "MySQL external transaction rollback does not mutate detached caller");
             Instant testTime=Instant.parse("2026-11-10T10:20:30Z");
             ItInstant savedInstant=db.insertReturning(new ItInstant(null,"Original",testTime,0));
             check(testTime.equals(db.find(ItInstant.class,savedInstant.id()).occurredAt()),

@@ -31,6 +31,7 @@ java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.TypedJsonSm
 java -cp "$OUT/core:$OUT/example${BJORM_MYSQL_DRIVER_JAR:+:$BJORM_MYSQL_DRIVER_JAR}" com.github.rfdetoni.bjorm.examples.MySqlIntegrationTest
 
 java -cp "$OUT/core:$OUT/example${BJORM_DRIVER_JAR:+:$BJORM_DRIVER_JAR}" com.github.rfdetoni.bjorm.examples.PostgresIntegrationTest
+java -cp "$OUT/core:$OUT/example${BJORM_DRIVER_JAR:+:$BJORM_DRIVER_JAR}" com.github.rfdetoni.bjorm.examples.PostgresRoleIsolationTest
 
 
 # Cross-module inheritance: base annotations must survive compilation into a separate JAR/module.

@@ -24,6 +24,11 @@ public interface EntityMapper<T> extends RowMapper<T> {
     default void prepareInsert(T entity) {}
     /** Return the insertable instance (records are copied; mutable POJOs are filled in-place). */
     default T materializeInsert(T entity) { prepareInsert(entity); return entity; }
+    /** Snapshot a mutable entity for detached writes. Generated POJO mappers copy persisted properties; records are immutable. */
+    default T copyForWrite(T entity) {
+        if (immutable()) return entity;
+        throw new UnsupportedOperationException("Detached write requires a generated copyForWrite mapper");
+    }
     /** Stamp @UpdatedAt on UPDATE without reflection. */
     default T materializeUpdate(T entity) { return entity; }
     /** Stamp @UpdatedAt on UPSERT and retain the insert-time @CreatedAt behavior. */

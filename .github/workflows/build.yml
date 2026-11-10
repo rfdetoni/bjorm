@@ -53,6 +53,7 @@ jobs:
       BJORM_TEST_JDBC_URL: jdbc:postgresql://localhost:5432/bjorm_test
       BJORM_TEST_USER: bjorm
       BJORM_TEST_PASSWORD: bjorm_test
+      BJORM_ROLE_TEST_ADMIN: 'true'
       BJORM_DRIVER_JAR: bjorm-examples/target/postgresql-42.7.7.jar
     steps:
       - uses: actions/checkout@v4
