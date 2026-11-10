@@ -599,9 +599,10 @@ In Spring Boot 4: set `bjorm.dialect: mysql` (default: `postgresql`).
 - **MySQL 8.4**: store UUIDs in `CHAR(36)`, native JSON and
   `ON DUPLICATE KEY UPDATE` with row aliases.
 - `FULL OUTER JOIN` is not available on MySQL; explicitly rejected.
-- MySQL upsert with `@Version` is refused. For application-assigned UUID/String
-  primary keys, a PK-equality guard rejects a duplicate secondary UNIQUE key
-  instead of updating another entity. Numeric primary-key upsert is refused
+- With `@Version`, MySQL performs a transaction-scoped INSERT-first CAS
+  UPDATE; stale versions raise `OptimisticLockException`. Without versioning,
+  a PK-equality guard rejects duplicate secondary UNIQUE keys instead of
+  updating another entity. Numeric primary-key upsert remains unsupported
   because `AUTO_INCREMENT` may generate a key on UPDATE-to-NULL.
 - Compiled `@Query` UUID parameters and scalar UUID results use the active
   dialect (PostgreSQL native UUID, MySQL `CHAR(36)`).
