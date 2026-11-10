@@ -622,6 +622,41 @@ automatic tuple keyset pagination and auto-generated root ID ordering
 remain unsupported and fail explicitly. Use typed individual sort
 properties and explicit INSERT/UPDATE for these cases.
 
+## Composite primary keys (opt-in)
+
+For entities whose primary key has more than one column, annotate **every**
+component with `@Id(strategy=IdStrategy.ASSIGNED)`. The generated mapper
+constructs an immutable, ordered `CompositeId` from the fields and uses
+**every** key part in `SELECT`, `UPDATE` and `DELETE` predicates.
+Ordinary single-column ID inference and UUIDv7 generation are unchanged.
+
+```java
+@Table("stock_items")
+public record StockItem(
+    @Id(strategy=IdStrategy.ASSIGNED) UUID tenantId,
+    @Id(strategy=IdStrategy.ASSIGNED) String sku,
+    String label,
+    @Version int version
+) {}
+
+CompositeId key = CompositeId.of(tenantId, "SKU-42");
+StockItem item = db.find(StockItem.class, key);
+StockItem saved = db.updateReturning(new StockItem(tenantId,"SKU-42","New",item.version()));
+```
+
+Components are bound to prepared statements in declaration order. Both
+PostgreSQL and MySQL use their normal UUID handling; `@Version` checks are
+also applied to all composite-key updates and deletes. `updateBy` rejects
+changes to **any** primary-key component.
+
+To keep the contract explicit, composite keys currently do not support
+generated identity/UUID keys, graph relations, UPSERT, or automatic
+single-column keyset pagination. Use an explicit mapped tuple predicate
+and ordering for multi-column cursor pagination. `find` requires a
+`CompositeId` with the exact number and order of components; missing or
+null key parts are rejected. This opt-in is not a migration of existing
+one-column entities.
+
 ## Embedded immutable value objects
 
 `@Embedded` flattens a **public immutable record** into the owning
