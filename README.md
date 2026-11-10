@@ -1,6 +1,6 @@
 # BJORM — Bare Metal Java ORM
 
-**Experimental 0.3.18-SNAPSHOT** — a minimal, compile-time-assisted relational mapper for Java 25. Zero Spring/JPA/Hibernate dependencies in the core; SQL and JDBC remain visible and under application control.
+**Experimental 0.3.19-SNAPSHOT** — a minimal, compile-time-assisted relational mapper for Java 25. Zero Spring/JPA/Hibernate dependencies in the core; SQL and JDBC remain visible and under application control.
 
 > Early-stage source implementation. **Not production-ready**. It is not published to Maven Central. See [architecture and acceptance status](ARCHITECTURE.md).
 
@@ -105,6 +105,68 @@ expressions and conflict updates by composite key), **use BJORM's existing**
 `db.query(sql, binder, mapper)`, `db.one(...)`, `db.execute(...)` or
 compile `@Query` repositories before adding Spring JdbcClient. Those are
 first-class BJORM APIs, not a reason to expand the DSL with every SQL feature.
+
+## Tenant-scoped JDBC operations (PostgreSQL and MySQL)
+
+Tenant-aware deployments should build a **tenant-required** root instead of calling `Bjorm.open(...)`:
+
+```java
+Bjorm root = Bjorm.tenantRequired(
+    dataSource, BjormOptions.defaults(), SqlDialects.POSTGRESQL
+);
+// Authorize the user's company via your IAM/tenant registry BEFORE mapping it to a schema.
+// Never pass an unvalidated HTTP route/query parameter as the tenant schema.
+String authorizedSchema = tenantRegistry.authorizedSchemaFor(authenticatedUser);
+Bjorm tenantDb = root.forTenant(authorizedSchema);
+var customers = tenantDb.select(Customer.class).limit(25).fetch();
+tenantDb.tx(tx -> tx.insert(newCustomer));
+```
+
+The root rejects JDBC access until scoped. A scoped BJORM instance is immutable and
+cannot be rebound to a different tenant. Tenant schema identifiers are strictly
+validated; PostgreSQL uses `SET LOCAL search_path` in each transaction, with
+`pg_catalog` first, tenant schema next and `pg_temp` last. This avoids
+session-level `search_path` state leaking back to the connection pool and
+removes `public` as a fallback. MySQL uses `setCatalog` and restores the
+original catalog on exit, including failure paths. Unsupported dialects fail
+closed. The same rules apply to transaction, batch and scalar APIs.
+
+**Important:** application authorization remains mandatory. Schema selection is
+not a substitute for database permissions, RLS or security review of native SQL.
+Create least-privilege DB roles, validate tenant-to-schema ownership in the IAM,
+never accept arbitrary tenant schema names from clients, and do not run
+untrusted native SQL. Prefer per-tenant DB grants when tenants are mutually
+untrusted; a connection with access to every schema can still execute
+fully-qualified native SQL if the application exposes it.
+
+## Native mapped mutations and richer compile-time mappings
+
+```java
+// Writes require a non-null typed predicate. Unknown property names are rejected.
+tenantDb.updateBy(Customer.class, Map.of("name", "Updated"), Customer_.id.eq(id));
+tenantDb.deleteBy(Customer.class, Customer_.id.eq(id));
+tenantDb.batchDelete(List.of(customer1, customer2));
+List<Customer> saved = tenantDb.batchUpsertReturning(List.of(customer3, customer4));
+Customer current = tenantDb.updateReturning(customer); // reloaded @Version
+List<Customer> currentBatch = tenantDb.batchUpdateReturning(List.of(customer1, customer2));
+
+var tuned = new BjormOptions(30, 10_000, 128, 128); // timeout, buffered rows, fetch size, batch size
+```
+
+`updateBy/deleteBy` deliberately reject versioned entities and mapped child
+graphs because set-based SQL would bypass version checks or child persistence.
+Use `updateReturning`, `batchUpdateReturning` and `batchDelete` for those
+cases. Versioned MySQL UPSERT remains explicitly unsupported until its
+correct compare-and-swap contract is implemented. The update-returning API
+re-reads the stored entity within the transaction, so it costs an additional
+SELECT, but never fabricates a new version after a failed UPDATE.
+
+The annotation processor supports `@Transient` (including record components),
+`@Column(value="...", insertable=false, updatable=false)` and opt-in
+`@EnumOrdinal` on enum properties. The ordinal is bounds-checked during reads.
+Only use ordinal storage when the enum declaration will never be reordered.
+Dynamic mapped writes use typed identifiers and dialect-aware JSON bindings;
+no JPA, Hibernate or Spring JdbcClient is required.
 
 ## Find one and fetch only requested properties
 
