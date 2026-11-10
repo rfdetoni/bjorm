@@ -51,15 +51,31 @@ public final class PostgresIntegrationTest {
             st.execute("CREATE TABLE bjorm_it_typed_json (id uuid PRIMARY KEY, values_json jsonb)");
             st.execute("CREATE TABLE bjorm_it_auto_string (id text PRIMARY KEY, label text)");
             st.execute("CREATE TABLE bjorm_it_auto_long (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, label text)");
+            st.execute("CREATE TABLE bjorm_it_explicit_assigned (id bigint PRIMARY KEY, label text)");
+            st.execute("CREATE TABLE bjorm_it_explicit_identity (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, label text)");
+            st.execute("CREATE TABLE bjorm_it_explicit_uuid (id uuid PRIMARY KEY, label text)");
             st.execute("CREATE TABLE bjorm_it_auto_int (id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY, label text)");
             st.execute("CREATE TABLE bjorm_it_record_parents (id uuid PRIMARY KEY, label text)");
             st.execute("CREATE TABLE bjorm_it_record_children (id uuid PRIMARY KEY, parentId uuid NOT NULL REFERENCES bjorm_it_record_parents(id), label text)");
         }
         Bjorm db=Bjorm.open(ds,ItUser_BjormMapper.INSTANCE,ItProduct_BjormMapper.INSTANCE,ItDocument_BjormMapper.INSTANCE,ItOrder_BjormMapper.INSTANCE,ItOrderInner_BjormMapper.INSTANCE,ItOrderOuter_BjormMapper.INSTANCE,ItOrderLine_BjormMapper.INSTANCE,ItOrderNote_BjormMapper.INSTANCE,AutoUuidRecord_BjormMapper.INSTANCE,AutoStringRecord_BjormMapper.INSTANCE,AutoLongRecord_BjormMapper.INSTANCE,AutoIntRecord_BjormMapper.INSTANCE,AutoUuidPojo_BjormMapper.INSTANCE,AutoParentRecord_BjormMapper.INSTANCE,AutoChildRecord_BjormMapper.INSTANCE,InheritedPatient_BjormMapper.INSTANCE,ItTypedJson_BjormMapper.INSTANCE,ItInstant_BjormMapper.INSTANCE,
             MappedColumns_BjormMapper.INSTANCE,OrdinalEvent_BjormMapper.INSTANCE,
-            ItAuditRecord_BjormMapper.INSTANCE,ItAuditPojo_BjormMapper.INSTANCE);
+            ItAuditRecord_BjormMapper.INSTANCE,ItAuditPojo_BjormMapper.INSTANCE,
+            ExplicitAssignedRecord_BjormMapper.INSTANCE,ExplicitIdentityRecord_BjormMapper.INSTANCE,
+            ExplicitUuidRecord_BjormMapper.INSTANCE);
         UUID id=UUID.randomUUID();ItUser alice=new ItUser(id,"BJORM",34);
         try {
+            ExplicitAssignedRecord assigned=db.insertReturning(new ExplicitAssignedRecord(709L,"assigned"));
+            check(assigned.id()==709L && db.find(ExplicitAssignedRecord.class,709L).equals(assigned),
+                "PostgreSQL explicit assigned numeric ID");
+            ExplicitIdentityRecord identity=db.insertReturning(new ExplicitIdentityRecord(null,"identity"));
+            check(identity.id()!=null && identity.id()>0 &&
+                db.find(ExplicitIdentityRecord.class,identity.id()).equals(identity),
+                "PostgreSQL explicit database identity");
+            ExplicitUuidRecord uuidRecord=db.insertReturning(new ExplicitUuidRecord(null,"v7"));
+            check(uuidRecord.id()!=null && uuidRecord.id().version()==7 &&
+                db.find(ExplicitUuidRecord.class,uuidRecord.id()).equals(uuidRecord),
+                "PostgreSQL explicit UUID v7");
             Bjorm required=Bjorm.tenantRequired(ds,BjormOptions.defaults(),SqlDialects.POSTGRESQL,ItUser_BjormMapper.INSTANCE);
             try {required.find(ItUser.class,UUID.randomUUID());throw new AssertionError("unscoped access accepted");}
             catch(IllegalStateException expected) {}
@@ -292,6 +308,9 @@ public final class PostgresIntegrationTest {
                 st.execute("DROP TABLE IF EXISTS bjorm_it_record_children");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_record_parents");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_auto_int");
+                st.execute("DROP TABLE IF EXISTS bjorm_it_explicit_assigned");
+                st.execute("DROP TABLE IF EXISTS bjorm_it_explicit_identity");
+                st.execute("DROP TABLE IF EXISTS bjorm_it_explicit_uuid");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_auto_long");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_auto_string");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_auto_uuid");
