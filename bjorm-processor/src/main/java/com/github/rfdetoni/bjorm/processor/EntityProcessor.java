@@ -77,7 +77,7 @@ public final class EntityProcessor extends AbstractProcessor {
             throw new IllegalArgumentException("@ManyToOne supports LEFT and INNER only");
         if(!(field.asType() instanceof DeclaredType dt) ||
            !(dt.asElement() instanceof TypeElement target) ||
-           target.getAnnotation(Table.class)==null)
+           !cAnnotated(target,Table.class))
             throw new IllegalArgumentException("@ManyToOne must reference a @Table entity");
         return new ToOne(field.getSimpleName().toString(),annotation.mappedBy(),
             target.getQualifiedName().toString(),annotation.type());
@@ -193,7 +193,7 @@ public final class EntityProcessor extends AbstractProcessor {
         }
         for(Relation r:relations) {
             TypeElement child=elements.getTypeElement(r.childType());
-            if(child==null||child.getAnnotation(Table.class)==null) {error(entity,"@Children target must be a @Table entity: "+r.childType());return;}
+            if(child==null||!cAnnotated(child,Table.class)) {error(entity,"@Children target must be a @Table entity: "+r.childType());return;}
             if(!types.isSameType(r.foreignKeyType(),cols.get(id).typeMirror())) {error(entity,"@Children mappedBy property must have the same type as parent ID: "+r.mappedBy());return;}
         }
         if(!relations.isEmpty() && !toOnes.isEmpty()){
@@ -204,14 +204,14 @@ public final class EntityProcessor extends AbstractProcessor {
             Col fk=cols.stream().filter(c->c.property().equals(toOne.mappedBy())).findFirst().orElse(null);
             if(fk==null){error(entity,"@ManyToOne mappedBy requires a scalar FK property: "+toOne.mappedBy());return;}
             TypeElement target=elements.getTypeElement(toOne.targetType());
-            if(target==null || target.getAnnotation(Table.class)==null){
+            if(target==null || !cAnnotated(target,Table.class)){
                 error(entity,"@ManyToOne target must be @Table: "+toOne.targetType());return;
             }
             List<? extends Element> properties=target.getKind()==ElementKind.RECORD
                 ?target.getRecordComponents():pojoFields(target);
             TypeMirror keyType=null;
             for(Element property:properties)
-                if(property.getAnnotation(Id.class)!=null){keyType=property.asType();break;}
+                if(cAnnotated(property,Id.class)){keyType=property.asType();break;}
             if(keyType==null || !types.isSameType(keyType,fk.typeMirror())) {
                 error(entity,"@ManyToOne foreign key must match target @Id type: "+toOne.mappedBy());return;
             }
@@ -269,7 +269,16 @@ public final class EntityProcessor extends AbstractProcessor {
         }
         return fields;
     }
-    private static boolean cAnnotated(Element el,Class<? extends java.lang.annotation.Annotation> ann){return el.getAnnotation(ann)!=null;}
+    private static boolean cAnnotated(Element el,Class<? extends java.lang.annotation.Annotation> ann){
+        if(el.getAnnotation(ann)!=null)return true;
+        // Annotations with CLASS retention on compiled sibling modules may not
+        // be visible through getAnnotation(...); mirror metadata remains available
+        // to javac and is the stable compile-time contract.
+        String qualified=ann.getCanonicalName();
+        for(AnnotationMirror annotation:el.getAnnotationMirrors())
+            if(annotation.getAnnotationType().toString().equals(qualified))return true;
+        return false;
+    }
     private String findGetter(TypeElement entity,String suff,String type){
         for(Element el:elements.getAllMembers(entity))if(el.getKind()==ElementKind.METHOD&&el instanceof ExecutableElement m && m.getModifiers().contains(Modifier.PUBLIC) && m.getParameters().isEmpty() && m.getReturnType().toString().equals(type)){
             if(m.getSimpleName().contentEquals("get"+suff)||m.getSimpleName().contentEquals("is"+suff))return m.getSimpleName().toString();
