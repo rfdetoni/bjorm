@@ -68,6 +68,20 @@ public final class EntityProcessor extends AbstractProcessor {
         };
     }
     private record Relation(String property,String mappedBy,String childType,String getter,String childGetter,String childSetter,boolean childRecord,JoinType joinType,TypeMirror foreignKeyType) {}
+    private record ToOne(String property,String mappedBy,String targetType,JoinType joinType) {}
+    private ToOne toOne(Element field) {
+        ManyToOne annotation=field.getAnnotation(ManyToOne.class);
+        if(!identifier(annotation.mappedBy()))
+            throw new IllegalArgumentException("Invalid @ManyToOne mappedBy: "+annotation.mappedBy());
+        if(annotation.type()!=JoinType.LEFT && annotation.type()!=JoinType.INNER)
+            throw new IllegalArgumentException("@ManyToOne supports LEFT and INNER only");
+        if(!(field.asType() instanceof DeclaredType dt) ||
+           !(dt.asElement() instanceof TypeElement target) ||
+           target.getAnnotation(Table.class)==null)
+            throw new IllegalArgumentException("@ManyToOne must reference a @Table entity");
+        return new ToOne(field.getSimpleName().toString(),annotation.mappedBy(),
+            target.getQualifiedName().toString(),annotation.type());
+    }
     private void entity(TypeElement entity) throws IOException {
         if(!generated.add(entity.getQualifiedName()+"#entity"))return;
         if(entity.getNestingKind().isNested() || !entity.getModifiers().contains(Modifier.PUBLIC)) {error(entity,"@Table requires public top-level type");return;}
@@ -82,15 +96,17 @@ public final class EntityProcessor extends AbstractProcessor {
         String qualifiedTable=schema.isEmpty()?table:schema+"."+table;
         List<Col> cols=new ArrayList<>();
         List<Relation> relations=new ArrayList<>();
+        List<ToOne> toOnes=new ArrayList<>();
         if(record){
             for(RecordComponentElement c:entity.getRecordComponents()){
                 String prop=c.getSimpleName().toString();
                 if(c.getAnnotation(Transient.class)!=null) {
-                    if(c.getAnnotation(Id.class)!=null || c.getAnnotation(Version.class)!=null || c.getAnnotation(Children.class)!=null)
+                    if(c.getAnnotation(Id.class)!=null || c.getAnnotation(Version.class)!=null || c.getAnnotation(Children.class)!=null || c.getAnnotation(ManyToOne.class)!=null)
                         {error(c,"@Transient cannot annotate an ID, version or relation");return;}
                     continue;
                 }
                 if(c.getAnnotation(Children.class)!=null) {relations.add(relation(c,"value."+prop+"()"));continue;}
+                if(c.getAnnotation(ManyToOne.class)!=null) {toOnes.add(toOne(c));continue;}
                 Id idAnn=c.getAnnotation(Id.class);
                 cols.add(new Col(prop,colName(c,prop),c.asType().toString(),"value."+prop+"()","",idAnn!=null,c.getAnnotation(Version.class)!=null,databaseId(idAnn,c.asType().toString()),c.getAnnotation(Json.class)!=null,autoUuid(idAnn,c.asType().toString()),jsonCodec(c),c.asType(),c.getAnnotation(Column.class)==null||c.getAnnotation(Column.class).insertable(),c.getAnnotation(Column.class)==null||c.getAnnotation(Column.class).updatable(),c.getAnnotation(EnumOrdinal.class)!=null,c.getAnnotation(CreatedAt.class)!=null,c.getAnnotation(UpdatedAt.class)!=null));
             }
@@ -105,6 +121,12 @@ public final class EntityProcessor extends AbstractProcessor {
                 if(el.getAnnotation(Children.class)!=null) {
                     if(getter==null) {error(el,"@Children needs public getter for "+prop);return;}
                     relations.add(relation(el,"value."+getter+"()"));continue;
+                }
+                if(el.getAnnotation(ManyToOne.class)!=null) {
+                    if(getter==null||!hasSetter(entity,"set"+suff,type)){
+                        error(el,"@ManyToOne needs public getter and setter for "+prop);return;
+                    }
+                    toOnes.add(toOne(el));continue;
                 }
                 String setter="set"+suff;
                 if(getter==null||!hasSetter(entity,setter,type)) {error(el,"POJO needs public getter and setter for "+prop);return;}
@@ -174,7 +196,27 @@ public final class EntityProcessor extends AbstractProcessor {
             if(child==null||child.getAnnotation(Table.class)==null) {error(entity,"@Children target must be a @Table entity: "+r.childType());return;}
             if(!types.isSameType(r.foreignKeyType(),cols.get(id).typeMirror())) {error(entity,"@Children mappedBy property must have the same type as parent ID: "+r.mappedBy());return;}
         }
-        generateMapper(entity,qualifiedTable,schema,cols,id,ver,record,relations);
+        if(!relations.isEmpty() && !toOnes.isEmpty()){
+            error(entity,"Combined @Children and @ManyToOne graph loading is not yet supported on one entity");
+            return;
+        }
+        for(ToOne toOne:toOnes) {
+            Col fk=cols.stream().filter(c->c.property().equals(toOne.mappedBy())).findFirst().orElse(null);
+            if(fk==null){error(entity,"@ManyToOne mappedBy requires a scalar FK property: "+toOne.mappedBy());return;}
+            TypeElement target=elements.getTypeElement(toOne.targetType());
+            if(target==null || target.getAnnotation(Table.class)==null){
+                error(entity,"@ManyToOne target must be @Table: "+toOne.targetType());return;
+            }
+            List<? extends Element> properties=target.getKind()==ElementKind.RECORD
+                ?target.getRecordComponents():pojoFields(target);
+            TypeMirror keyType=null;
+            for(Element property:properties)
+                if(property.getAnnotation(Id.class)!=null){keyType=property.asType();break;}
+            if(keyType==null || !types.isSameType(keyType,fk.typeMirror())) {
+                error(entity,"@ManyToOne foreign key must match target @Id type: "+toOne.mappedBy());return;
+            }
+        }
+        generateMapper(entity,qualifiedTable,schema,cols,id,ver,record,relations,toOnes);
         mapperServices.add(packageOf(entity)+"."+entity.getSimpleName()+"_BjormMapper");
         generatePaths(entity,cols);
     }
@@ -262,7 +304,7 @@ public final class EntityProcessor extends AbstractProcessor {
                 ?"ps.setObject("+param+","+col.read()+"==null?null:"+col.read()+".ordinal());"
                 :setter(param,col.read(),col.type(),dialect);
     }
-    private void generateMapper(TypeElement entity,String table,String schema,List<Col> cols,int id,int version,boolean record,List<Relation> relations) throws IOException {
+    private void generateMapper(TypeElement entity,String table,String schema,List<Col> cols,int id,int version,boolean record,List<Relation> relations,List<ToOne> toOnes) throws IOException {
         String clazz=entity.getSimpleName().toString(),pkg=packageOf(entity),mapper=clazz+"_BjormMapper";
         String conflictTarget=schema.isEmpty()?table:table.substring(schema.length()+1);
         String fields=String.join(", ",cols.stream().map(Col::column).toList());
@@ -455,6 +497,7 @@ public final class EntityProcessor extends AbstractProcessor {
                 for(RecordComponentElement component:entity.getRecordComponents()){
                     if(component.getAnnotation(Transient.class)!=null)args.add(defaultValue(component.asType().toString()));
                     else if(component.getAnnotation(Children.class)!=null)args.add("java.util.List.of()");
+                    else if(component.getAnnotation(ManyToOne.class)!=null)args.add("null");
                     else {int n=offset++-1;args.add(readColumn(cols.get(n),"(offset+"+n+")",n));}
                 }
                 w.write("return new "+clazz+"("+String.join(", ",args)+");\n");
