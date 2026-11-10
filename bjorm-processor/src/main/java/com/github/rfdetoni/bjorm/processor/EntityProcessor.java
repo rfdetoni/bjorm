@@ -431,6 +431,33 @@ public final class EntityProcessor extends AbstractProcessor {
                         updatedAt.write()+"("+auditTimeExpression(updatedAt)+");return materializeInsert(value);}\n");
                 }
             }
+            if(!toOnes.isEmpty()) {
+                w.write("public java.util.List<com.github.rfdetoni.bjorm.ParentRelation<"+clazz+">> parents(){return PARENTS;}\n");
+                w.write("private static final java.util.List<com.github.rfdetoni.bjorm.ParentRelation<"+clazz+">> PARENTS=java.util.List.of(\n");
+                for(int ri=0;ri<toOnes.size();ri++) {
+                    ToOne relation=toOnes.get(ri);
+                    w.write((ri>0?",\n":"")+"new com.github.rfdetoni.bjorm.ParentRelation<"+clazz+">(){\n");
+                    w.write("public Class<?> targetType(){return "+relation.targetType()+".class;}\n");
+                    w.write("public String mappedBy(){return \""+relation.mappedBy()+"\";}\n");
+                    w.write("public String property(){return \""+relation.property()+"\";}\n");
+                    w.write("public com.github.rfdetoni.bjorm.JoinType joinType(){return com.github.rfdetoni.bjorm.JoinType."+relation.joinType().name()+";}\n");
+                    w.write("}");
+                }
+                w.write(");\n");
+                w.write("public "+clazz+" withParent("+clazz+" value,String property,Object parent){return switch(property){\n");
+                for(ToOne relation:toOnes) {
+                    String cast="("+relation.targetType()+")parent";
+                    if(record)
+                        w.write("case \""+relation.property()+"\" -> new "+clazz+"("+
+                            recordArguments(entity,relation.property(),cast)+");\n");
+                    else {
+                        String suffix=Character.toUpperCase(relation.property().charAt(0))+
+                            relation.property().substring(1);
+                        w.write("case \""+relation.property()+"\" -> {value.set"+suffix+"("+cast+");yield value;}\n");
+                    }
+                }
+                w.write("default -> throw new IllegalArgumentException(\"Unknown @ManyToOne relation: \"+property);};}\n");
+            }
             if(!relations.isEmpty()) {
                 w.write("public java.util.List<com.github.rfdetoni.bjorm.ChildRelation<"+clazz+">> children(){return RELATIONS;}\n");
                 w.write("public "+clazz+" withChildren("+clazz+" value,String relation,java.util.List<?> children){switch(relation){\n");
