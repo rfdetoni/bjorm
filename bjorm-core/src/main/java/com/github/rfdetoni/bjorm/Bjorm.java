@@ -320,50 +320,89 @@ public final class Bjorm implements Operations {
         return txResult(tx->tx.deleteBy(type,predicate));
     }
 
-    /** Explicit transaction. Use TransactionAwareDataSourceProxy for framework-managed calls, not nested db.tx. */
-    public void tx(Consumer<Transaction> work) {txResult(tx->{work.accept(tx);return null;});}
+    /** Explicit transaction. Do not nest inside Spring @Transactional; use TransactionAwareDataSourceProxy. */
+    public void tx(Consumer<Transaction> work) {
+        Objects.requireNonNull(work,"work");
+        txResult(tx->{work.accept(tx);return null;});
+    }
+    /** Select isolation before the transaction starts; the previous connection state is restored afterward. */
+    public void tx(IsolationLevel isolation,Consumer<Transaction> work) {
+        Objects.requireNonNull(work,"work");
+        txResult(isolation,tx->{work.accept(tx);return null;});
+    }
     public <R> R txResult(Function<Transaction,R> work) {
-        Objects.requireNonNull(work);
+        return txResult(null,work);
+    }
+    public <R> R txResult(IsolationLevel isolation,Function<Transaction,R> work) {
+        Objects.requireNonNull(work,"work");
         requireTenant();
         try(Connection c=dataSource.getConnection()) {
             if(tenantRequired && !postgresTenant() && !mysqlTenant())
                 throw new UnsupportedOperationException("Tenant isolation not supported by dialect: "+dialect.name());
+            boolean previousAutoCommit=c.getAutoCommit();
+            if(!previousAutoCommit)
+                throw new IllegalStateException("Connection already transactional; do not nest Bjorm.tx in another transaction");
+            int previousIsolation=isolation==null?-1:c.getTransactionIsolation();
             String previousCatalog=mysqlTenant()?c.getCatalog():null;
-            if(mysqlTenant() && (previousCatalog==null || previousCatalog.isBlank()))
+            if(mysqlTenant() && (previousCatalog==null||previousCatalog.isBlank()))
                 throw new IllegalStateException("Cannot restore MySQL catalog: connection has no original catalog");
+            boolean changeIsolation=isolation!=null && previousIsolation!=isolation.jdbc();
+            boolean attemptedAutoCommit=false,attemptedIsolation=false,attemptedCatalog=false;
+            Throwable failure=null;
             try {
                 if(mysqlTenant()) {
+                    attemptedCatalog=true; // Restore even if the driver changes it before throwing.
                     c.setCatalog(tenantSchema);
                     if(!tenantSchema.equals(c.getCatalog()))
                         throw new IllegalStateException("JDBC driver did not activate the tenant catalog");
                 }
-            boolean previous=c.getAutoCommit();
-            if(!previous) throw new IllegalStateException("Connection already transactional; do not nest Bjorm.tx in another transaction");
-            c.setAutoCommit(false);
-            Transaction tx=new Transaction(c);
-            Throwable failure=null;
-            try {
-                if(postgresTenant())applyPostgresTenant(c);
-                R result=work.apply(tx);
-                c.commit();
-                return result;
-            } catch(RuntimeException|Error e) {
-                failure=e;
-                try {c.rollback();}catch(SQLException rollback){e.addSuppressed(rollback);}
-                throw e;
-            } catch(SQLException e) {
-                failure=e;
-                try {c.rollback();}catch(SQLException rollback){e.addSuppressed(rollback);}
-                throw new BjormException("Commit failed",e);
-            } finally {
-                tx.active=false;
-                try {c.setAutoCommit(previous);} catch(SQLException restore) {
-                    if(failure!=null)failure.addSuppressed(restore);
-                    else throw new BjormException("Could not restore connection state",restore);
+                if(changeIsolation) {
+                    attemptedIsolation=true;
+                    c.setTransactionIsolation(isolation.jdbc());
                 }
-            }
+                attemptedAutoCommit=true;
+                c.setAutoCommit(false);
+                Transaction tx=new Transaction(c);
+                try {
+                    if(postgresTenant())applyPostgresTenant(c);
+                    R result=work.apply(tx);
+                    c.commit();
+                    return result;
+                } catch(SQLException|RuntimeException|Error e) {
+                    try {c.rollback();}catch(SQLException rollback){e.addSuppressed(rollback);}
+                    if(e instanceof SQLException sql)
+                        throw new BjormException("Transaction SQL operation or commit failed",sql);
+                    throw e;
+                } finally {
+                    tx.active=false;
+                }
+            } catch(SQLException|RuntimeException|Error e) {
+                failure=e;
+                throw e;
             } finally {
-                if(mysqlTenant())c.setCatalog(previousCatalog);
+                SQLException restoreFailure=null;
+                if(attemptedAutoCommit) {
+                    try{c.setAutoCommit(previousAutoCommit);}
+                    catch(SQLException e){restoreFailure=e;}
+                }
+                if(attemptedIsolation) {
+                    try{c.setTransactionIsolation(previousIsolation);}
+                    catch(SQLException e){
+                        if(restoreFailure!=null)restoreFailure.addSuppressed(e);
+                        else restoreFailure=e;
+                    }
+                }
+                if(attemptedCatalog) {
+                    try{c.setCatalog(previousCatalog);}
+                    catch(SQLException e){
+                        if(restoreFailure!=null)restoreFailure.addSuppressed(e);
+                        else restoreFailure=e;
+                    }
+                }
+                if(restoreFailure!=null) {
+                    if(failure!=null)failure.addSuppressed(restoreFailure);
+                    else throw new BjormException("Could not restore borrowed JDBC connection state",restoreFailure);
+                }
             }
         } catch(SQLException e) {throw new BjormException("Transaction failed",e);}
     }
