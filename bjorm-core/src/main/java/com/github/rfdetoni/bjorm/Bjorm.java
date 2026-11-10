@@ -195,7 +195,7 @@ public final class Bjorm implements Operations {
         Objects.requireNonNull(entity);
         EntityMapper<T> m=mapper(entity.getClass());
         if(m.children().isEmpty() && !m.optimisticLocking()) return withConnection(c->{
-            T prepared=m.materializeInsert(entity);
+            T prepared=m.materializeUpsert(entity);
             upsertPrepared(c,prepared);
             return prepared;
         });
@@ -383,7 +383,7 @@ public final class Bjorm implements Operations {
     private <T> int upsert(Connection c,T entity) throws SQLException {
         EntityMapper<T> m=mapper(entity.getClass());
         if(m.generatedId()) throw new IllegalArgumentException("Upsert requires an application-assigned primary key");
-        return upsertPrepared(c,m.materializeInsert(entity));
+        return upsertPrepared(c,m.materializeUpsert(entity));
     }
     /** Accepts an already materialized entity; never invokes user preparation twice. */
     private <T> int upsertPrepared(Connection c,T entity) throws SQLException {
@@ -403,7 +403,7 @@ public final class Bjorm implements Operations {
     }
     private <T> T persistGraph(Connection c,T entity,boolean upserting,IdentityHashMap<Object,Boolean> visited) throws SQLException {
         if(visited.put(entity,Boolean.TRUE)!=null) throw new IllegalArgumentException("Cycle or repeated entity in persistence graph");
-        if(upserting) {entity=this.<T>mapper(entity.getClass()).materializeInsert(entity);upsertPrepared(c,entity);}
+        if(upserting) {entity=this.<T>mapper(entity.getClass()).materializeUpsert(entity);upsertPrepared(c,entity);}
         else entity=insert(c,entity);
         EntityMapper<T> m=mapper(entity.getClass());
         Object id=m.id(entity);
@@ -462,9 +462,17 @@ public final class Bjorm implements Operations {
         Objects.requireNonNull(changes,"changes");
         if(changes.isEmpty())throw new IllegalArgumentException("At least one changed property required");
         EntityMapper<T> m=mapper(type);
+        Map<String,Object> ordered=new TreeMap<>();
+        for(var entry:changes.entrySet())
+            ordered.put(Objects.requireNonNull(entry.getKey(),"property"),entry.getValue());
+        if(m.updatedAtProperty()!=null) {
+            if(ordered.containsKey(m.updatedAtProperty()))
+                throw new IllegalArgumentException("@UpdatedAt is maintained by BJORM");
+            ordered.put(m.updatedAtProperty(),m.updatedAtNow());
+        }
         StringJoiner assignments=new StringJoiner(", ");
-        List<Object> values=new ArrayList<>(changes.size());
-        for(var entry:changes.entrySet()) {
+        List<Object> values=new ArrayList<>(ordered.size());
+        for(var entry:ordered.entrySet()) {
             String property=Objects.requireNonNull(entry.getKey(),"property");
             if(property.equals(m.idProperty())) throw new IllegalArgumentException("Bulk mutation cannot alter @Id");
             String column=m.columnFor(property); // generated mapping; rejects unknown input
@@ -490,7 +498,7 @@ public final class Bjorm implements Operations {
     private <T> int update(Connection c,T entity) throws SQLException {
         EntityMapper<T> m=mapper(entity.getClass());
         try(PreparedStatement ps=prepare(c,m.updateSql(dialect))) {
-            m.bindUpdate(ps,entity,dialect);
+            m.bindUpdate(ps,m.materializeUpdate(entity),dialect);
             int count=ps.executeUpdate();
             if(m.optimisticLocking() && count==0)throw new OptimisticLockException("Stale update: " + m.type().getName());
             return count;
@@ -788,7 +796,7 @@ public final class Bjorm implements Operations {
             int pending=0;
             for(T entity:entities) {
                 if(entity==null||entity.getClass()!=first.getClass())throw new IllegalArgumentException("Batch requires entities of one exact type");
-                if(updating)m.bindUpdate(ps,entity,dialect);
+                if(updating)m.bindUpdate(ps,m.materializeUpdate(entity),dialect);
                 else { requireReturnForImmutable(entity); m.bindInsert(ps,m.materializeInsert(entity),dialect); }
                 ps.addBatch();
                 if(++pending==options.batchSize()){validateBatch(ps.executeBatch(),m,updating);pending=0;}
