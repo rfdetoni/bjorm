@@ -74,9 +74,10 @@ public final class Bjorm implements Operations {
         if (!tenantRequired) throw new IllegalStateException("forTenant requires a tenantRequired BJORM root");
         Objects.requireNonNull(schema,"schema");
         if (!TENANT_IDENTIFIER.matcher(schema).matches() ||
-            schema.startsWith("pg_") || Set.of("public","information_schema","mysql",
+            schema.toLowerCase(Locale.ROOT).startsWith("pg_") || Set.of("public","information_schema","mysql",
                 "performance_schema","sys","pg_catalog").contains(schema.toLowerCase(Locale.ROOT)))
             throw new IllegalArgumentException("Unsafe tenant schema identifier");
+        if(tenantSchema!=null)throw new IllegalStateException("Cannot rebind an already-scoped BJORM instance");
         return new Bjorm(this,schema);
     }
     public SqlDialect dialect(){return dialect;}
@@ -192,8 +193,9 @@ public final class Bjorm implements Operations {
     }
     public <T> T upsertReturning(T entity) {
         Objects.requireNonNull(entity);
-        if(mapper(entity.getClass()).children().isEmpty()) return withConnection(c->{
-            T prepared=this.<T>mapper(entity.getClass()).materializeInsert(entity);
+        EntityMapper<T> m=mapper(entity.getClass());
+        if(m.children().isEmpty() && !m.optimisticLocking()) return withConnection(c->{
+            T prepared=m.materializeInsert(entity);
             upsertPrepared(c,prepared);
             return prepared;
         });
@@ -468,7 +470,7 @@ public final class Bjorm implements Operations {
             if(property.equals(m.idProperty())) throw new IllegalArgumentException("Bulk mutation cannot alter @Id");
             String column=m.columnFor(property); // generated mapping; rejects unknown input
             assignments.add(column+" = "+m.bulkParameterSql(property,dialect));
-            values.add(entry.getValue());
+            values.add(m.bulkParameterValue(property,entry.getValue()));
         }
         String sql="UPDATE "+m.table()+" SET "+assignments+" WHERE "+predicate.sql();
         try(PreparedStatement ps=prepare(c,sql)) {
@@ -814,7 +816,12 @@ public final class Bjorm implements Operations {
         }
         public <T> void insert(T value) {requireReturnForImmutable(value);insertReturning(value);}
         public <T> T insertReturning(T value) {return use(c->Bjorm.this.persistGraph(c,value,false,new IdentityHashMap<>()));}
-        public <T> T upsertReturning(T value) {return use(c->Bjorm.this.persistGraph(c,value,true,new IdentityHashMap<>()));}
+        public <T> T upsertReturning(T value) {return use(c->{
+            T persisted=Bjorm.this.persistGraph(c,value,true,new IdentityHashMap<>());
+            EntityMapper<T> mapper=Bjorm.this.mapper(value.getClass());
+            return mapper.optimisticLocking()
+                ?Bjorm.this.find(c,mapper.type(),mapper.id(persisted)):persisted;
+        });}
         public <T> int upsert(T value) {requireReturnForImmutable(value);return use(c->{
             EntityMapper<T> mapper=Bjorm.this.mapper(value.getClass());
             if(mapper.children().isEmpty()) return Bjorm.this.upsert(c,value);
