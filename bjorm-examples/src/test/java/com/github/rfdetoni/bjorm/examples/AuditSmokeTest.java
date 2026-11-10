@@ -40,6 +40,21 @@ public final class AuditSmokeTest {
         check(prepared==pojo && pojo.getCreatedAt().equals(before) &&
               pojo.getUpdatedAt().equals(beforeUpdated),
             "POJO update materializer never modifies caller state before JDBC commit");
+        ItAuditPojo caller=new ItAuditPojo();
+        caller.setLabel("snapshot");
+        ItAuditPojo detached=ItAuditPojo_BjormMapper.INSTANCE.copyForWrite(caller);
+        check(detached!=caller && "snapshot".equals(detached.getLabel()) &&
+              detached.getId()==null && detached.getCreatedAt()==null,
+            "generated POJO detached copy preserves fields but not object identity");
+        ItAuditPojo stamped=ItAuditPojo_BjormMapper.INSTANCE.materializeInsert(detached);
+        check(stamped.getId()!=null && stamped.getCreatedAt()!=null &&
+              stamped.getUpdatedAt()!=null && caller.getId()==null &&
+              caller.getCreatedAt()==null && caller.getUpdatedAt()==null,
+            "stamping a detached copy never mutates caller-owned audit fields");
+        ItAuditPojo detachedUpsert=ItAuditPojo_BjormMapper.INSTANCE.copyForWrite(caller);
+        ItAuditPojo_BjormMapper.INSTANCE.materializeUpsert(detachedUpsert);
+        check(caller.getUpdatedAt()==null && detachedUpsert.getUpdatedAt()!=null,
+            "UPSERT stamps a copied POJO, not the caller");
         System.out.println("PASS: audit timestamps for generated records and POJOs");
     }
 }
