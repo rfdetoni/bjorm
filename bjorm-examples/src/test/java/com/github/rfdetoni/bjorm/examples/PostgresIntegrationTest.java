@@ -31,6 +31,7 @@ public final class PostgresIntegrationTest {
         // Use an expendable test database. Never run against an existing schema with fixture table names.
         try(Connection c=ds.getConnection();Statement st=c.createStatement()){
             st.execute("CREATE TABLE bjorm_it_users (id uuid PRIMARY KEY, name text NOT NULL, age integer NOT NULL)");
+            st.execute("CREATE TABLE bjorm_it_invoices (id uuid PRIMARY KEY, customerId uuid REFERENCES bjorm_it_users(id), reference text)");
             st.execute("CREATE SCHEMA bjorm_test");
             st.execute("CREATE TABLE bjorm_test.bjorm_it_static (id uuid PRIMARY KEY, label text)");
             st.execute("CREATE SCHEMA bjorm_tenant_a");
@@ -64,7 +65,9 @@ public final class PostgresIntegrationTest {
             MappedColumns_BjormMapper.INSTANCE,OrdinalEvent_BjormMapper.INSTANCE,
             ItAuditRecord_BjormMapper.INSTANCE,ItAuditPojo_BjormMapper.INSTANCE,
             ExplicitAssignedRecord_BjormMapper.INSTANCE,ExplicitIdentityRecord_BjormMapper.INSTANCE,
-            ExplicitUuidRecord_BjormMapper.INSTANCE,StaticSchemaRecord_BjormMapper.INSTANCE);
+            ExplicitUuidRecord_BjormMapper.INSTANCE,StaticSchemaRecord_BjormMapper.INSTANCE,
+            ItInvoice_BjormMapper.INSTANCE,ItInvoiceInner_BjormMapper.INSTANCE,
+            ItInvoicePojo_BjormMapper.INSTANCE);
         UUID id=UUID.randomUUID();ItUser alice=new ItUser(id,"BJORM",34);
         try {
             StaticSchemaRecord fixed=db.insertReturning(new StaticSchemaRecord(null,"initial-static"));
@@ -73,6 +76,33 @@ public final class PostgresIntegrationTest {
             db.upsertReturning(new StaticSchemaRecord(fixed.id(),"updated-static"));
             check(db.find(StaticSchemaRecord.class,fixed.id()).label().equals("updated-static"),
                 "PostgreSQL fixed-schema UPSERT");
+            ItUser invoiceCustomer=db.insertReturning(new ItUser(null,"Invoice Customer",19));
+            ItInvoice createdInvoice=db.insertReturning(new ItInvoice(null,invoiceCustomer.id(),"invoice-linked",null));
+            java.util.concurrent.atomic.AtomicInteger selects=new java.util.concurrent.atomic.AtomicInteger();
+            Bjorm instrumented=db.observeSql((operation,duration,ok)->{
+                if(operation==SqlOperation.QUERY)selects.incrementAndGet();
+            });
+            ItInvoice hydrated=instrumented.find(ItInvoice.class,createdInvoice.id());
+            check(hydrated.customer()!=null && hydrated.customer().id().equals(invoiceCustomer.id()) &&
+                hydrated.customer().name().equals("Invoice Customer"),
+                "PostgreSQL ManyToOne record hydrates parent");
+            check(selects.get()==1,"ManyToOne record hydrates in one SQL SELECT, not N+1");
+            check(db.select(ItInvoice.class).where(ItInvoice_.customerId.eq(invoiceCustomer.id()))
+                    .orderBy(ItInvoice_.reference.asc()).limit(1).fetch().getFirst().customer()!=null,
+                "PostgreSQL pageable ManyToOne root query");
+            ItInvoice nullParent=db.insertReturning(new ItInvoice(null,null,"invoice-null",null));
+            check(db.find(ItInvoice.class,nullParent.id()).customer()==null,
+                "LEFT ManyToOne preserves row with NULL FK");
+            check(db.find(ItInvoiceInner.class,nullParent.id())==null,
+                "INNER ManyToOne excludes row with NULL FK");
+            check(db.find(ItInvoiceInner.class,createdInvoice.id()).customer()!=null,
+                "INNER ManyToOne hydrates linked record");
+            ItInvoicePojo invoicePojo=new ItInvoicePojo();
+            invoicePojo.setReference("pojo-linked");
+            invoicePojo.setCustomerId(invoiceCustomer.id());
+            db.insert(invoicePojo);
+            check(db.find(ItInvoicePojo.class,invoicePojo.getId()).getCustomer().id().equals(invoiceCustomer.id()),
+                "PostgreSQL ManyToOne POJO setter hydration");
             ExplicitAssignedRecord assigned=db.insertReturning(new ExplicitAssignedRecord(709L,"assigned"));
             check(assigned.id()==709L && db.find(ExplicitAssignedRecord.class,709L).equals(assigned),
                 "PostgreSQL explicit assigned numeric ID");
@@ -347,6 +377,7 @@ public final class PostgresIntegrationTest {
                 st.execute("DROP SCHEMA IF EXISTS bjorm_test CASCADE");
                 st.execute("DROP SCHEMA IF EXISTS bjorm_tenant_a CASCADE");
                 st.execute("DROP SCHEMA IF EXISTS bjorm_tenant_b CASCADE");
+                st.execute("DROP TABLE IF EXISTS bjorm_it_invoices");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_users");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_columns");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_ordinal");
