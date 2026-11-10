@@ -247,8 +247,17 @@ var tuned = new BjormOptions(30, 10_000, 128, 128); // timeout, buffered rows, f
 `updateBy/deleteBy` deliberately reject versioned entities and mapped child
 graphs because set-based SQL would bypass version checks or child persistence.
 Use `updateReturning`, `batchUpdateReturning` and `batchDelete` for those
-cases. Versioned MySQL UPSERT remains explicitly unsupported until its
-correct compare-and-swap contract is implemented. The update-returning API
+cases. Versioned MySQL UPSERT is implemented using an INSERT-first operation
+followed by an optimistic compare-and-swap UPDATE only when the INSERT fails
+on a duplicate-key conflict. Both statements run inside one transaction.
+Stale `@Version` values raise `OptimisticLockException`, while conflicting
+secondary UNIQUE keys retain the database constraint exception. MySQL's
+default `REPEATABLE READ` isolation and InnoDB row locking ensure updates
+to the same primary key cannot both commit using the same expected version.
+Under exceptionally high contention, database deadlock/serialization
+errors are propagated to the caller rather than blindly retried. For
+`@Version` + UPSERT on MySQL, use UUID/String primary keys. Numeric identity
+keys still require explicit INSERT or UPDATE. The update-returning API
 re-reads the stored entity within the transaction, so it costs an additional
 SELECT, but never fabricates a new version after a failed UPDATE.
 
