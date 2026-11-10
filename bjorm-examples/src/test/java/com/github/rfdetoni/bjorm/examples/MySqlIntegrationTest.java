@@ -56,6 +56,11 @@ public final class MySqlIntegrationTest {
             check(db.find(ItUser.class,original.id()).age()==34 && db.find(ItUser.class,conflictingId)==null,
                 "MySQL secondary-key collision cannot mutate unrelated entity");
             check(db.select(ItUser.class).where(ItUser_.id.eq(original.id())).fetch().size()==1,"MySQL UUID predicate bind");
+            java.time.Instant testInstant=java.time.Instant.parse("2026-11-10T10:20:30Z");
+            java.time.Instant returned=db.one("SELECT ?",
+                ps->db.dialect().bindValue(ps,1,testInstant),
+                rs->rs.getTimestamp(1).toInstant());
+            check(testInstant.equals(returned),"native BJORM Instant binder MySQL timestamp");
             check(db.count(ItUser.class, ItUser_.id.eq(original.id()))==1L,
                 "MySQL typed count uses dialect UUID binding");
             check(db.exists(ItUser.class, ItUser_.id.eq(original.id())),
