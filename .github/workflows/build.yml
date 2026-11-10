@@ -2,10 +2,10 @@ name: build
 on:
   push:
     branches: [main] # Required by snapshot publication
-    paths-ignore: ['**/*.md', 'docs/**']
+    paths-ignore: ['**/*.md', 'docs/**', '.github/release-request.txt']
   pull_request:
     branches: [main]
-    paths-ignore: ['**/*.md', 'docs/**']
+    paths-ignore: ['**/*.md', 'docs/**', '.github/release-request.txt']
   workflow_dispatch:
 
 concurrency:
