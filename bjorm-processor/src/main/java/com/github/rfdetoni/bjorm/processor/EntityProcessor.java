@@ -48,7 +48,7 @@ public final class EntityProcessor extends AbstractProcessor {
         }
         return true;
     }
-    private record Col(String property,String column,String type,String read,String write,boolean id,boolean version,boolean generated,boolean json,boolean uuidV7,String jsonCodec,TypeMirror typeMirror) {}
+    private record Col(String property,String column,String type,String read,String write,boolean id,boolean version,boolean generated,boolean json,boolean uuidV7,String jsonCodec,TypeMirror typeMirror,boolean insertable,boolean updatable) {}
     private static boolean isNumericId(String type) {return Set.of("int","long","java.lang.Integer","java.lang.Long").contains(type);}
     private static boolean autoUuid(Id id,String type) {return id!=null && !id.assigned() && (id.uuidV7() || ( !id.generated() && Set.of("java.util.UUID","java.lang.String").contains(type)));}
     private static boolean databaseId(Id id,String type) {return id!=null && !id.assigned() && (id.generated() || isNumericId(type));}
@@ -72,7 +72,7 @@ public final class EntityProcessor extends AbstractProcessor {
                 }
                 if(c.getAnnotation(Children.class)!=null) {relations.add(relation(c,"value."+prop+"()"));continue;}
                 Id idAnn=c.getAnnotation(Id.class);
-                cols.add(new Col(prop,colName(c,prop),c.asType().toString(),"value."+prop+"()","",idAnn!=null,c.getAnnotation(Version.class)!=null,databaseId(idAnn,c.asType().toString()),c.getAnnotation(Json.class)!=null,autoUuid(idAnn,c.asType().toString()),jsonCodec(c),c.asType()));
+                cols.add(new Col(prop,colName(c,prop),c.asType().toString(),"value."+prop+"()","",idAnn!=null,c.getAnnotation(Version.class)!=null,databaseId(idAnn,c.asType().toString()),c.getAnnotation(Json.class)!=null,autoUuid(idAnn,c.asType().toString()),jsonCodec(c),c.asType(),c.getAnnotation(Column.class)==null||c.getAnnotation(Column.class).insertable(),c.getAnnotation(Column.class)==null||c.getAnnotation(Column.class).updatable()));
             }
         } else {
             boolean constructor=false;
@@ -89,7 +89,7 @@ public final class EntityProcessor extends AbstractProcessor {
                 String setter="set"+suff;
                 if(getter==null||!hasSetter(entity,setter,type)) {error(el,"POJO needs public getter and setter for "+prop);return;}
                 Id idAnn=el.getAnnotation(Id.class);
-                cols.add(new Col(prop,colName(el,prop),type,"value."+getter+"()","value."+setter,cAnnotated(el,Id.class),cAnnotated(el,Version.class),databaseId(idAnn,type),el.getAnnotation(Json.class)!=null,autoUuid(idAnn,type),jsonCodec(el),el.asType()));
+                cols.add(new Col(prop,colName(el,prop),type,"value."+getter+"()","value."+setter,cAnnotated(el,Id.class),cAnnotated(el,Version.class),databaseId(idAnn,type),el.getAnnotation(Json.class)!=null,autoUuid(idAnn,type),jsonCodec(el),el.asType(),el.getAnnotation(Column.class)==null||el.getAnnotation(Column.class).insertable(),el.getAnnotation(Column.class)==null||el.getAnnotation(Column.class).updatable()));
             }
         }
         if(cols.isEmpty()){error(entity,"@Table requires mapped properties");return;}
@@ -110,6 +110,9 @@ public final class EntityProcessor extends AbstractProcessor {
                c.jsonCodec().equals("com.github.rfdetoni.bjorm.JsonStringCodec")) {
                 error(entity,"Typed @Json property "+c.property()+" requires an explicit JsonCodec");return;
             }
+            if((c.id() && !c.generated() && !c.insertable()) || (c.version() && !c.updatable())) {
+                error(entity,"@Id must be insertable and @Version must be updatable");return;
+            }
             if(c.generated() && (!c.id() || !isNumericId(c.type()))){error(entity,"Database-generated IDs require numeric @Id (int/long/Integer/Long)");return;}
             if(c.uuidV7() && (!c.id()||c.generated()||!Set.of("java.util.UUID","java.lang.String").contains(c.type()))){error(entity,"UUID v7 requires a UUID or String @Id");return;}
             if(c.id()){if(id>=0){error(entity,"Exactly one @Id required");return;}id=i;}
@@ -117,6 +120,9 @@ public final class EntityProcessor extends AbstractProcessor {
         }
         if(id<0){error(entity,"Missing @Id");return;}
         if(cols.size()==1){error(entity,"Entity needs a non-id property");return;}
+        if(cols.stream().noneMatch(c->!c.id() && c.updatable())){
+            error(entity,"Entity requires at least one updatable non-ID column");return;
+        }
         for(Relation r:relations) {
             TypeElement child=elements.getTypeElement(r.childType());
             if(child==null||child.getAnnotation(Table.class)==null) {error(entity,"@Children target must be a @Table entity: "+r.childType());return;}
@@ -209,10 +215,10 @@ public final class EntityProcessor extends AbstractProcessor {
     private void generateMapper(TypeElement entity,String table,List<Col> cols,int id,int version,boolean record,List<Relation> relations) throws IOException {
         String clazz=entity.getSimpleName().toString(),pkg=packageOf(entity),mapper=clazz+"_BjormMapper";
         String fields=String.join(", ",cols.stream().map(Col::column).toList());
-        List<Col> insertCols=cols.stream().filter(c->!c.generated()).toList();
+        List<Col> insertCols=cols.stream().filter(c->!c.generated()&&c.insertable()).toList();
         String insert=insertCols.isEmpty()?"INSERT INTO "+table+" DEFAULT VALUES":"INSERT INTO "+table+" ("+String.join(", ",insertCols.stream().map(Col::column).toList())+") VALUES ("+String.join(", ",insertCols.stream().map(c->c.json()?"CAST(? AS jsonb)":"?").toList())+")";
         List<String> assignments=new ArrayList<>();
-        for(int i=0;i<cols.size();i++) if(i!=id){Col c=cols.get(i);if(i==version)assignments.add(c.column()+" = "+c.column()+" + 1");else assignments.add(c.column()+" = "+(c.json()?"CAST(? AS jsonb)":"?"));}
+        for(int i=0;i<cols.size();i++) if(i!=id && cols.get(i).updatable()){Col c=cols.get(i);if(i==version)assignments.add(c.column()+" = "+c.column()+" + 1");else assignments.add(c.column()+" = "+(c.json()?"CAST(? AS jsonb)":"?"));}
         String where=cols.get(id).column()+" = ?"+(version>=0?" AND "+cols.get(version).column()+" = ?":"");
         String update="UPDATE "+table+" SET "+String.join(", ",assignments)+" WHERE "+where;
         String delete="DELETE FROM "+table+" WHERE "+where;
@@ -220,7 +226,7 @@ public final class EntityProcessor extends AbstractProcessor {
         String upsert=null;
         if(!cols.get(id).generated()) {
             List<String> updateSet=new ArrayList<>();
-            for(int i=0;i<cols.size();i++)if(i!=id) {
+            for(int i=0;i<cols.size();i++)if(i!=id && cols.get(i).updatable()) {
                 Col c=cols.get(i);
                 updateSet.add(c.column()+" = "+(i==version?table+"."+c.column()+" + 1":"EXCLUDED."+c.column()));
             }
@@ -250,6 +256,7 @@ public final class EntityProcessor extends AbstractProcessor {
             w.write("default -> throw new IllegalArgumentException(\"Unknown mapped property: \"+property);};}\n");
 
             w.write("public String bulkParameterSql(String property,com.github.rfdetoni.bjorm.SqlDialect dialect){return switch(property){\n");
+            for(Col c:cols)if(!c.updatable())w.write("case \""+c.property()+"\" -> throw new IllegalArgumentException(\"Read-only mapped property: "+c.property()+"\");\n");
             for(Col c:cols) if(c.json())w.write("case \""+c.property()+"\" -> dialect.jsonParameter();\n");
             w.write("default -> {columnFor(property);yield \"?\";}};}\n");
             w.write("public Object bulkParameterValue(String property,Object value){return switch(property){\n");
@@ -270,7 +277,7 @@ public final class EntityProcessor extends AbstractProcessor {
             w.write("public boolean immutable(){return "+record+";}\n");
             if(upsert!=null) {
                 w.write("public String upsertSql(){return \""+upsert+"\";}\n");
-                String changes=String.join(", ",cols.stream().filter(c->!c.id()).map(c->"\""+c.column()+"\"").toList());
+                String changes=String.join(", ",cols.stream().filter(c->!c.id()&&c.updatable()).map(c->"\""+c.column()+"\"").toList());
                 w.write("public String upsertSql(com.github.rfdetoni.bjorm.SqlDialect dialect){return dialect.upsertSql(insertSql(dialect),\""+table+"\",\""+cols.get(id).column()+"\",java.util.List.of("+changes+"),"+(version>=0?"\""+cols.get(version).column()+"\"":"null")+");}\n");
             }
             if(cols.get(id).uuidV7()) {
@@ -320,12 +327,12 @@ public final class EntityProcessor extends AbstractProcessor {
                 w.write("public String "+e[0]+"(){return \""+e[1]+"\";}\n");
             w.write("public void bindInsert(java.sql.PreparedStatement ps,"+clazz+" value) throws java.sql.SQLException {bindInsert(ps,value,com.github.rfdetoni.bjorm.SqlDialects.POSTGRESQL);}\n");
             w.write("public void bindInsert(java.sql.PreparedStatement ps,"+clazz+" value,com.github.rfdetoni.bjorm.SqlDialect dialect) throws java.sql.SQLException {\n");
-            int insIndex=1;for(int j=0;j<cols.size();j++)if(!cols.get(j).generated())
+            int insIndex=1;for(int j=0;j<cols.size();j++)if(!cols.get(j).generated()&&cols.get(j).insertable())
                 w.write(writeColumn(cols.get(j),insIndex++,j,"dialect")+"\n");
             w.write("}\npublic void bindUpdate(java.sql.PreparedStatement ps,"+clazz+" value) throws java.sql.SQLException {bindUpdate(ps,value,com.github.rfdetoni.bjorm.SqlDialects.POSTGRESQL);}\n");
             w.write("public void bindUpdate(java.sql.PreparedStatement ps,"+clazz+" value,com.github.rfdetoni.bjorm.SqlDialect dialect) throws java.sql.SQLException {\n");
             int index=1;
-            for(int i=0;i<cols.size();i++)if(i!=id&&i!=version)
+            for(int i=0;i<cols.size();i++)if(i!=id&&i!=version&&cols.get(i).updatable())
                 w.write(writeColumn(cols.get(i),index++,i,"dialect")+"\n");
             w.write(setter(index++,cols.get(id).read(),cols.get(id).type(),"dialect")+"\n");
             if(version>=0)w.write(setter(index++,cols.get(version).read(),cols.get(version).type(),"dialect")+"\n");
