@@ -189,8 +189,8 @@ The processor converts named parameters into JDBC `?` and generates positional b
 - For POJOs, `db.insert(pojo)` assigns client-generated IDs via the public setter. `batchInsert(pojos)` also fills automatic client-side IDs. Batch inserts for database-generated numeric IDs use `batchInsertReturning` (individual inserts for generated keys).
 - All ID generation and record reconstruction are emitted at compile time; no entity reflection on the critical JDBC path.
 - `@Version` on int/long columns uses `UPDATE ... SET version = version+1 WHERE id=? AND version=?` and conditional delete. **Re-read the entity after successful updates:** versions are not mutated automatically, especially on records.
-- `db.batchInsert` and `batchUpdate` use up to 256 rows per JDBC batch within one transaction; version-controlled unknown batch counts are rejected instead of assuming successful locking.
-- `db.forEach` runs in an explicit transaction with fetch size 128 for PostgreSQL streaming. `db.scan(sql, binder, generatedProjectionMapper, consumer)` streams native projections. Resources close before the scan returns. Do not keep row cursors outside the callback.
+- `db.batchInsert` and `batchUpdate` use up to 256 rows per JDBC batch within one transaction; version-controlled unknown batch counts are rejected instead of assuming successful locking. `batchInsert` **rejects entity types with `@Children`**, instead of silently dropping child rows; use `insertReturning()` for a graph.
+- SELECT methods apply the configured `fetchSize` JDBC hint; this is not a hard client-side memory bound. PostgreSQL cursors require `autoCommit=false` to stream incrementally. `db.forEach` and `db.scan(sql, binder, mapper, consumer)` therefore retain explicit transaction boundaries. Resources close before the scan returns; do not keep row cursors outside the callback.
 - Explicit DSL joins are supported: `db.select(Product.class).as("p").join(User.class, "u", Product_.id.as("p").sameAs(User_.id.as("u"))).fetch()`; aliases and columns are validated, and ON parameters precede WHERE parameters.
 - `@Json String payload` generates `CAST(? AS jsonb)` for PostgreSQL; callers provide serialized JSON. No JSON codec dependency in core.
 - Call `db.query(sql, binder, mapper)` for manually optimized SQL; map DTOs using generated `@Projection` readers.
@@ -365,7 +365,7 @@ Materialized SELECTs now also call `PreparedStatement.setMaxRows(maxBufferedRows
 ## Configurable @Children and QueryDSL-style JOIN (0.3.11)
 
 `@Children(mappedBy="orderId", type=JoinType.LEFT)` uses LEFT JOIN, preserving
-parents without children. Other supported types are `INNER`, `RIGHT` and `FULL`;
+parents without children. `INNER` filters out parents without children (including `find(id)`). Other supported types are `INNER`, `RIGHT` and `FULL`;
 the default is `LEFT` to preserve previous entity-loading semantics.
 
 ```java

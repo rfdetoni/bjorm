@@ -48,11 +48,11 @@ public final class EntityProcessor extends AbstractProcessor {
         }
         return true;
     }
-    private record Col(String property,String column,String type,String read,String write,boolean id,boolean version,boolean generated,boolean json,boolean uuidV7,String jsonCodec) {}
+    private record Col(String property,String column,String type,String read,String write,boolean id,boolean version,boolean generated,boolean json,boolean uuidV7,String jsonCodec,TypeMirror typeMirror) {}
     private static boolean isNumericId(String type) {return Set.of("int","long","java.lang.Integer","java.lang.Long").contains(type);}
     private static boolean autoUuid(Id id,String type) {return id!=null && !id.assigned() && (id.uuidV7() || ( !id.generated() && Set.of("java.util.UUID","java.lang.String").contains(type)));}
     private static boolean databaseId(Id id,String type) {return id!=null && !id.assigned() && (id.generated() || isNumericId(type));}
-    private record Relation(String property,String mappedBy,String childType,String getter,String childGetter,String childSetter,boolean childRecord,JoinType joinType) {}
+    private record Relation(String property,String mappedBy,String childType,String getter,String childGetter,String childSetter,boolean childRecord,JoinType joinType,TypeMirror foreignKeyType) {}
     private void entity(TypeElement entity) throws IOException {
         if(!generated.add(entity.getQualifiedName()+"#entity"))return;
         if(entity.getNestingKind().isNested() || !entity.getModifiers().contains(Modifier.PUBLIC)) {error(entity,"@Table requires public top-level type");return;}
@@ -67,7 +67,7 @@ public final class EntityProcessor extends AbstractProcessor {
                 String prop=c.getSimpleName().toString();
                 if(c.getAnnotation(Children.class)!=null) {relations.add(relation(c,"value."+prop+"()"));continue;}
                 Id idAnn=c.getAnnotation(Id.class);
-                cols.add(new Col(prop,colName(c,prop),c.asType().toString(),"value."+prop+"()","",idAnn!=null,c.getAnnotation(Version.class)!=null,databaseId(idAnn,c.asType().toString()),c.getAnnotation(Json.class)!=null,autoUuid(idAnn,c.asType().toString()),jsonCodec(c)));
+                cols.add(new Col(prop,colName(c,prop),c.asType().toString(),"value."+prop+"()","",idAnn!=null,c.getAnnotation(Version.class)!=null,databaseId(idAnn,c.asType().toString()),c.getAnnotation(Json.class)!=null,autoUuid(idAnn,c.asType().toString()),jsonCodec(c),c.asType()));
             }
         } else {
             boolean constructor=false;
@@ -84,7 +84,7 @@ public final class EntityProcessor extends AbstractProcessor {
                 String setter="set"+suff;
                 if(getter==null||!hasSetter(entity,setter,type)) {error(el,"POJO needs public getter and setter for "+prop);return;}
                 Id idAnn=el.getAnnotation(Id.class);
-                cols.add(new Col(prop,colName(el,prop),type,"value."+getter+"()","value."+setter,cAnnotated(el,Id.class),cAnnotated(el,Version.class),databaseId(idAnn,type),el.getAnnotation(Json.class)!=null,autoUuid(idAnn,type),jsonCodec(el)));
+                cols.add(new Col(prop,colName(el,prop),type,"value."+getter+"()","value."+setter,cAnnotated(el,Id.class),cAnnotated(el,Version.class),databaseId(idAnn,type),el.getAnnotation(Json.class)!=null,autoUuid(idAnn,type),jsonCodec(el),el.asType()));
             }
         }
         if(cols.isEmpty()){error(entity,"@Table requires mapped properties");return;}
@@ -115,7 +115,7 @@ public final class EntityProcessor extends AbstractProcessor {
         for(Relation r:relations) {
             TypeElement child=elements.getTypeElement(r.childType());
             if(child==null||child.getAnnotation(Table.class)==null) {error(entity,"@Children target must be a @Table entity: "+r.childType());return;}
-            if(!r.childGetter().equals(cols.get(id).type())) {error(entity,"@Children mappedBy property must have the same type as parent ID: "+r.mappedBy());return;}
+            if(!types.isSameType(r.foreignKeyType(),cols.get(id).typeMirror())) {error(entity,"@Children mappedBy property must have the same type as parent ID: "+r.mappedBy());return;}
         }
         generateMapper(entity,table,cols,id,ver,record,relations);
         mapperServices.add(packageOf(entity)+"."+entity.getSimpleName()+"_BjormMapper");
@@ -134,10 +134,12 @@ public final class EntityProcessor extends AbstractProcessor {
         if(!(elemType instanceof DeclaredType childType))throw new IllegalArgumentException("@Children type must be a concrete entity");
         TypeElement child=(TypeElement)childType.asElement();
         String childPropertyType=null, childGetter=null, childSetter=null;
+        TypeMirror childPropertyMirror=null;
         boolean record=child.getKind()==ElementKind.RECORD;
         for(Element property:record ? child.getRecordComponents():pojoFields(child)) {
             if(property.getSimpleName().contentEquals(mappedBy) && (record||property.getKind()==ElementKind.FIELD)) {
                 childPropertyType=property.asType().toString();
+                childPropertyMirror=property.asType();
                 String cap=Character.toUpperCase(mappedBy.charAt(0))+mappedBy.substring(1);
                 childGetter=record?mappedBy:findGetter(child,cap,childPropertyType);
                 childSetter=record?null:"set"+cap;
@@ -147,7 +149,7 @@ public final class EntityProcessor extends AbstractProcessor {
             }
         }
         if(childPropertyType==null)throw new IllegalArgumentException("@Children unmapped child property: "+mappedBy);
-        return new Relation(field.getSimpleName().toString(),mappedBy,child.getQualifiedName().toString(),getter,childPropertyType,childSetter,record,ann.type());
+        return new Relation(field.getSimpleName().toString(),mappedBy,child.getQualifiedName().toString(),getter,childPropertyType,childSetter,record,ann.type(),childPropertyMirror);
     }
     /** Compile inheritance once; no superclass reflection is used at runtime. */
     private List<Element> pojoFields(TypeElement entity) {

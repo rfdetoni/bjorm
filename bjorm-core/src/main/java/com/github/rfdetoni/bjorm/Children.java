@@ -8,6 +8,6 @@ import java.lang.annotation.*;
 @Target({ElementType.FIELD, ElementType.RECORD_COMPONENT})
 public @interface Children {
     String mappedBy();
-    /** Default eager join strategy; LEFT preserves roots with no children. */
+    /** LEFT (default) preserves parents with no children. INNER filters those parents out of find/list. */
     JoinType type() default JoinType.LEFT;
 }

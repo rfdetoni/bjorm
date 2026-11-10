@@ -56,6 +56,12 @@ public final class Bjorm implements Operations {
         try {if(options.queryTimeoutSeconds()>0)ps.setQueryTimeout(options.queryTimeoutSeconds());return ps;}
         catch(SQLException|RuntimeException e){try{ps.close();}catch(SQLException ex){e.addSuppressed(ex);}throw e;}
     }
+    /** Apply fetch hints only to queries, never to INSERT/UPDATE/DELETE statements. */
+    private PreparedStatement prepareRead(Connection c,String sql) throws SQLException {
+        PreparedStatement ps=prepare(c,sql);
+        try {ps.setFetchSize(options.fetchSize());return ps;}
+        catch(SQLException|RuntimeException e){try{ps.close();}catch(SQLException ex){e.addSuppressed(ex);}throw e;}
+    }
     /** Prevent the JDBC driver itself from buffering an unbounded SELECT result. */
     private void boundRows(PreparedStatement ps) throws SQLException {
         if(options.maxBufferedRows()<Integer.MAX_VALUE)
@@ -107,12 +113,15 @@ public final class Bjorm implements Operations {
         Objects.requireNonNull(entity);
         if(mapper(entity.getClass()).children().isEmpty()) return withConnection(c->{
             T prepared=this.<T>mapper(entity.getClass()).materializeInsert(entity);
-            upsert(c,prepared);
+            upsertPrepared(c,prepared);
             return prepared;
         });
         return txResult(tx->tx.upsertReturning(entity));
     }
-    public <T> T find(Class<T> type,Object id) {return withConnection(c->find(c,type,id));}
+    public <T> T find(Class<T> type,Object id) {
+        Objects.requireNonNull(id,"id required for find()");
+        return withConnection(c->find(c,type,id));
+    }
     public <T> List<T> list(Class<T> type,SqlPredicate where) {return select(type).whereNullable(where).fetch();}
     /** Native count/exists use generated table mapping and typed, bound predicates. */
     public <T> long count(Class<T> type, SqlPredicate where) {
@@ -124,7 +133,7 @@ public final class Bjorm implements Operations {
     private <T> long count(Connection c, Class<T> type, SqlPredicate where) throws SQLException {
         String sql = "SELECT COUNT(*) FROM " + mapper(type).table() +
             (where == null ? "" : " WHERE " + where.sql());
-        try (PreparedStatement ps = prepare(c,sql)) {
+        try (PreparedStatement ps = prepareRead(c,sql)) {
             bindPredicate(ps,where);
             try (ResultSet rs = ps.executeQuery()) {
                 if (!rs.next()) throw new SQLException("COUNT returned no row");
@@ -135,7 +144,7 @@ public final class Bjorm implements Operations {
     private <T> boolean exists(Connection c, Class<T> type, SqlPredicate where) throws SQLException {
         String sql = "SELECT 1 FROM " + mapper(type).table() +
             (where == null ? "" : " WHERE " + where.sql()) + " LIMIT 1";
-        try (PreparedStatement ps = prepare(c,sql)) {
+        try (PreparedStatement ps = prepareRead(c,sql)) {
             bindPredicate(ps,where);
             try (ResultSet rs = ps.executeQuery()) { return rs.next(); }
         }
@@ -153,7 +162,7 @@ public final class Bjorm implements Operations {
         EntityMapper<T> m=mapper(type);
         String sql = "SELECT " + m.columnFor(m.idProperty()) + " FROM " + m.table() +
             " WHERE " + where.sql() + " LIMIT 1 " + mode.sql();
-        try (PreparedStatement ps = prepare(c,sql)) {
+        try (PreparedStatement ps = prepareRead(c,sql)) {
             bindPredicate(ps,where);
             try (ResultSet rs=ps.executeQuery()) { return rs.next(); }
         }
@@ -265,7 +274,12 @@ public final class Bjorm implements Operations {
     private <T> int upsert(Connection c,T entity) throws SQLException {
         EntityMapper<T> m=mapper(entity.getClass());
         if(m.generatedId()) throw new IllegalArgumentException("Upsert requires an application-assigned primary key");
-        entity=m.materializeInsert(entity);
+        return upsertPrepared(c,m.materializeInsert(entity));
+    }
+    /** Accepts an already materialized entity; never invokes user preparation twice. */
+    private <T> int upsertPrepared(Connection c,T entity) throws SQLException {
+        EntityMapper<T> m=mapper(entity.getClass());
+        if(m.generatedId()) throw new IllegalArgumentException("Upsert requires an application-assigned primary key");
         if(m.id(entity)==null) throw new IllegalArgumentException("Upsert requires non-null ID");
         // A MySQL AUTO_INCREMENT key may silently change on UPDATE id=NULL.
         // PK-only conflict checks are consequently safe only for textual/UUID IDs.
@@ -280,7 +294,7 @@ public final class Bjorm implements Operations {
     }
     private <T> T persistGraph(Connection c,T entity,boolean upserting,IdentityHashMap<Object,Boolean> visited) throws SQLException {
         if(visited.put(entity,Boolean.TRUE)!=null) throw new IllegalArgumentException("Cycle or repeated entity in persistence graph");
-        if(upserting) {entity=this.<T>mapper(entity.getClass()).materializeInsert(entity);upsert(c,entity);}
+        if(upserting) {entity=this.<T>mapper(entity.getClass()).materializeInsert(entity);upsertPrepared(c,entity);}
         else entity=insert(c,entity);
         EntityMapper<T> m=mapper(entity.getClass());
         Object id=m.id(entity);
@@ -314,7 +328,7 @@ public final class Bjorm implements Operations {
                 }
             } else {
                 // Descendants must be removed before the child: do not depend on loaded collections.
-                try(PreparedStatement ps=prepare(c,"SELECT "+childMapper.qualifiedColumns("c")+" FROM "+childMapper.table()+" c WHERE c."+fk+" = ?")) {
+                try(PreparedStatement ps=prepareRead(c,"SELECT "+childMapper.qualifiedColumns("c")+" FROM "+childMapper.table()+" c WHERE c."+fk+" = ?")) {
                     childMapper.bindId(ps,1,id,dialect);
                     try(ResultSet rs=ps.executeQuery()) {
                         while(rs.next())removeGraph(c,childMapper.read(rs),visited);
@@ -349,7 +363,7 @@ public final class Bjorm implements Operations {
                 m.columnFor(m.idProperty())+" = ?",Collections.singletonList(id))).limit(1));
             return values.isEmpty() ? null : values.getFirst();
         }
-        try(PreparedStatement ps=prepare(c,m.selectSql(dialect))) {
+        try(PreparedStatement ps=prepareRead(c,m.selectSql(dialect))) {
             m.bindId(ps,1,id,dialect);
             try(ResultSet rs=ps.executeQuery()) {return rs.next()?m.read(rs):null;}
         }
@@ -361,7 +375,7 @@ public final class Bjorm implements Operations {
             readGraph(c,query,rows::add,true);
             return rows;
         }
-        try(PreparedStatement ps=prepare(c,query.sql(m,type->mapper(type),dialect))) {
+        try(PreparedStatement ps=prepareRead(c,query.sql(m,type->mapper(type),dialect))) {
             boundRows(ps);
             query.bind(ps,dialect);
             try(ResultSet rs=ps.executeQuery()) {
@@ -440,9 +454,8 @@ public final class Bjorm implements Operations {
                .append(root.columnIndex(column)).append(order.descending()?" DESC":" ASC");
         }
         sql.append(query.sorting().isEmpty()?" ORDER BY ":", ").append(root.idColumnIndex());
-        try(PreparedStatement ps=prepare(c,sql.toString())) {
+        try(PreparedStatement ps=prepareRead(c,sql.toString())) {
             if(bounded)boundRows(ps);
-            ps.setFetchSize(options.fetchSize());
             query.bind(ps,dialect);
             try(ResultSet rs=ps.executeQuery()) {
                 Object lastId=null;
@@ -527,19 +540,36 @@ public final class Bjorm implements Operations {
             return row;
         };
     }
+    private static Class<?> boxedType(Class<?> type) {
+        Objects.requireNonNull(type,"type");
+        if(!type.isPrimitive())return type;
+        if(type==int.class)return Integer.class;
+        if(type==long.class)return Long.class;
+        if(type==boolean.class)return Boolean.class;
+        if(type==short.class)return Short.class;
+        if(type==byte.class)return Byte.class;
+        if(type==float.class)return Float.class;
+        if(type==double.class)return Double.class;
+        if(type==char.class)return Character.class;
+        throw new IllegalArgumentException("Unsupported scalar type: "+type);
+    }
+    @SuppressWarnings("unchecked")
+    private static <C> C scalarCast(Class<C> type,Object value) {
+        return (C)boxedType(type).cast(value);
+    }
     private <T,C> List<C> scalarList(Connection c,Select<T> query,String property,Class<C> type) throws SQLException {
         EntityMapper<T> m=mapper(query.type());
-        return project(c,query,new String[]{property},rs->type.cast(m.readProperty(rs,1,property)));
+        return project(c,query,new String[]{property},rs->scalarCast(type,m.readProperty(rs,1,property)));
     }
     private <T,C> Optional<C> scalarOne(Connection c,Select<T> query,String property,Class<C> type) throws SQLException {
         EntityMapper<T> m=mapper(query.type());
-        return first(c,query,new String[]{property},rs->type.cast(m.readProperty(rs,1,property)));
+        return first(c,query,new String[]{property},rs->scalarCast(type,m.readProperty(rs,1,property)));
     }
     private <T,P> List<P> project(Connection c,Select<T> query,String[] properties,RowMapper<P> projection) throws SQLException {
         Objects.requireNonNull(projection);
         EntityMapper<T> m=mapper(query.type());
         String sql=query.sql(m,type->mapper(type),properties,dialect);
-        try(PreparedStatement ps=prepare(c,sql)) {
+        try(PreparedStatement ps=prepareRead(c,sql)) {
             boundRows(ps);
             query.bind(ps,dialect);
             try(ResultSet rs=ps.executeQuery()){
@@ -553,7 +583,7 @@ public final class Bjorm implements Operations {
         Objects.requireNonNull(projection);
         EntityMapper<T> m=mapper(query.type());
         String sql=query.sql(m,type->mapper(type),properties,dialect);
-        try(PreparedStatement ps=prepare(c,sql)) {
+        try(PreparedStatement ps=prepareRead(c,sql)) {
             query.bind(ps,dialect);
             try(ResultSet rs=ps.executeQuery()) {
                 if(!rs.next())return Optional.empty();
@@ -564,14 +594,14 @@ public final class Bjorm implements Operations {
         }
     }
     private <T> List<T> query(Connection c,String sql,StatementBinder binder,RowMapper<T> mapper) throws SQLException {
-        try(PreparedStatement ps=prepare(c,sql)) {
+        try(PreparedStatement ps=prepareRead(c,sql)) {
             boundRows(ps);
             Objects.requireNonNull(binder).bind(ps);
             try(ResultSet rs=ps.executeQuery()) {ArrayList<T> result=new ArrayList<>();while(rs.next()){checkRows(result.size()+1);result.add(mapper.read(rs));}return result;}
         }
     }
     private <T> T one(Connection c,String sql,StatementBinder binder,RowMapper<T> mapper) throws SQLException {
-        try(PreparedStatement ps=prepare(c,sql)) {
+        try(PreparedStatement ps=prepareRead(c,sql)) {
             ps.setMaxRows(1);
             Objects.requireNonNull(binder).bind(ps);
             try(ResultSet rs=ps.executeQuery()) {return rs.next()?mapper.read(rs):null;}
@@ -584,16 +614,14 @@ public final class Bjorm implements Operations {
         Objects.requireNonNull(consumer);
         EntityMapper<T> m=mapper(query.type());
         if (!m.children().isEmpty()) {readGraph(c,query,consumer,false);return;}
-        try(PreparedStatement ps=prepare(c,query.sql(m,type->mapper(type),dialect))) {
-            ps.setFetchSize(options.fetchSize());
+        try(PreparedStatement ps=prepareRead(c,query.sql(m,type->mapper(type),dialect))) {
             query.bind(ps,dialect);
             try(ResultSet rs=ps.executeQuery()){while(rs.next())consumer.accept(m.read(rs));}
         }
     }
     private <T> void scan(Connection c,String sql,StatementBinder binder,RowMapper<T> mapper,Consumer<T> consumer) throws SQLException {
         Objects.requireNonNull(consumer);
-        try(PreparedStatement ps=prepare(c,sql)) {
-            ps.setFetchSize(options.fetchSize());
+        try(PreparedStatement ps=prepareRead(c,sql)) {
             Objects.requireNonNull(binder).bind(ps);
             try(ResultSet rs=ps.executeQuery()){while(rs.next())consumer.accept(mapper.read(rs));}
         }
@@ -604,6 +632,8 @@ public final class Bjorm implements Operations {
         if(entities.isEmpty())return;
         T first=Objects.requireNonNull(entities.getFirst());
         EntityMapper<T> m=mapper(first.getClass());
+        if(!updating && !m.children().isEmpty())
+            throw new IllegalArgumentException("Use insert()/insertReturning() for entity graphs; batchInsert would discard children");
         if(!updating && m.generatedId())throw new IllegalArgumentException("Batch generated ids not yet supported; use insert()");
         try(PreparedStatement ps=prepare(c,updating?m.updateSql(dialect):m.insertSql(dialect))) {
             int pending=0;
@@ -645,7 +675,10 @@ public final class Bjorm implements Operations {
         });}
         public <T> int update(T value) {return use(c->Bjorm.this.update(c,value));}
         public <T> int delete(T value) {return use(c->Bjorm.this.removeGraph(c,value,new HashSet<>()));}
-        public <T> T find(Class<T> type,Object id) {return use(c->Bjorm.this.find(c,type,id));}
+        public <T> T find(Class<T> type,Object id) {
+            Objects.requireNonNull(id,"id required for find()");
+            return use(c->Bjorm.this.find(c,type,id));
+        }
         public <T> List<T> list(Class<T> type,SqlPredicate where) {return list(select(type).whereNullable(where));}
         public <T> long count(Class<T> type,SqlPredicate where) {return use(c->Bjorm.this.count(c,type,where));}
         public <T> boolean exists(Class<T> type,SqlPredicate where) {return use(c->Bjorm.this.exists(c,type,where));}
