@@ -698,6 +698,81 @@ public final class Bjorm implements Operations {
         }
     }
     /**
+     * Eager to-one relations use a single SQL statement and positional
+     * compile-time mappers. The CTE applies paging to root records BEFORE
+     * joining the referenced rows, so no N+1 SELECTs are generated.
+     * Only a direct one-level @ManyToOne graph is hydrated; referenced
+     * entities are read as ordinary mapped rows, without following their
+     * own relationships.
+     */
+    @SuppressWarnings("unchecked")
+    private <T> void readParents(Connection c,Select<T> query,
+            Consumer<T> emit,boolean bounded) throws SQLException {
+        Objects.requireNonNull(emit,"emit");
+        EntityMapper<T> root=mapper(query.type());
+        if(query.hasJoins())
+            throw new IllegalArgumentException(
+                "Automatic @ManyToOne loading cannot be combined with explicit query JOINs");
+        List<ParentRelation<T>> parents=root.parents();
+        if(parents.isEmpty())throw new IllegalArgumentException("No eager to-one relations registered");
+        String rootSql=query.sql(root,type->mapper(type),dialect);
+        StringBuilder sql=new StringBuilder("WITH roots AS (").append(rootSql)
+            .append(") SELECT ").append(root.qualifiedColumns("r"));
+        ArrayList<EntityMapper<Object>> targets=new ArrayList<>(parents.size());
+        ArrayList<Integer> offsets=new ArrayList<>(parents.size());
+        int offset=root.columnCount()+1;
+        for(int index=0;index<parents.size();index++) {
+            EntityMapper<Object> target=(EntityMapper<Object>)mapper(parents.get(index).targetType());
+            if(!target.children().isEmpty() || !target.parents().isEmpty())
+                throw new UnsupportedOperationException(
+                    "Nested @ManyToOne/@Children graphs require a separate explicit query");
+            targets.add(target);
+            offsets.add(offset);
+            sql.append(", ").append(target.qualifiedColumns("p"+index));
+            offset+=target.columnCount();
+        }
+        sql.append(" FROM roots r");
+        for(int index=0;index<parents.size();index++) {
+            ParentRelation<T> parent=parents.get(index);
+            EntityMapper<Object> target=targets.get(index);
+            sql.append(' ').append(dialect.join(parent.joinType())).append(' ')
+               .append(target.table()).append(" p").append(index)
+               .append(" ON r.").append(root.columnFor(parent.mappedBy()))
+               .append(" = p").append(index).append('.')
+               .append(target.columnFor(target.idProperty()));
+        }
+        for(SqlOrder order:query.sorting()) {
+            String field=order.column();
+            int separator=field.lastIndexOf('.');
+            if(separator>=0 && !field.substring(0,separator).equals(query.rootAlias()))
+                throw new IllegalArgumentException("@ManyToOne ORDER BY supports only root columns: "+field);
+            String column=separator<0?field:field.substring(separator+1);
+            root.columnIndex(column); // generated validation, never interpolate arbitrary values
+            sql.append(sql.indexOf(" ORDER BY ")<0?" ORDER BY ":", ")
+               .append("r.").append(column).append(order.descending()?" DESC":" ASC");
+        }
+        try(PreparedStatement ps=prepareRead(c,sql.toString())) {
+            if(bounded)boundRows(ps);
+            query.bind(ps,dialect);
+            try(ResultSet rs=executeQueryObserved(ps)) {
+                int count=0;
+                while(rs.next()) {
+                    if(bounded)checkRows(++count);
+                    if(rs.getObject(root.idColumnIndex())==null)continue;
+                    T value=root.readAt(rs,1);
+                    for(int index=0;index<parents.size();index++) {
+                        EntityMapper<Object> target=targets.get(index);
+                        int start=offsets.get(index);
+                        Object joinedId=rs.getObject(start+target.idColumnIndex()-1);
+                        Object parent=joinedId==null?null:target.readAt(rs,start);
+                        value=root.withParent(value,parents.get(index).property(),parent);
+                    }
+                    emit.accept(value);
+                }
+            }
+        }
+    }
+    /**
      * Eager entity graphs: one SQL statement. Multiple sibling collections are
      * UNION ALL branches (not simultaneous sibling JOINs, which multiply rows).
      * LIMIT/OFFSET apply inside the root CTE, BEFORE expanding child rows.
