@@ -26,26 +26,29 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /** Real driver + Spring-bound transaction test, executed on disposable CI databases. */
 class BjormSpringRealDatabaseTest {
-    private record Row(UUID id,String label,int version) {}
+    record Row(UUID id,String label,int version) {}
 
     /** Test mapper uses the same compile-time-friendly JDBC contract as generated mappers. */
-    private static final class RowMapper implements EntityMapper<Row> {
+    static final class RowMapper implements EntityMapper<Row> {
+        private final String tableName;
+        RowMapper() {this("bjorm_spring_rows");}
+        RowMapper(String tableName) {this.tableName=tableName;}
         @Override public Class<Row> type(){return Row.class;}
-        @Override public String table(){return "bjorm_spring_rows";}
+        @Override public String table(){return tableName;}
         @Override public String insertSql(){
-            return "INSERT INTO bjorm_spring_rows (id,label,version) VALUES (?,?,?)";
+            return "INSERT INTO "+tableName+" (id,label,version) VALUES (?,?,?)";
         }
         @Override public String updateSql(){
-            return "UPDATE bjorm_spring_rows SET label=?,version=version+1 WHERE id=? AND version=?";
+            return "UPDATE "+tableName+" SET label=?,version=version+1 WHERE id=? AND version=?";
         }
         @Override public String deleteSql(){
-            return "DELETE FROM bjorm_spring_rows WHERE id=? AND version=?";
+            return "DELETE FROM "+tableName+" WHERE id=? AND version=?";
         }
         @Override public String selectSql(){
-            return "SELECT id,label,version FROM bjorm_spring_rows WHERE id=?";
+            return "SELECT id,label,version FROM "+tableName+" WHERE id=?";
         }
         @Override public String selectAllSql(){
-            return "SELECT id,label,version FROM bjorm_spring_rows";
+            return "SELECT id,label,version FROM "+tableName;
         }
         @Override public void bindInsert(PreparedStatement ps,Row value)throws SQLException {
             bindInsert(ps,value,SqlDialects.POSTGRESQL);
