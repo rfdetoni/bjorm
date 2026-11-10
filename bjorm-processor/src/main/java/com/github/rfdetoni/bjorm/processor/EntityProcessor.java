@@ -74,7 +74,12 @@ public final class EntityProcessor extends AbstractProcessor {
         boolean record=entity.getKind()==ElementKind.RECORD;
         if(!record && entity.getKind()!=ElementKind.CLASS) {error(entity,"@Table requires record or class");return;}
         String table=entity.getAnnotation(Table.class).value();
+        String schema=entity.getAnnotation(Table.class).schema();
         if(!identifier(table)){error(entity,"Invalid table identifier: "+table);return;}
+        if(!schema.isEmpty() && !identifier(schema)){
+            error(entity,"Invalid static schema identifier: "+schema);return;
+        }
+        String qualifiedTable=schema.isEmpty()?table:schema+"."+table;
         List<Col> cols=new ArrayList<>();
         List<Relation> relations=new ArrayList<>();
         if(record){
@@ -169,7 +174,7 @@ public final class EntityProcessor extends AbstractProcessor {
             if(child==null||child.getAnnotation(Table.class)==null) {error(entity,"@Children target must be a @Table entity: "+r.childType());return;}
             if(!types.isSameType(r.foreignKeyType(),cols.get(id).typeMirror())) {error(entity,"@Children mappedBy property must have the same type as parent ID: "+r.mappedBy());return;}
         }
-        generateMapper(entity,table,cols,id,ver,record,relations);
+        generateMapper(entity,qualifiedTable,schema,cols,id,ver,record,relations);
         mapperServices.add(packageOf(entity)+"."+entity.getSimpleName()+"_BjormMapper");
         generatePaths(entity,cols);
     }
@@ -257,8 +262,9 @@ public final class EntityProcessor extends AbstractProcessor {
                 ?"ps.setObject("+param+","+col.read()+"==null?null:"+col.read()+".ordinal());"
                 :setter(param,col.read(),col.type(),dialect);
     }
-    private void generateMapper(TypeElement entity,String table,List<Col> cols,int id,int version,boolean record,List<Relation> relations) throws IOException {
+    private void generateMapper(TypeElement entity,String table,String schema,List<Col> cols,int id,int version,boolean record,List<Relation> relations) throws IOException {
         String clazz=entity.getSimpleName().toString(),pkg=packageOf(entity),mapper=clazz+"_BjormMapper";
+        String conflictTarget=schema.isEmpty()?table:table.substring(schema.length()+1);
         String fields=String.join(", ",cols.stream().map(Col::column).toList());
         List<Col> insertCols=cols.stream().filter(c->!c.generated()&&c.insertable()).toList();
         String insert=insertCols.isEmpty()?"INSERT INTO "+table+" DEFAULT VALUES":"INSERT INTO "+table+" ("+String.join(", ",insertCols.stream().map(Col::column).toList())+") VALUES ("+String.join(", ",insertCols.stream().map(c->c.json()?"CAST(? AS jsonb)":"?").toList())+")";
@@ -273,10 +279,10 @@ public final class EntityProcessor extends AbstractProcessor {
             List<String> updateSet=new ArrayList<>();
             for(int i=0;i<cols.size();i++)if(i!=id && cols.get(i).updatable() && !cols.get(i).createdAt()) {
                 Col c=cols.get(i);
-                updateSet.add(c.column()+" = "+(i==version?table+"."+c.column()+" + 1":"EXCLUDED."+c.column()));
+                updateSet.add(c.column()+" = "+(i==version?conflictTarget+"."+c.column()+" + 1":"EXCLUDED."+c.column()));
             }
             upsert=insert+" ON CONFLICT ("+cols.get(id).column()+") DO UPDATE SET "+String.join(", ",updateSet)
-                +(version<0?"":" WHERE "+table+"."+cols.get(version).column()+" = EXCLUDED."+cols.get(version).column());
+                +(version<0?"":" WHERE "+conflictTarget+"."+cols.get(version).column()+" = EXCLUDED."+cols.get(version).column());
         }
 
         try(Writer w=file(pkg,mapper,entity)){
@@ -290,6 +296,7 @@ public final class EntityProcessor extends AbstractProcessor {
                         " = new "+col.jsonCodec()+"();\n");
             }
             w.write("public String table(){return \""+table+"\";}\n");
+            w.write("public String staticSchema(){return \""+schema+"\";}\n");
             w.write("public String columnFor(String property){return switch(property){\n");
             for(Col c:cols)w.write("case \""+c.property()+"\" -> \""+c.column()+"\";\n");
             w.write("default -> throw new IllegalArgumentException(\"Unknown mapped property: \"+property);};}\n");
@@ -326,7 +333,7 @@ public final class EntityProcessor extends AbstractProcessor {
             if(upsert!=null) {
                 w.write("public String upsertSql(){return \""+upsert+"\";}\n");
                 String changes=String.join(", ",cols.stream().filter(c->!c.id()&&c.updatable()&&!c.createdAt()).map(c->"\""+c.column()+"\"").toList());
-                w.write("public String upsertSql(com.github.rfdetoni.bjorm.SqlDialect dialect){return dialect.upsertSql(insertSql(dialect),\""+table+"\",\""+cols.get(id).column()+"\",java.util.List.of("+changes+"),"+(version>=0?"\""+cols.get(version).column()+"\"":"null")+");}\n");
+                w.write("public String upsertSql(com.github.rfdetoni.bjorm.SqlDialect dialect){return dialect.upsertSql(insertSql(dialect),\""+conflictTarget+"\",\""+cols.get(id).column()+"\",java.util.List.of("+changes+"),"+(version>=0?"\""+cols.get(version).column()+"\"":"null")+");}\n");
             }
             Col createdAt=cols.stream().filter(Col::createdAt).findFirst().orElse(null);
             Col updatedAt=cols.stream().filter(Col::updatedAt).findFirst().orElse(null);
