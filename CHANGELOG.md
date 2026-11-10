@@ -2,6 +2,9 @@
 
 ## 0.3.18-SNAPSHOT
 
+- Bind `java.time.Instant` as JDBC `Timestamp` in native BJORM `SqlDialect.bindValue`, avoiding PostgreSQL driver failures in custom SQL queries and automation writes.
+- Add real PostgreSQL/MySQL native timestamp parameter roundtrip regression tests.
+
 - Expose native typed `COUNT(*)` consistently on both database and transaction `Operations`.
 - Add `exists()` as `SELECT 1 ... LIMIT 1`, binding predicate parameters through the active SQL dialect without entity instantiation.
 - Add transaction-only `lockOne()` with `LockMode.UPDATE/SHARE`, explicit auto-commit guard and no implicit transaction.
