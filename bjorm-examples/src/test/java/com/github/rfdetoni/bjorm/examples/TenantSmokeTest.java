@@ -87,10 +87,16 @@ public final class TenantSmokeTest {
             check(expected.getMessage().contains("Fixed-schema"),"static mapping must be explicitly refused");
         }
         check(pg.connections==connectionBefore,"fixed schema is rejected before connection checkout");
-        Bjorm scoped=root.forTenant("company_a");
-        try {scoped.forTenant("company_b");throw new AssertionError("tenant rebind allowed");}
+        Bjorm guarded=root.forTenant("company_a");
+        try {guarded.forTenant("company_b");throw new AssertionError("tenant rebind allowed");}
         catch(IllegalStateException expected) {}
-        check(scoped.execute("UPDATE users SET name='x'",ps->{})==1,"tenant-scoped update");
+        int borrowed=pg.connections;
+        try {guarded.execute("UPDATE company_b.users SET name='x'",ps->{});
+            throw new AssertionError("Native SQL bypassed tenant permissions");}
+        catch(SecurityException expected) {}
+        check(pg.connections==borrowed,"native SQL denied before connection checkout");
+        Bjorm scoped=guarded.permitReviewedTenantNativeSql();
+        check(scoped.execute("UPDATE users SET name='x'",ps->{})==1,"reviewed tenant-scoped update");
         check(pg.events.contains("SET LOCAL search_path TO pg_catalog, \"company_a\", pg_temp"),"scoped PostgreSQL search_path");
         check(pg.events.contains("commit") && pg.autoCommit,"PG auto-transaction restores auto-commit");
         int writes=pg.events.size();
@@ -104,8 +110,14 @@ public final class TenantSmokeTest {
             "every borrowed PG transaction is explicitly tenant-scoped");
         Spy mysql=new Spy();
         Bjorm mysqlRoot=Bjorm.tenantRequired(mysql.source(),BjormOptions.defaults(),SqlDialects.MYSQL,ItUser_BjormMapper.INSTANCE);
-        Bjorm tenant=mysqlRoot.forTenant("company_a");
-        check(tenant.execute("UPDATE users SET name='y'",ps->{})==1,"MySQL tenant write");
+        Bjorm mysqlGuarded=mysqlRoot.forTenant("company_a");
+        int mysqlBorrowed=mysql.connections;
+        try {mysqlGuarded.execute("UPDATE company_b.users SET name='y'",ps->{});
+            throw new AssertionError("MySQL tenant accepted raw SQL");}
+        catch(SecurityException expected) {}
+        check(mysql.connections==mysqlBorrowed,"MySQL native SQL denied before JDBC checkout");
+        Bjorm tenant=mysqlGuarded.permitReviewedTenantNativeSql();
+        check(tenant.execute("UPDATE users SET name='y'",ps->{})==1,"reviewed MySQL tenant write");
         check(mysql.events.contains("write:company_a:UPDATE users SET name='y'"),"MySQL catalog scoped on write");
         check(mysql.catalog.equals("root_catalog"),"MySQL catalog restored");
         mysql.failWrite=true;
