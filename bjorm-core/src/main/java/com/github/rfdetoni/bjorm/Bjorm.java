@@ -14,6 +14,7 @@ public final class Bjorm implements Operations {
     private final Map<Class<?>, EntityMapper<?>> mappers;
     private final boolean tenantRequired;
     private final String tenantSchema;
+    private final SqlObserver sqlObserver;
     private static final java.util.regex.Pattern TENANT_IDENTIFIER =
         java.util.regex.Pattern.compile("[A-Za-z_][A-Za-z_0-9]{0,62}");
 
@@ -25,6 +26,16 @@ public final class Bjorm implements Operations {
         this.mappers=source.mappers;
         this.tenantRequired=true;
         this.tenantSchema=tenantSchema;
+        this.sqlObserver=source.sqlObserver;
+    }
+    private Bjorm(Bjorm source,SqlObserver observer) {
+        this.dataSource=source.dataSource;
+        this.options=source.options;
+        this.dialect=source.dialect;
+        this.mappers=source.mappers;
+        this.tenantRequired=source.tenantRequired;
+        this.tenantSchema=source.tenantSchema;
+        this.sqlObserver=Objects.requireNonNull(observer,"observer");
     }
     private Bjorm(DataSource dataSource,BjormOptions options,SqlDialect dialect,EntityMapper<?>... registered) {
         this.dataSource = Objects.requireNonNull(dataSource, "dataSource");
@@ -36,6 +47,7 @@ public final class Bjorm implements Operations {
         mappers = Map.copyOf(byType);
         tenantRequired=false;
         tenantSchema=null;
+        sqlObserver=null;
     }
     /** Discover compile-time generated mappers once at startup via Java ServiceLoader. */
     public static Bjorm open(DataSource dataSource) {
@@ -81,6 +93,36 @@ public final class Bjorm implements Operations {
         return new Bjorm(this,schema);
     }
     public SqlDialect dialect(){return dialect;}
+    /** Returns an immutable context with execution timing hooks; no SQL or tenant IDs are emitted. */
+    public Bjorm observeSql(SqlObserver observer) {return new Bjorm(this,observer);}
+    private static void notifyObserver(SqlObserver observer,SqlOperation operation,
+                                      long start,boolean succeeded) {
+        try {observer.completed(operation,System.nanoTime()-start,succeeded);}
+        catch(RuntimeException ignored) {
+            // Telemetry must never mask JDBC errors or change write/rollback behavior.
+        }
+    }
+    private ResultSet executeQueryObserved(PreparedStatement ps) throws SQLException {
+        SqlObserver observer=sqlObserver;
+        if(observer==null)return ps.executeQuery();
+        long start=System.nanoTime();boolean ok=false;
+        try {ResultSet rs=ps.executeQuery();ok=true;return rs;}
+        finally {notifyObserver(observer,SqlOperation.QUERY,start,ok);}
+    }
+    private int executeUpdateObserved(PreparedStatement ps) throws SQLException {
+        SqlObserver observer=sqlObserver;
+        if(observer==null)return ps.executeUpdate();
+        long start=System.nanoTime();boolean ok=false;
+        try {int count=ps.executeUpdate();ok=true;return count;}
+        finally {notifyObserver(observer,SqlOperation.UPDATE,start,ok);}
+    }
+    private int[] executeBatchObserved(PreparedStatement ps) throws SQLException {
+        SqlObserver observer=sqlObserver;
+        if(observer==null)return ps.executeBatch();
+        long start=System.nanoTime();boolean ok=false;
+        try {int[] counts=ps.executeBatch();ok=true;return counts;}
+        finally {notifyObserver(observer,SqlOperation.BATCH,start,ok);}
+    }
     private PreparedStatement prepare(Connection c,String sql) throws SQLException {
         PreparedStatement ps=c.prepareStatement(sql);
         try {if(options.queryTimeoutSeconds()>0)ps.setQueryTimeout(options.queryTimeoutSeconds());return ps;}
@@ -218,7 +260,7 @@ public final class Bjorm implements Operations {
             (where == null ? "" : " WHERE " + where.sql());
         try (PreparedStatement ps = prepareRead(c,sql)) {
             bindPredicate(ps,where);
-            try (ResultSet rs = ps.executeQuery()) {
+            try (ResultSet rs = executeQueryObserved(ps)) {
                 if (!rs.next()) throw new SQLException("COUNT returned no row");
                 return rs.getLong(1);
             }
@@ -229,7 +271,7 @@ public final class Bjorm implements Operations {
             (where == null ? "" : " WHERE " + where.sql()) + " LIMIT 1";
         try (PreparedStatement ps = prepareRead(c,sql)) {
             bindPredicate(ps,where);
-            try (ResultSet rs = ps.executeQuery()) { return rs.next(); }
+            try (ResultSet rs = executeQueryObserved(ps)) { return rs.next(); }
         }
     }
     /** Only meaningful on a live transaction. SELECT ... LIMIT 1 FOR UPDATE/SHARE. */
@@ -247,7 +289,7 @@ public final class Bjorm implements Operations {
             " WHERE " + where.sql() + " LIMIT 1 " + mode.sql();
         try (PreparedStatement ps = prepareRead(c,sql)) {
             bindPredicate(ps,where);
-            try (ResultSet rs=ps.executeQuery()) { return rs.next(); }
+            try (ResultSet rs=executeQueryObserved(ps)) { return rs.next(); }
         }
     }
     private void bindPredicate(PreparedStatement ps, SqlPredicate predicate) throws SQLException {
@@ -373,7 +415,7 @@ public final class Bjorm implements Operations {
         T prepared=m.materializeInsert(entity);
         try(PreparedStatement ps=m.generatedId()?prepare(c,m.insertSql(dialect),new String[]{m.columnFor(m.idProperty())}):prepare(c,m.insertSql(dialect))) {
             m.bindInsert(ps,prepared,dialect);
-            if(ps.executeUpdate()!=1)throw new SQLException("Insert affected unexpected number of rows");
+            if(executeUpdateObserved(ps)!=1)throw new SQLException("Insert affected unexpected number of rows");
             if(m.generatedId())try(ResultSet keys=ps.getGeneratedKeys()) {
                 if(!keys.next())throw new SQLException("No generated key returned for "+m.type().getName());
                 return m.withGeneratedId(keys,prepared);
@@ -397,7 +439,7 @@ public final class Bjorm implements Operations {
             throw new UnsupportedOperationException("MySQL UPSERT requires UUID/String primary key; use insert/update for numeric IDs");
         try(PreparedStatement ps=prepare(c,m.upsertSql(dialect))) {
             m.bindUpsert(ps,entity,dialect);
-            int changed=ps.executeUpdate();
+            int changed=executeUpdateObserved(ps);
             if(m.optimisticLocking() && changed==0) throw new OptimisticLockException("Stale upsert: "+m.type().getName());
             return changed;
         }
@@ -434,13 +476,13 @@ public final class Bjorm implements Operations {
             if(childMapper.children().isEmpty() && !childMapper.optimisticLocking()) {
                 try(PreparedStatement ps=prepare(c,"DELETE FROM "+childMapper.table()+" WHERE "+fk+" = ?")) {
                     childMapper.bindId(ps,1,id,dialect);
-                    ps.executeUpdate();
+                    executeUpdateObserved(ps);
                 }
             } else {
                 // Descendants must be removed before the child: do not depend on loaded collections.
                 try(PreparedStatement ps=prepareRead(c,"SELECT "+childMapper.qualifiedColumns("c")+" FROM "+childMapper.table()+" c WHERE c."+fk+" = ?")) {
                     childMapper.bindId(ps,1,id,dialect);
-                    try(ResultSet rs=ps.executeQuery()) {
+                    try(ResultSet rs=executeQueryObserved(ps)) {
                         while(rs.next())removeGraph(c,childMapper.read(rs),visited);
                     }
                 }
@@ -485,7 +527,7 @@ public final class Bjorm implements Operations {
             int i=1;
             for(Object value:values)dialect.bindValue(ps,i++,value);
             for(Object value:predicate.params())dialect.bindValue(ps,i++,value);
-            return ps.executeUpdate();
+            return executeUpdateObserved(ps);
         }
     }
     private <T> int deleteBy(Connection c,Class<T> type,SqlPredicate predicate) throws SQLException {
@@ -493,14 +535,14 @@ public final class Bjorm implements Operations {
         EntityMapper<T> m=mapper(type);
         try(PreparedStatement ps=prepare(c,"DELETE FROM "+m.table()+" WHERE "+predicate.sql())) {
             bindPredicate(ps,predicate);
-            return ps.executeUpdate();
+            return executeUpdateObserved(ps);
         }
     }
     private <T> int update(Connection c,T entity) throws SQLException {
         EntityMapper<T> m=mapper(entity.getClass());
         try(PreparedStatement ps=prepare(c,m.updateSql(dialect))) {
             m.bindUpdate(ps,m.materializeUpdate(entity),dialect);
-            int count=ps.executeUpdate();
+            int count=executeUpdateObserved(ps);
             if(m.optimisticLocking() && count==0)throw new OptimisticLockException("Stale update: " + m.type().getName());
             return count;
         }
@@ -509,7 +551,7 @@ public final class Bjorm implements Operations {
         EntityMapper<T> m=mapper(entity.getClass());
         try(PreparedStatement ps=prepare(c,m.deleteSql(dialect))) {
             m.bindDelete(ps,entity,dialect);
-            int count=ps.executeUpdate();
+            int count=executeUpdateObserved(ps);
             if(m.optimisticLocking() && count==0)throw new OptimisticLockException("Stale delete: " + m.type().getName());
             return count;
         }
@@ -523,7 +565,7 @@ public final class Bjorm implements Operations {
         }
         try(PreparedStatement ps=prepareRead(c,m.selectSql(dialect))) {
             m.bindId(ps,1,id,dialect);
-            try(ResultSet rs=ps.executeQuery()) {return rs.next()?m.read(rs):null;}
+            try(ResultSet rs=executeQueryObserved(ps)) {return rs.next()?m.read(rs):null;}
         }
     }
     private <T> List<T> list(Connection c,Select<T> query) throws SQLException {
@@ -536,7 +578,7 @@ public final class Bjorm implements Operations {
         try(PreparedStatement ps=prepareRead(c,query.sql(m,type->mapper(type),dialect))) {
             boundRows(ps);
             query.bind(ps,dialect);
-            try(ResultSet rs=ps.executeQuery()) {
+            try(ResultSet rs=executeQueryObserved(ps)) {
                 ArrayList<T> result=new ArrayList<>();
                 while(rs.next()){
                     if(query.hasRightOrFullJoin() && rs.getObject(m.idColumnIndex())==null)continue;
@@ -615,7 +657,7 @@ public final class Bjorm implements Operations {
         try(PreparedStatement ps=prepareRead(c,sql.toString())) {
             if(bounded)boundRows(ps);
             query.bind(ps,dialect);
-            try(ResultSet rs=ps.executeQuery()) {
+            try(ResultSet rs=executeQueryObserved(ps)) {
                 Object lastId=null;
                 GraphNode current=null;
                 int fetchedRows=0;
@@ -730,7 +772,7 @@ public final class Bjorm implements Operations {
         try(PreparedStatement ps=prepareRead(c,sql)) {
             boundRows(ps);
             query.bind(ps,dialect);
-            try(ResultSet rs=ps.executeQuery()){
+            try(ResultSet rs=executeQueryObserved(ps)){
                 ArrayList<P> rows=new ArrayList<>();
                 while(rs.next()){checkRows(rows.size()+1);rows.add(projection.read(rs));}
                 return rows;
@@ -743,7 +785,7 @@ public final class Bjorm implements Operations {
         String sql=query.sql(m,type->mapper(type),properties,dialect);
         try(PreparedStatement ps=prepareRead(c,sql)) {
             query.bind(ps,dialect);
-            try(ResultSet rs=ps.executeQuery()) {
+            try(ResultSet rs=executeQueryObserved(ps)) {
                 if(!rs.next())return Optional.empty();
                 if(properties==null && query.hasRightOrFullJoin() &&
                     rs.getObject(m.idColumnIndex())==null)return Optional.empty();
@@ -755,18 +797,18 @@ public final class Bjorm implements Operations {
         try(PreparedStatement ps=prepareRead(c,sql)) {
             boundRows(ps);
             Objects.requireNonNull(binder).bind(ps);
-            try(ResultSet rs=ps.executeQuery()) {ArrayList<T> result=new ArrayList<>();while(rs.next()){checkRows(result.size()+1);result.add(mapper.read(rs));}return result;}
+            try(ResultSet rs=executeQueryObserved(ps)) {ArrayList<T> result=new ArrayList<>();while(rs.next()){checkRows(result.size()+1);result.add(mapper.read(rs));}return result;}
         }
     }
     private <T> T one(Connection c,String sql,StatementBinder binder,RowMapper<T> mapper) throws SQLException {
         try(PreparedStatement ps=prepareRead(c,sql)) {
             ps.setMaxRows(1);
             Objects.requireNonNull(binder).bind(ps);
-            try(ResultSet rs=ps.executeQuery()) {return rs.next()?mapper.read(rs):null;}
+            try(ResultSet rs=executeQueryObserved(ps)) {return rs.next()?mapper.read(rs):null;}
         }
     }
     private int execute(Connection c,String sql,StatementBinder binder) throws SQLException {
-        try(PreparedStatement ps=prepare(c,sql)) {Objects.requireNonNull(binder).bind(ps);return ps.executeUpdate();}
+        try(PreparedStatement ps=prepare(c,sql)) {Objects.requireNonNull(binder).bind(ps);return executeUpdateObserved(ps);}
     }
     private <T> void forEach(Connection c,Select<T> query,Consumer<T> consumer) throws SQLException {
         Objects.requireNonNull(consumer);
@@ -774,14 +816,14 @@ public final class Bjorm implements Operations {
         if (!m.children().isEmpty()) {readGraph(c,query,consumer,false);return;}
         try(PreparedStatement ps=prepareRead(c,query.sql(m,type->mapper(type),dialect))) {
             query.bind(ps,dialect);
-            try(ResultSet rs=ps.executeQuery()){while(rs.next())consumer.accept(m.read(rs));}
+            try(ResultSet rs=executeQueryObserved(ps)){while(rs.next())consumer.accept(m.read(rs));}
         }
     }
     private <T> void scan(Connection c,String sql,StatementBinder binder,RowMapper<T> mapper,Consumer<T> consumer) throws SQLException {
         Objects.requireNonNull(consumer);
         try(PreparedStatement ps=prepareRead(c,sql)) {
             Objects.requireNonNull(binder).bind(ps);
-            try(ResultSet rs=ps.executeQuery()){while(rs.next())consumer.accept(mapper.read(rs));}
+            try(ResultSet rs=executeQueryObserved(ps)){while(rs.next())consumer.accept(mapper.read(rs));}
         }
     }
     /** JDBC batching in chunks; callers needing atomicity must use tx.batchInsert/Update. */
@@ -800,9 +842,9 @@ public final class Bjorm implements Operations {
                 if(updating)m.bindUpdate(ps,m.materializeUpdate(entity),dialect);
                 else { requireReturnForImmutable(entity); m.bindInsert(ps,m.materializeInsert(entity),dialect); }
                 ps.addBatch();
-                if(++pending==options.batchSize()){validateBatch(ps.executeBatch(),m,updating);pending=0;}
+                if(++pending==options.batchSize()){validateBatch(executeBatchObserved(ps),m,updating);pending=0;}
             }
-            if(pending>0)validateBatch(ps.executeBatch(),m,updating);
+            if(pending>0)validateBatch(executeBatchObserved(ps),m,updating);
         }
     }
     private static void validateBatch(int[] counts,EntityMapper<?> m,boolean updating) throws SQLException {
