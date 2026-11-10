@@ -588,6 +588,38 @@ db.delete(order);     // one transaction: delete persisted children, then parent
 - Cascade deletion resolves persisted children by foreign key even if the in-memory collection is empty, and deletes descendants before their parents. Use DB foreign keys for referential integrity. This is **not** JPA orphan removal or lazy loading.
 - Every graph is committed or rolled back atomically. Cyclic/repeated in-memory entities are rejected; this API has no identity map, no transparent retry, and no global context.
 
+## Embedded immutable value objects
+
+`@Embedded` flattens a **public immutable record** into the owning
+`@Table` entity. The owner may itself be a record or a mutable POJO.
+No additional table, JSON serialization, runtime field reflection or extra
+SQL query is introduced.
+
+```java
+public record Address(String street,@Column("postal") String zipCode) {}
+
+@Table("customers")
+public record Customer(
+    @Id UUID id,
+    String name,
+    @Embedded(prefix="shipping_") Address shipping
+) {}
+```
+
+The generated SQL columns are `shipping_street` and `shipping_postal`.
+Without an explicit prefix, BJORM uses `propertyName_`. Scalar value
+attributes can use `@Column`, `@EnumOrdinal` and `@Json`; the generated
+mappers expand and reconstruct the value with direct constructor calls.
+Native `updateBy` accepts the exact Java path `"shipping.street"`, while
+the generated typed DSL exposes `Customer_.shipping_street`.
+
+The embedded value is required for INSERT and UPDATE (null owners are
+rejected before execution). Recursive/nested embedded types and embedded
+associations are not supported; use direct scalar record components,
+a separate entity relation, or an explicit projection for those cases.
+The processor rejects unsupported types, invalid SQL column names and
+colliding generated DSL property names at compile time.
+
 ## Eager ManyToOne with compile-time joins
 
 `@ManyToOne(mappedBy="customerId")` connects a scalar foreign key on the

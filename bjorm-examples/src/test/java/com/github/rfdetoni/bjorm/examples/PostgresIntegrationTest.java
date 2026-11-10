@@ -32,6 +32,8 @@ public final class PostgresIntegrationTest {
         try(Connection c=ds.getConnection();Statement st=c.createStatement()){
             st.execute("CREATE TABLE bjorm_it_users (id uuid PRIMARY KEY, name text NOT NULL, age integer NOT NULL)");
             st.execute("CREATE TABLE bjorm_it_invoices (id uuid PRIMARY KEY, customerId uuid REFERENCES bjorm_it_users(id), reference text)");
+            st.execute("CREATE TABLE bjorm_it_embedded_records (id uuid PRIMARY KEY, label text, shipping_street text, shipping_postal text)");
+            st.execute("CREATE TABLE bjorm_it_embedded_pojos (id uuid PRIMARY KEY, label text, billing_street text, billing_postal text)");
             st.execute("CREATE SCHEMA bjorm_test");
             st.execute("CREATE TABLE bjorm_test.bjorm_it_static (id uuid PRIMARY KEY, label text)");
             st.execute("CREATE SCHEMA bjorm_tenant_a");
@@ -67,7 +69,8 @@ public final class PostgresIntegrationTest {
             ExplicitAssignedRecord_BjormMapper.INSTANCE,ExplicitIdentityRecord_BjormMapper.INSTANCE,
             ExplicitUuidRecord_BjormMapper.INSTANCE,StaticSchemaRecord_BjormMapper.INSTANCE,
             ItInvoice_BjormMapper.INSTANCE,ItInvoiceInner_BjormMapper.INSTANCE,
-            ItInvoicePojo_BjormMapper.INSTANCE);
+            ItInvoicePojo_BjormMapper.INSTANCE,
+            ItEmbeddedRecord_BjormMapper.INSTANCE,ItEmbeddedPojo_BjormMapper.INSTANCE);
         UUID id=UUID.randomUUID();ItUser alice=new ItUser(id,"BJORM",34);
         try {
             StaticSchemaRecord fixed=db.insertReturning(new StaticSchemaRecord(null,"initial-static"));
@@ -103,6 +106,24 @@ public final class PostgresIntegrationTest {
             db.insert(invoicePojo);
             check(db.find(ItInvoicePojo.class,invoicePojo.getId()).getCustomer().id().equals(invoiceCustomer.id()),
                 "PostgreSQL ManyToOne POJO setter hydration");
+            ItAddress embeddedAddress=new ItAddress("Joinville","89201");
+            ItEmbeddedRecord embedded=db.insertReturning(new ItEmbeddedRecord(null,"flat",embeddedAddress));
+            check(embeddedAddress.equals(db.find(ItEmbeddedRecord.class,embedded.id()).address()),
+                "PostgreSQL embedded record value round-trip");
+            check(db.updateBy(ItEmbeddedRecord.class,Map.of("address.street","New Street"),
+                    ItEmbeddedRecord_.id.eq(embedded.id()))==1 &&
+                db.find(ItEmbeddedRecord.class,embedded.id()).address().street().equals("New Street"),
+                "PostgreSQL embedded nested path is safely mapped in updateBy");
+            ItEmbeddedPojo embeddedPojo=new ItEmbeddedPojo();
+            embeddedPojo.setLabel("pojo-embedded");
+            embeddedPojo.setBilling(embeddedAddress);
+            db.insert(embeddedPojo);
+            check(db.find(ItEmbeddedPojo.class,embeddedPojo.getId()).getBilling().equals(embeddedAddress),
+                "PostgreSQL embedded value via POJO getter/setter");
+            try {
+                db.insertReturning(new ItEmbeddedRecord(null,"missing",null));
+                throw new AssertionError("null @Embedded value accepted");
+            } catch(IllegalArgumentException expected) {}
             ExplicitAssignedRecord assigned=db.insertReturning(new ExplicitAssignedRecord(709L,"assigned"));
             check(assigned.id()==709L && db.find(ExplicitAssignedRecord.class,709L).equals(assigned),
                 "PostgreSQL explicit assigned numeric ID");
@@ -379,6 +400,8 @@ public final class PostgresIntegrationTest {
                 st.execute("DROP SCHEMA IF EXISTS bjorm_tenant_a CASCADE");
                 st.execute("DROP SCHEMA IF EXISTS bjorm_tenant_b CASCADE");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_invoices");
+                st.execute("DROP TABLE IF EXISTS bjorm_it_embedded_records");
+                st.execute("DROP TABLE IF EXISTS bjorm_it_embedded_pojos");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_users");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_columns");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_ordinal");
