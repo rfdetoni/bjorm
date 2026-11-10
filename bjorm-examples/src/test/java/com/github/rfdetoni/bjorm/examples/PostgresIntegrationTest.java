@@ -84,6 +84,16 @@ public final class PostgresIntegrationTest {
             tenantA.insert(new ItUser(sharedId,"Alice A",11));
             tenantB.insert(new ItUser(sharedId,"Alice B",22));
             check(tenantA.find(ItUser.class,sharedId).name().equals("Alice A"),"tenant A isolation");
+            tenantA.tx(tx -> {
+                ItUser first=tx.find(ItUser.class,sharedId);
+                check(first==tx.find(ItUser.class,sharedId),"tenant A transaction reuses identity");
+                check("Alice A".equals(first.name()),"tenant A cached identity is isolated");
+            });
+            tenantB.tx(tx -> {
+                ItUser first=tx.find(ItUser.class,sharedId);
+                check(first==tx.find(ItUser.class,sharedId),"tenant B transaction reuses identity");
+                check("Alice B".equals(first.name()),"tenant B cannot see tenant A cached entity");
+            });
             check(tenantB.find(ItUser.class,sharedId).name().equals("Alice B"),"tenant B isolation");
             check(db.find(ItUser.class,sharedId)==null,"PostgreSQL tenant scope never leaks into public");
             tenantA.tx(tx->tx.updateBy(ItUser.class,Map.of("age",33),ItUser_.id.eq(sharedId)));
