@@ -129,6 +129,22 @@ expressions and conflict updates by composite key), **use BJORM's existing**
 compile `@Query` repositories before adding Spring JdbcClient. Those are
 first-class BJORM APIs, not a reason to expand the DSL with every SQL feature.
 
+## Fixed schema mapping (compile-time, not tenant routing)
+
+A model can target a known PostgreSQL schema or MySQL database with
+`@Table(value="jobs", schema="infrastructure")`. Both identifier parts are
+validated by the annotation processor; generated SQL uses
+`infrastructure.jobs` in `INSERT`, `SELECT`, `UPDATE`, `DELETE` and
+dialect-specific UPSERT. No HTTP input or string interpolation is accepted for
+the mapped schema name.
+
+**Do not combine fixed and dynamic tenant schemas.** A BJORM created via
+`tenantRequired(...)` refuses `forTenant(...)` if *any* registered mapper
+declares a static schema. This protects tenant isolation from an explicit
+`schema.table` generated reference bypassing PostgreSQL `search_path`.
+Use a separate, least-privileged BJORM context for shared infrastructure
+tables, and the tenant-required context for tenant-owned tables.
+
 ## Tenant-scoped JDBC operations (PostgreSQL and MySQL)
 
 Tenant-aware deployments should build a **tenant-required** root instead of calling `Bjorm.open(...)`:
