@@ -398,15 +398,16 @@ public final class EntityProcessor extends AbstractProcessor {
         List<Col> insertCols=cols.stream().filter(c->!c.generated()&&c.insertable()).toList();
         String insert=insertCols.isEmpty()?"INSERT INTO "+table+" DEFAULT VALUES":"INSERT INTO "+table+" ("+String.join(", ",insertCols.stream().map(Col::column).toList())+") VALUES ("+String.join(", ",insertCols.stream().map(c->c.json()?"CAST(? AS jsonb)":"?").toList())+")";
         List<String> assignments=new ArrayList<>();
-        for(int i=0;i<cols.size();i++) if(i!=id && cols.get(i).updatable() && !cols.get(i).createdAt()){Col c=cols.get(i);if(i==version)assignments.add(c.column()+" = "+c.column()+" + 1");else assignments.add(c.column()+" = "+(c.json()?"CAST(? AS jsonb)":"?"));}
-        String where=cols.get(id).column()+" = ?"+(version>=0?" AND "+cols.get(version).column()+" = ?":"");
+        for(int i=0;i<cols.size();i++) if(!keyColumns.contains(i) && cols.get(i).updatable() && !cols.get(i).createdAt()){Col c=cols.get(i);if(i==version)assignments.add(c.column()+" = "+c.column()+" + 1");else assignments.add(c.column()+" = "+(c.json()?"CAST(? AS jsonb)":"?"));}
+        String where=String.join(" AND ",keyColumns.stream().map(i->cols.get(i).column()+" = ?").toList())+
+            (version>=0?" AND "+cols.get(version).column()+" = ?":"");
         String update="UPDATE "+table+" SET "+String.join(", ",assignments)+" WHERE "+where;
         String delete="DELETE FROM "+table+" WHERE "+where;
         String select="SELECT "+fields+" FROM "+table;
         String upsert=null;
-        if(!cols.get(id).generated()) {
+        if(keyColumns.size()==1 && !cols.get(id).generated()) {
             List<String> updateSet=new ArrayList<>();
-            for(int i=0;i<cols.size();i++)if(i!=id && cols.get(i).updatable() && !cols.get(i).createdAt()) {
+            for(int i=0;i<cols.size();i++)if(!keyColumns.contains(i) && cols.get(i).updatable() && !cols.get(i).createdAt()) {
                 Col c=cols.get(i);
                 updateSet.add(c.column()+" = "+(i==version?conflictTarget+"."+c.column()+" + 1":"EXCLUDED."+c.column()));
             }
@@ -451,6 +452,12 @@ public final class EntityProcessor extends AbstractProcessor {
 
             w.write("public int columnCount(){return "+cols.size()+";}\n");
             w.write("public int idColumnIndex(){return "+(id+1)+";}\n");
+            if(keyColumns.size()>1) {
+                w.write("public boolean compositeId(){return true;}\n");
+                w.write("public boolean isIdProperty(String property){return switch(property){\n");
+                for(int position:keyColumns)w.write("case \""+cols.get(position).property()+"\" -> true;\n");
+                w.write("default -> false;};}\n");
+            }
             w.write("public int columnIndex(String sqlColumn){return switch(sqlColumn){\n");
             for(int i=0;i<cols.size();i++)w.write("case \""+cols.get(i).column()+"\" -> "+(i+1)+";\n");
             w.write("default -> throw new IllegalArgumentException(\"Unknown mapped column: \"+sqlColumn);};}\n");
@@ -583,7 +590,7 @@ public final class EntityProcessor extends AbstractProcessor {
                 if(record)w.write("public "+clazz+" withGeneratedId(java.sql.ResultSet rs,"+clazz+" value) throws java.sql.SQLException {return new "+clazz+"("+recordArguments(entity,cols.get(id).property(),reader(1,cols.get(id).type()))+");}\n");
                 else w.write("public void acceptGeneratedId(java.sql.ResultSet rs,"+clazz+" value) throws java.sql.SQLException {"+cols.get(id).write()+"("+reader(1,cols.get(id).type())+");}\n");
             }
-            for(var e:List.of(new String[]{"insertSql",insert},new String[]{"updateSql",update},new String[]{"deleteSql",delete},new String[]{"selectSql",select+" WHERE "+cols.get(id).column()+" = ?"},new String[]{"selectAllSql",select}))
+            for(var e:List.of(new String[]{"insertSql",insert},new String[]{"updateSql",update},new String[]{"deleteSql",delete},new String[]{"selectSql",select+" WHERE "+String.join(" AND ",keyColumns.stream().map(i->cols.get(i).column()+" = ?").toList())},new String[]{"selectAllSql",select}))
                 w.write("public String "+e[0]+"(){return \""+e[1]+"\";}\n");
             w.write("public void bindInsert(java.sql.PreparedStatement ps,"+clazz+" value) throws java.sql.SQLException {bindInsert(ps,value,com.github.rfdetoni.bjorm.SqlDialects.POSTGRESQL);}\n");
             w.write("public void bindInsert(java.sql.PreparedStatement ps,"+clazz+" value,com.github.rfdetoni.bjorm.SqlDialect dialect) throws java.sql.SQLException {\n");
@@ -596,17 +603,31 @@ public final class EntityProcessor extends AbstractProcessor {
             for(EmbeddedSpec embedded:embeddeds)
                 w.write("if("+embedded.read()+"==null)throw new IllegalArgumentException(\"@Embedded "+embedded.property()+" is required\");\n");
             int index=1;
-            for(int i=0;i<cols.size();i++)if(i!=id&&i!=version&&cols.get(i).updatable()&&!cols.get(i).createdAt())
+            for(int i=0;i<cols.size();i++)if(!keyColumns.contains(i)&&i!=version&&cols.get(i).updatable()&&!cols.get(i).createdAt())
                 w.write(writeColumn(cols.get(i),index++,i,"dialect")+"\n");
-            w.write(setter(index++,cols.get(id).read(),cols.get(id).type(),"dialect")+"\n");
+            for(int keyColumn:keyColumns)
+                w.write(setter(index++,cols.get(keyColumn).read(),cols.get(keyColumn).type(),"dialect")+"\n");
             if(version>=0)w.write(setter(index++,cols.get(version).read(),cols.get(version).type(),"dialect")+"\n");
             w.write("}\npublic void bindDelete(java.sql.PreparedStatement ps,"+clazz+" value) throws java.sql.SQLException {bindDelete(ps,value,com.github.rfdetoni.bjorm.SqlDialects.POSTGRESQL);}\n");
             w.write("public void bindDelete(java.sql.PreparedStatement ps,"+clazz+" value,com.github.rfdetoni.bjorm.SqlDialect dialect) throws java.sql.SQLException {\n");
-            w.write(setter(1,cols.get(id).read(),cols.get(id).type(),"dialect")+"\n");
-            if(version>=0)w.write(setter(2,cols.get(version).read(),cols.get(version).type(),"dialect")+"\n");
-            w.write("}\npublic void bindId(java.sql.PreparedStatement ps,int index,Object id) throws java.sql.SQLException {ps.setObject(index,id);}\n");
-            w.write("public void bindId(java.sql.PreparedStatement ps,int index,Object id,com.github.rfdetoni.bjorm.SqlDialect dialect) throws java.sql.SQLException {dialect.bindValue(ps,index,id);}\n");
-            w.write("public Object id("+clazz+" value){return "+cols.get(id).read()+";}\n");
+            int deleteIndex=1;
+            for(int keyColumn:keyColumns)
+                w.write(setter(deleteIndex++,cols.get(keyColumn).read(),cols.get(keyColumn).type(),"dialect")+"\n");
+            if(version>=0)w.write(setter(deleteIndex++,cols.get(version).read(),cols.get(version).type(),"dialect")+"\n");
+            if(keyColumns.size()>1) {
+                w.write("}\npublic void bindId(java.sql.PreparedStatement ps,int index,Object id) throws java.sql.SQLException {bindId(ps,index,id,com.github.rfdetoni.bjorm.SqlDialects.POSTGRESQL);}\n");
+                w.write("public void bindId(java.sql.PreparedStatement ps,int index,Object id,com.github.rfdetoni.bjorm.SqlDialect dialect) throws java.sql.SQLException {\n");
+                w.write("if(!(id instanceof com.github.rfdetoni.bjorm.CompositeId key) || key.parts().size()!="+keyColumns.size()+")throw new IllegalArgumentException(\"Expected "+keyColumns.size()+"-part CompositeId\");\n");
+                for(int i=0;i<keyColumns.size();i++)
+                    w.write("dialect.bindValue(ps,index+"+i+",key.part("+i+"));\n");
+                w.write("}\n");
+                w.write("public Object id("+clazz+" value){return com.github.rfdetoni.bjorm.CompositeId.of("+
+                    String.join(", ",keyColumns.stream().map(i->cols.get(i).read()).toList())+");}\n");
+            } else {
+                w.write("}\npublic void bindId(java.sql.PreparedStatement ps,int index,Object id) throws java.sql.SQLException {ps.setObject(index,id);}\n");
+                w.write("public void bindId(java.sql.PreparedStatement ps,int index,Object id,com.github.rfdetoni.bjorm.SqlDialect dialect) throws java.sql.SQLException {dialect.bindValue(ps,index,id);}\n");
+                w.write("public Object id("+clazz+" value){return "+cols.get(id).read()+";}\n");
+            }
             w.write("public String idProperty(){return \""+cols.get(id).property()+"\";}\n");
             w.write("public "+clazz+" read(java.sql.ResultSet rs) throws java.sql.SQLException {return readAt(rs,1); }\n");
             w.write("public "+clazz+" readAt(java.sql.ResultSet rs,int offset) throws java.sql.SQLException {\n");
