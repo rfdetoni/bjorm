@@ -70,6 +70,8 @@ jobs:
             -DoutputDirectory=bjorm-examples/target
       - name: Verify against real PostgreSQL
         run: bash scripts/verify.sh
+      - name: Verify Spring-managed transaction join against real PostgreSQL
+        run: mvn -B -ntp -pl bjorm-spring-boot -am test
 
   mysql:
     if: github.event_name != 'pull_request' || contains(github.event.pull_request.title, '[full-db]')
@@ -110,6 +112,8 @@ jobs:
             -DoutputDirectory=bjorm-examples/target
       - name: Verify with real MySQL 8.4
         run: bash scripts/verify.sh
+      - name: Verify Spring-managed transaction join against real MySQL
+        run: mvn -B -ntp -pl bjorm-spring-boot -am test
 
   publish-snapshot:
     name: Publish verified Maven snapshot
