@@ -30,6 +30,8 @@ public final class MySqlIntegrationTest {
         try(Connection c=source.getConnection();Statement st=c.createStatement()){
             st.execute("CREATE TABLE bjorm_it_users(id CHAR(36) PRIMARY KEY,name VARCHAR(255) UNIQUE,age INT NOT NULL)");
             st.execute("CREATE TABLE bjorm_it_ordinal(id CHAR(36) PRIMARY KEY,status INT,label VARCHAR(255))");
+            st.execute("CREATE TABLE bjorm_it_audit(id CHAR(36) PRIMARY KEY,label VARCHAR(255),createdAt TIMESTAMP(6) NULL,updatedAt TIMESTAMP(6) NULL)");
+            st.execute("CREATE TABLE bjorm_it_audit_pojo(id CHAR(36) PRIMARY KEY,label VARCHAR(255),createdAt TIMESTAMP(6) NULL,updatedAt TIMESTAMP(6) NULL)");
             st.execute("CREATE TABLE bjorm_it_columns(id CHAR(36) PRIMARY KEY,read_only VARCHAR(255),server_val VARCHAR(255) DEFAULT 'server-default')");
             st.execute("CREATE TABLE bjorm_it_instants(id CHAR(36) PRIMARY KEY,label VARCHAR(255),occurred_at TIMESTAMP(6) NULL,version INT NOT NULL DEFAULT 0)");
             st.execute("CREATE TABLE bjorm_it_documents(id CHAR(36) PRIMARY KEY,payload JSON)");
@@ -43,7 +45,30 @@ public final class MySqlIntegrationTest {
                 ItUser_BjormMapper.INSTANCE,ItDocument_BjormMapper.INSTANCE,
                 AutoLongRecord_BjormMapper.INSTANCE,ItOrder_BjormMapper.INSTANCE,
                 ItOrderLine_BjormMapper.INSTANCE,ItOrderNote_BjormMapper.INSTANCE,
-                ItInstant_BjormMapper.INSTANCE,MappedColumns_BjormMapper.INSTANCE,OrdinalEvent_BjormMapper.INSTANCE);
+                ItInstant_BjormMapper.INSTANCE,MappedColumns_BjormMapper.INSTANCE,OrdinalEvent_BjormMapper.INSTANCE,
+                ItAuditRecord_BjormMapper.INSTANCE,ItAuditPojo_BjormMapper.INSTANCE);
+            ItAuditRecord audit=db.insertReturning(new ItAuditRecord(null,"mysql-created",null,null));
+            ItAuditRecord insertedAudit=db.find(ItAuditRecord.class,audit.id());
+            check(insertedAudit.createdAt()!=null && insertedAudit.updatedAt()!=null,
+                "MySQL generated audit timestamps");
+            ItAuditRecord modifiedAudit=db.updateReturning(insertedAudit);
+            check(modifiedAudit.createdAt().equals(insertedAudit.createdAt()) &&
+                !modifiedAudit.updatedAt().isBefore(insertedAudit.updatedAt()),
+                "MySQL audit update");
+            check(db.updateBy(ItAuditRecord.class,Map.of("label","bulk-audit"),ItAuditRecord_.id.eq(audit.id()))==1,
+                "MySQL audit bulk auto-stamp");
+            ItAuditRecord afterBulkAudit=db.find(ItAuditRecord.class,audit.id());
+            check(afterBulkAudit.createdAt().equals(insertedAudit.createdAt()) &&
+                !afterBulkAudit.updatedAt().isBefore(modifiedAudit.updatedAt()),
+                "MySQL @CreatedAt preserved by bulk update");
+            ItAuditRecord upsertedAudit=db.upsertReturning(new ItAuditRecord(audit.id(),
+                "mysql-upsert",Instant.parse("2000-01-01T00:00:00Z"),afterBulkAudit.updatedAt()));
+            check(upsertedAudit.createdAt().equals(insertedAudit.createdAt()),
+                "MySQL UPSERT preserves creation time");
+            ItAuditPojo auditPojo=new ItAuditPojo();auditPojo.setLabel("pojo");db.insert(auditPojo);
+            check(auditPojo.getCreatedAt()!=null && auditPojo.getUpdatedAt()!=null &&
+                db.find(ItAuditPojo.class,auditPojo.getId()).getUpdatedAt()!=null,
+                "MySQL POJO generated audit timestamps");
             Instant testTime=Instant.parse("2026-11-10T10:20:30Z");
             ItInstant savedInstant=db.insertReturning(new ItInstant(null,"Original",testTime,0));
             check(testTime.equals(db.find(ItInstant.class,savedInstant.id()).occurredAt()),
@@ -120,7 +145,7 @@ public final class MySqlIntegrationTest {
         }finally {
             try(Connection c=source.getConnection();Statement st=c.createStatement()){
                 for(String name:List.of("bjorm_it_order_notes","bjorm_it_order_lines","bjorm_it_orders",
-                    "bjorm_it_columns","bjorm_it_ordinal",
+                    "bjorm_it_columns","bjorm_it_ordinal","bjorm_it_audit","bjorm_it_audit_pojo",
                     "bjorm_it_instants","bjorm_it_documents","bjorm_it_auto_long","bjorm_it_users"))
                     st.execute("DROP TABLE IF EXISTS "+name);
             }

@@ -39,6 +39,8 @@ public final class PostgresIntegrationTest {
             st.execute("CREATE TABLE bjorm_it_products (id uuid PRIMARY KEY, name text, unit_price numeric(18,2), status text, version integer NOT NULL DEFAULT 0)");
             st.execute("CREATE TABLE bjorm_it_columns (id uuid PRIMARY KEY, read_only text NOT NULL, server_val text DEFAULT 'server-default')");
             st.execute("CREATE TABLE bjorm_it_ordinal (id uuid PRIMARY KEY, status integer, label text)");
+            st.execute("CREATE TABLE bjorm_it_audit (id uuid PRIMARY KEY, label text, createdAt timestamptz, updatedAt timestamptz)");
+            st.execute("CREATE TABLE bjorm_it_audit_pojo (id uuid PRIMARY KEY, label text, createdAt timestamptz, updatedAt timestamptz)");
             st.execute("CREATE TABLE bjorm_it_documents (id uuid PRIMARY KEY, payload jsonb)");
             st.execute("CREATE TABLE bjorm_it_orders (id uuid PRIMARY KEY, description text)");
             // FK RESTRICT: cascade here is implemented by BJORM, not delegated to PostgreSQL.
@@ -54,7 +56,8 @@ public final class PostgresIntegrationTest {
             st.execute("CREATE TABLE bjorm_it_record_children (id uuid PRIMARY KEY, parentId uuid NOT NULL REFERENCES bjorm_it_record_parents(id), label text)");
         }
         Bjorm db=Bjorm.open(ds,ItUser_BjormMapper.INSTANCE,ItProduct_BjormMapper.INSTANCE,ItDocument_BjormMapper.INSTANCE,ItOrder_BjormMapper.INSTANCE,ItOrderInner_BjormMapper.INSTANCE,ItOrderOuter_BjormMapper.INSTANCE,ItOrderLine_BjormMapper.INSTANCE,ItOrderNote_BjormMapper.INSTANCE,AutoUuidRecord_BjormMapper.INSTANCE,AutoStringRecord_BjormMapper.INSTANCE,AutoLongRecord_BjormMapper.INSTANCE,AutoIntRecord_BjormMapper.INSTANCE,AutoUuidPojo_BjormMapper.INSTANCE,AutoParentRecord_BjormMapper.INSTANCE,AutoChildRecord_BjormMapper.INSTANCE,InheritedPatient_BjormMapper.INSTANCE,ItTypedJson_BjormMapper.INSTANCE,ItInstant_BjormMapper.INSTANCE,
-            MappedColumns_BjormMapper.INSTANCE,OrdinalEvent_BjormMapper.INSTANCE);
+            MappedColumns_BjormMapper.INSTANCE,OrdinalEvent_BjormMapper.INSTANCE,
+            ItAuditRecord_BjormMapper.INSTANCE,ItAuditPojo_BjormMapper.INSTANCE);
         UUID id=UUID.randomUUID();ItUser alice=new ItUser(id,"BJORM",34);
         try {
             Bjorm required=Bjorm.tenantRequired(ds,BjormOptions.defaults(),SqlDialects.POSTGRESQL,ItUser_BjormMapper.INSTANCE);
@@ -73,6 +76,34 @@ public final class PostgresIntegrationTest {
             check(tenantA.deleteBy(ItUser.class,ItUser_.id.eq(sharedId))==1,"tenant-local bulk delete");
             check(tenantA.find(ItUser.class,sharedId)==null &&
                 tenantB.find(ItUser.class,sharedId)!=null,"deletion cannot cross tenants");
+            ItAuditRecord generated=db.insertReturning(new ItAuditRecord(null,"created",null,null));
+            ItAuditRecord initialAudit=db.find(ItAuditRecord.class,generated.id());
+            check(initialAudit.createdAt()!=null && initialAudit.updatedAt()!=null,
+                "PostgreSQL generated audit timestamps");
+            ItAuditRecord changedAudit=db.updateReturning(new ItAuditRecord(initialAudit.id(),
+                "updated",initialAudit.createdAt(),initialAudit.updatedAt()));
+            check(changedAudit.createdAt().equals(initialAudit.createdAt()) &&
+                !changedAudit.updatedAt().isBefore(initialAudit.updatedAt()),
+                "PostgreSQL audit updates retain original creation date");
+            check(db.updateBy(ItAuditRecord.class,Map.of("label","updated bulk"),
+                ItAuditRecord_.id.eq(generated.id()))==1,"PostgreSQL bulk @UpdatedAt stamp");
+            ItAuditRecord afterBulk=db.find(ItAuditRecord.class,generated.id());
+            check(!afterBulk.updatedAt().isBefore(changedAudit.updatedAt()),
+                "PostgreSQL bulk audit auto-update");
+            try {db.updateBy(ItAuditRecord.class,Map.of("createdAt",Instant.now()),
+                ItAuditRecord_.id.eq(generated.id()));
+                throw new AssertionError("Creation timestamp bulk mutation accepted");
+            } catch(IllegalArgumentException expected) {}
+            ItAuditRecord upsertedAudit=db.upsertReturning(new ItAuditRecord(generated.id(),
+                "upserted",Instant.parse("2000-01-01T00:00:00Z"),afterBulk.updatedAt()));
+            ItAuditRecord persistedAudit=db.find(ItAuditRecord.class,generated.id());
+            check(upsertedAudit.createdAt().equals(initialAudit.createdAt()) &&
+                persistedAudit.createdAt().equals(initialAudit.createdAt()),
+                "PostgreSQL UPSERT must preserve creation time");
+            ItAuditPojo auditPojo=new ItAuditPojo();auditPojo.setLabel("pojo");db.insert(auditPojo);
+            check(auditPojo.getCreatedAt()!=null && auditPojo.getUpdatedAt()!=null &&
+                db.find(ItAuditPojo.class,auditPojo.getId()).getCreatedAt()!=null,
+                "PostgreSQL POJO audit timestamps");
             Instant time=Instant.parse("2026-11-10T10:20:30Z");
             ItInstant savedInstant=db.insertReturning(new ItInstant(null,"Original",time,0));
             check(db.find(ItInstant.class,savedInstant.id()).occurredAt().equals(time),
@@ -272,6 +303,8 @@ public final class PostgresIntegrationTest {
                 st.execute("DROP TABLE IF EXISTS bjorm_it_users");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_columns");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_ordinal");
+                st.execute("DROP TABLE IF EXISTS bjorm_it_audit");
+                st.execute("DROP TABLE IF EXISTS bjorm_it_audit_pojo");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_products");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_instants");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_documents");

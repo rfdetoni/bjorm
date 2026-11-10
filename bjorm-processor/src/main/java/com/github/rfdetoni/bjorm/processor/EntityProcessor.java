@@ -48,7 +48,7 @@ public final class EntityProcessor extends AbstractProcessor {
         }
         return true;
     }
-    private record Col(String property,String column,String type,String read,String write,boolean id,boolean version,boolean generated,boolean json,boolean uuidV7,String jsonCodec,TypeMirror typeMirror,boolean insertable,boolean updatable,boolean enumOrdinal) {}
+    private record Col(String property,String column,String type,String read,String write,boolean id,boolean version,boolean generated,boolean json,boolean uuidV7,String jsonCodec,TypeMirror typeMirror,boolean insertable,boolean updatable,boolean enumOrdinal,boolean createdAt,boolean updatedAt) {}
     private static boolean isNumericId(String type) {return Set.of("int","long","java.lang.Integer","java.lang.Long").contains(type);}
     private static boolean autoUuid(Id id,String type) {return id!=null && !id.assigned() && (id.uuidV7() || ( !id.generated() && Set.of("java.util.UUID","java.lang.String").contains(type)));}
     private static boolean databaseId(Id id,String type) {return id!=null && !id.assigned() && (id.generated() || isNumericId(type));}
@@ -72,7 +72,7 @@ public final class EntityProcessor extends AbstractProcessor {
                 }
                 if(c.getAnnotation(Children.class)!=null) {relations.add(relation(c,"value."+prop+"()"));continue;}
                 Id idAnn=c.getAnnotation(Id.class);
-                cols.add(new Col(prop,colName(c,prop),c.asType().toString(),"value."+prop+"()","",idAnn!=null,c.getAnnotation(Version.class)!=null,databaseId(idAnn,c.asType().toString()),c.getAnnotation(Json.class)!=null,autoUuid(idAnn,c.asType().toString()),jsonCodec(c),c.asType(),c.getAnnotation(Column.class)==null||c.getAnnotation(Column.class).insertable(),c.getAnnotation(Column.class)==null||c.getAnnotation(Column.class).updatable(),c.getAnnotation(EnumOrdinal.class)!=null));
+                cols.add(new Col(prop,colName(c,prop),c.asType().toString(),"value."+prop+"()","",idAnn!=null,c.getAnnotation(Version.class)!=null,databaseId(idAnn,c.asType().toString()),c.getAnnotation(Json.class)!=null,autoUuid(idAnn,c.asType().toString()),jsonCodec(c),c.asType(),c.getAnnotation(Column.class)==null||c.getAnnotation(Column.class).insertable(),c.getAnnotation(Column.class)==null||c.getAnnotation(Column.class).updatable(),c.getAnnotation(EnumOrdinal.class)!=null,c.getAnnotation(CreatedAt.class)!=null,c.getAnnotation(UpdatedAt.class)!=null));
             }
         } else {
             boolean constructor=false;
@@ -89,7 +89,7 @@ public final class EntityProcessor extends AbstractProcessor {
                 String setter="set"+suff;
                 if(getter==null||!hasSetter(entity,setter,type)) {error(el,"POJO needs public getter and setter for "+prop);return;}
                 Id idAnn=el.getAnnotation(Id.class);
-                cols.add(new Col(prop,colName(el,prop),type,"value."+getter+"()","value."+setter,cAnnotated(el,Id.class),cAnnotated(el,Version.class),databaseId(idAnn,type),el.getAnnotation(Json.class)!=null,autoUuid(idAnn,type),jsonCodec(el),el.asType(),el.getAnnotation(Column.class)==null||el.getAnnotation(Column.class).insertable(),el.getAnnotation(Column.class)==null||el.getAnnotation(Column.class).updatable(),el.getAnnotation(EnumOrdinal.class)!=null));
+                cols.add(new Col(prop,colName(el,prop),type,"value."+getter+"()","value."+setter,cAnnotated(el,Id.class),cAnnotated(el,Version.class),databaseId(idAnn,type),el.getAnnotation(Json.class)!=null,autoUuid(idAnn,type),jsonCodec(el),el.asType(),el.getAnnotation(Column.class)==null||el.getAnnotation(Column.class).insertable(),el.getAnnotation(Column.class)==null||el.getAnnotation(Column.class).updatable(),el.getAnnotation(EnumOrdinal.class)!=null,el.getAnnotation(CreatedAt.class)!=null,el.getAnnotation(UpdatedAt.class)!=null));
             }
         }
         if(cols.isEmpty()){error(entity,"@Table requires mapped properties");return;}
@@ -99,12 +99,21 @@ public final class EntityProcessor extends AbstractProcessor {
                 error(el,"@Id assigned=true cannot be combined with generated=true or uuidV7=true");return;
             }
         }
-        int id=-1,ver=-1;
+        int id=-1,ver=-1,created=-1,updated=-1;
         Set<String> seen=new HashSet<>();
         for(int i=0;i<cols.size();i++){
             Col c=cols.get(i);
             if(!identifier(c.column())||!seen.add(c.column())){error(entity,"Invalid/duplicate column: "+c.column());return;}
             if(!c.json() && !supported(c.type())) {error(entity,"Unsupported JDBC property: "+c.type());return;}
+            if(c.createdAt() || c.updatedAt()) {
+                if(c.createdAt()&&c.updatedAt() || c.id() || c.version() || c.json() || c.enumOrdinal() ||
+                   !Set.of("java.time.Instant","java.time.LocalDateTime").contains(c.type()) ||
+                   !c.insertable() || (c.updatedAt()&&!c.updatable())) {
+                    error(entity,"@CreatedAt/@UpdatedAt require insertable Instant/LocalDateTime non-ID fields");return;
+                }
+                if(c.createdAt()) {if(created>=0){error(entity,"At most one @CreatedAt is supported");return;}created=i;}
+                if(c.updatedAt()) {if(updated>=0){error(entity,"At most one @UpdatedAt is supported");return;}updated=i;}
+            }
             if(c.enumOrdinal()) {
                 TypeElement enumType=elements.getTypeElement(c.type());
                 if(c.id() || c.version() || enumType==null || enumType.getKind()!=ElementKind.ENUM) {
@@ -126,7 +135,7 @@ public final class EntityProcessor extends AbstractProcessor {
         }
         if(id<0){error(entity,"Missing @Id");return;}
         if(cols.size()==1){error(entity,"Entity needs a non-id property");return;}
-        if(cols.stream().noneMatch(c->!c.id() && c.updatable())){
+        if(cols.stream().noneMatch(c->!c.id() && c.updatable() && !c.createdAt())){
             error(entity,"Entity requires at least one updatable non-ID column");return;
         }
         for(Relation r:relations) {
@@ -228,7 +237,7 @@ public final class EntityProcessor extends AbstractProcessor {
         List<Col> insertCols=cols.stream().filter(c->!c.generated()&&c.insertable()).toList();
         String insert=insertCols.isEmpty()?"INSERT INTO "+table+" DEFAULT VALUES":"INSERT INTO "+table+" ("+String.join(", ",insertCols.stream().map(Col::column).toList())+") VALUES ("+String.join(", ",insertCols.stream().map(c->c.json()?"CAST(? AS jsonb)":"?").toList())+")";
         List<String> assignments=new ArrayList<>();
-        for(int i=0;i<cols.size();i++) if(i!=id && cols.get(i).updatable()){Col c=cols.get(i);if(i==version)assignments.add(c.column()+" = "+c.column()+" + 1");else assignments.add(c.column()+" = "+(c.json()?"CAST(? AS jsonb)":"?"));}
+        for(int i=0;i<cols.size();i++) if(i!=id && cols.get(i).updatable() && !cols.get(i).createdAt()){Col c=cols.get(i);if(i==version)assignments.add(c.column()+" = "+c.column()+" + 1");else assignments.add(c.column()+" = "+(c.json()?"CAST(? AS jsonb)":"?"));}
         String where=cols.get(id).column()+" = ?"+(version>=0?" AND "+cols.get(version).column()+" = ?":"");
         String update="UPDATE "+table+" SET "+String.join(", ",assignments)+" WHERE "+where;
         String delete="DELETE FROM "+table+" WHERE "+where;
@@ -236,7 +245,7 @@ public final class EntityProcessor extends AbstractProcessor {
         String upsert=null;
         if(!cols.get(id).generated()) {
             List<String> updateSet=new ArrayList<>();
-            for(int i=0;i<cols.size();i++)if(i!=id && cols.get(i).updatable()) {
+            for(int i=0;i<cols.size();i++)if(i!=id && cols.get(i).updatable() && !cols.get(i).createdAt()) {
                 Col c=cols.get(i);
                 updateSet.add(c.column()+" = "+(i==version?table+"."+c.column()+" + 1":"EXCLUDED."+c.column()));
             }
@@ -266,7 +275,7 @@ public final class EntityProcessor extends AbstractProcessor {
             w.write("default -> throw new IllegalArgumentException(\"Unknown mapped property: \"+property);};}\n");
 
             w.write("public String bulkParameterSql(String property,com.github.rfdetoni.bjorm.SqlDialect dialect){return switch(property){\n");
-            for(Col c:cols)if(!c.updatable())w.write("case \""+c.property()+"\" -> throw new IllegalArgumentException(\"Read-only mapped property: "+c.property()+"\");\n");
+            for(Col c:cols)if(!c.updatable()||c.createdAt())w.write("case \""+c.property()+"\" -> throw new IllegalArgumentException(\"Read-only mapped property: "+c.property()+"\");\n");
             for(Col c:cols) if(c.json())w.write("case \""+c.property()+"\" -> dialect.jsonParameter();\n");
             w.write("default -> {columnFor(property);yield \"?\";}};}\n");
             w.write("public Object bulkParameterValue(String property,Object value){return switch(property){\n");
@@ -284,17 +293,64 @@ public final class EntityProcessor extends AbstractProcessor {
             for(int i=0;i<cols.size();i++)w.write("case \""+cols.get(i).column()+"\" -> "+(i+1)+";\n");
             w.write("default -> throw new IllegalArgumentException(\"Unknown mapped column: \"+sqlColumn);};}\n");
             w.write("public boolean optimisticLocking(){return "+(version>=0)+";}\n");
+            w.write("public boolean upsertNeedsReload(){return "+
+                (version>=0||cols.stream().anyMatch(c->c.createdAt()||!c.insertable()))+";}\n");
             w.write("public boolean generatedId(){return "+cols.get(id).generated()+";}\n");
             w.write("public boolean immutable(){return "+record+";}\n");
             if(upsert!=null) {
                 w.write("public String upsertSql(){return \""+upsert+"\";}\n");
-                String changes=String.join(", ",cols.stream().filter(c->!c.id()&&c.updatable()).map(c->"\""+c.column()+"\"").toList());
+                String changes=String.join(", ",cols.stream().filter(c->!c.id()&&c.updatable()&&!c.createdAt()).map(c->"\""+c.column()+"\"").toList());
                 w.write("public String upsertSql(com.github.rfdetoni.bjorm.SqlDialect dialect){return dialect.upsertSql(insertSql(dialect),\""+table+"\",\""+cols.get(id).column()+"\",java.util.List.of("+changes+"),"+(version>=0?"\""+cols.get(version).column()+"\"":"null")+");}\n");
             }
-            if(cols.get(id).uuidV7()) {
-                String expression=cols.get(id).type().equals("java.lang.String")?"com.github.rfdetoni.bjorm.UuidV7.next().toString()":"com.github.rfdetoni.bjorm.UuidV7.next()";
-                if(record)w.write("public "+clazz+" materializeInsert("+clazz+" value){if(value."+cols.get(id).property()+"()!=null)return value;return new "+clazz+"("+recordArguments(entity,cols.get(id).property(),expression)+");}\n");
-                else w.write("public void prepareInsert("+clazz+" value){if("+cols.get(id).read()+"==null)"+cols.get(id).write()+"("+expression+");}\n");
+            Col createdAt=cols.stream().filter(Col::createdAt).findFirst().orElse(null);
+            Col updatedAt=cols.stream().filter(Col::updatedAt).findFirst().orElse(null);
+            boolean generateInsert=cols.get(id).uuidV7() || createdAt!=null || updatedAt!=null;
+            String idGenerator=cols.get(id).type().equals("java.lang.String")
+                ?"com.github.rfdetoni.bjorm.UuidV7.next().toString()"
+                :"com.github.rfdetoni.bjorm.UuidV7.next()";
+            if(generateInsert) {
+                if(record) {
+                    Map<String,String> replacements=new HashMap<>();
+                    List<String> needs=new ArrayList<>();
+                    if(cols.get(id).uuidV7()) {
+                        String name=cols.get(id).property();
+                        needs.add("value."+name+"()==null");
+                        replacements.put(name,"(value."+name+"()==null?"+idGenerator+":value."+name+"())");
+                    }
+                    for(Col c:cols)if(c.createdAt()||c.updatedAt()) {
+                        needs.add("value."+c.property()+"()==null");
+                        replacements.put(c.property(),"(value."+c.property()+"()==null?"+auditTimeExpression(c)+":value."+c.property()+"())");
+                    }
+                    w.write("public "+clazz+" materializeInsert("+clazz+" value){");
+                    if(createdAt!=null||updatedAt!=null)w.write("java.time.Instant now=java.time.Instant.now();");
+                    w.write("if(!("+String.join(" || ",needs)+"))return value;");
+                    w.write("return new "+clazz+"("+recordArgumentsWith(entity,replacements)+");}\n");
+                } else {
+                    w.write("public void prepareInsert("+clazz+" value){");
+                    if(createdAt!=null||updatedAt!=null)w.write("java.time.Instant now=java.time.Instant.now();");
+                    if(cols.get(id).uuidV7())w.write("if("+cols.get(id).read()+"==null)"+cols.get(id).write()+"("+idGenerator+");");
+                    for(Col c:cols)if(c.createdAt()||c.updatedAt())
+                        w.write("if("+c.read()+"==null)"+c.write()+"("+auditTimeExpression(c)+");");
+                    w.write("}\n");
+                }
+            }
+            if(updatedAt!=null) {
+                w.write("public String updatedAtProperty(){return \""+updatedAt.property()+"\";}\n");
+                w.write("public Object updatedAtNow(){return "+
+                    (updatedAt.type().equals("java.time.Instant")?"java.time.Instant.now()":
+                        "java.time.LocalDateTime.now(java.time.ZoneOffset.UTC)")+";}\n");
+                if(record) {
+                    Map<String,String> replacements=Map.of(updatedAt.property(),auditTimeExpression(updatedAt));
+                    w.write("public "+clazz+" materializeUpdate("+clazz+" value){java.time.Instant now=java.time.Instant.now();");
+                    w.write("return new "+clazz+"("+recordArgumentsWith(entity,replacements)+");}\n");
+                    w.write("public "+clazz+" materializeUpsert("+clazz+" value){java.time.Instant now=java.time.Instant.now();");
+                    w.write("return materializeInsert(new "+clazz+"("+recordArgumentsWith(entity,replacements)+"));}\n");
+                } else {
+                    w.write("public "+clazz+" materializeUpdate("+clazz+" value){java.time.Instant now=java.time.Instant.now();"+
+                        updatedAt.write()+"("+auditTimeExpression(updatedAt)+");return value;}\n");
+                    w.write("public "+clazz+" materializeUpsert("+clazz+" value){java.time.Instant now=java.time.Instant.now();"+
+                        updatedAt.write()+"("+auditTimeExpression(updatedAt)+");return materializeInsert(value);}\n");
+                }
             }
             if(!relations.isEmpty()) {
                 w.write("public java.util.List<com.github.rfdetoni.bjorm.ChildRelation<"+clazz+">> children(){return RELATIONS;}\n");
@@ -343,7 +399,7 @@ public final class EntityProcessor extends AbstractProcessor {
             w.write("}\npublic void bindUpdate(java.sql.PreparedStatement ps,"+clazz+" value) throws java.sql.SQLException {bindUpdate(ps,value,com.github.rfdetoni.bjorm.SqlDialects.POSTGRESQL);}\n");
             w.write("public void bindUpdate(java.sql.PreparedStatement ps,"+clazz+" value,com.github.rfdetoni.bjorm.SqlDialect dialect) throws java.sql.SQLException {\n");
             int index=1;
-            for(int i=0;i<cols.size();i++)if(i!=id&&i!=version&&cols.get(i).updatable())
+            for(int i=0;i<cols.size();i++)if(i!=id&&i!=version&&cols.get(i).updatable()&&!cols.get(i).createdAt())
                 w.write(writeColumn(cols.get(i),index++,i,"dialect")+"\n");
             w.write(setter(index++,cols.get(id).read(),cols.get(id).type(),"dialect")+"\n");
             if(version>=0)w.write(setter(index++,cols.get(version).read(),cols.get(version).type(),"dialect")+"\n");
@@ -383,6 +439,19 @@ public final class EntityProcessor extends AbstractProcessor {
             case "int" -> "0";
             default -> "null";
         };
+    }
+    private static String auditTimeExpression(Col col) {
+        return col.type().equals("java.time.Instant")
+            ?"now"
+            :"java.time.LocalDateTime.ofInstant(now,java.time.ZoneOffset.UTC)";
+    }
+    private static String recordArgumentsWith(TypeElement entity,Map<String,String> replacements) {
+        List<String> arguments=new ArrayList<>();
+        for(RecordComponentElement component:entity.getRecordComponents()) {
+            String name=component.getSimpleName().toString();
+            arguments.add(replacements.getOrDefault(name,"value."+name+"()"));
+        }
+        return String.join(", ",arguments);
     }
     private String recordArguments(TypeElement entity,String replacementProperty,String replacement) {
         List<String> args=new ArrayList<>();
