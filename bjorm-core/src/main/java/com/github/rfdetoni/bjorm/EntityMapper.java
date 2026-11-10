@@ -36,6 +36,12 @@ public interface EntityMapper<T> extends RowMapper<T> {
     /** Immutable entity instances need a return value when their key must be generated. */
     default boolean immutable() { return false; }
     default java.util.List<ChildRelation<T>> children() { return java.util.List.of(); }
+    /** Read-only eager references assembled by the JOIN result mapper. */
+    default java.util.List<ParentRelation<T>> parents() { return java.util.List.of(); }
+    /** Generated POJO setter or immutable record constructor. */
+    default T withParent(T entity,String property,Object parent) {
+        throw new UnsupportedOperationException("Eager to-one mapper not generated");
+    }
     /** Replace immutable record's @Children collection with persisted child copies. */
     default T withChildren(T entity,String relation,java.util.List<?> children) { return entity; }
     /** Generated positional mapper for joined rows, at 1-based JDBC column offset. */

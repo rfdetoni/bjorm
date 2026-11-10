@@ -588,6 +588,46 @@ db.delete(order);     // one transaction: delete persisted children, then parent
 - Cascade deletion resolves persisted children by foreign key even if the in-memory collection is empty, and deletes descendants before their parents. Use DB foreign keys for referential integrity. This is **not** JPA orphan removal or lazy loading.
 - Every graph is committed or rolled back atomically. Cyclic/repeated in-memory entities are rejected; this API has no identity map, no transparent retry, and no global context.
 
+## Eager ManyToOne with compile-time joins
+
+`@ManyToOne(mappedBy="customerId")` connects a scalar foreign key on the
+current entity to the `@Id` of another `@Table` type. The annotation
+processor validates both Java types at compilation and generates the object
+hydrator. There are no runtime proxies, reflection or additional SQL
+requests per row.
+
+```java
+@Table("customers")
+public record Customer(@Id UUID id, String name) {}
+
+@Table("invoices")
+public record Invoice(
+    @Id UUID id,
+    UUID customerId,
+    String reference,
+    @ManyToOne(mappedBy="customerId") Customer customer
+) {}
+
+Invoice invoice = bjorm.find(Invoice.class, invoiceId); // one SELECT with LEFT JOIN
+Customer customer = invoice.customer();
+List<Invoice> page = bjorm.select(Invoice.class)
+    .orderBy(Invoice_.reference.asc()).limit(25).fetch();
+```
+
+`customer` is a read-only eager projection of the referenced row: only
+`customerId` is persisted when inserting/updating an invoice.
+`@ManyToOne(type=JoinType.INNER)` filters rows without a matching parent;
+`LEFT` (default) preserves them with a null reference. Records are
+reconstructed at compile time; POJOs require a public getter and setter.
+
+The generated JOIN runs over a CTE containing the root query so root
+`WHERE`, `LIMIT` and `OFFSET` apply before eager hydration.
+This implementation deliberately supports **one direct to-one level**,
+not nested to-one graphs or types that also declare `@Children`.
+Explicit user-written joins cannot be mixed with implicit ManyToOne
+hydration. Use a dedicated projection or a separate mapped query for
+those deeper/combined shapes.
+
 ## Spring MVC Pageable, Page and Slice
 
 The optional `bjorm-spring-boot` module depends on `spring-data-commons` **only for paging types**;

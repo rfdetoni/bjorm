@@ -364,7 +364,7 @@ public final class Bjorm implements Operations {
         return mapper(entity.getClass()).id(entity);
     }
     public <T> List<T> list(Select<T> query) {return withConnection(c->list(c,query));}
-    public <T> Optional<T> first(Select<T> query) {query.limit(1);return withConnection(c->{if(!mapper(query.type()).children().isEmpty()){List<T> values=list(c,query);return values.stream().findFirst();}return first(c,query,null,mapper(query.type()));});}
+    public <T> Optional<T> first(Select<T> query) {query.limit(1);return withConnection(c->{if(!mapper(query.type()).children().isEmpty() || !mapper(query.type()).parents().isEmpty()){List<T> values=list(c,query);return values.stream().findFirst();}return first(c,query,null,mapper(query.type()));});}
     public <T> List<Map<String,Object>> fieldRows(Select<T> query,String[] properties) {
         return withConnection(c->{EntityMapper<T> m=mapper(query.type());return project(c,query,properties,rowProperties(m,properties));});
     }
@@ -666,7 +666,7 @@ public final class Bjorm implements Operations {
     }
     private <T> T find(Connection c,Class<T> type,Object id) throws SQLException {
         EntityMapper<T> m=mapper(type);
-        if (!m.children().isEmpty()) {
+        if (!m.children().isEmpty() || !m.parents().isEmpty()) {
             List<T> values = list(c,new Select<>(this,type).where(new SqlPredicate(
                 m.columnFor(m.idProperty())+" = ?",Collections.singletonList(id))).limit(1));
             return values.isEmpty() ? null : values.getFirst();
@@ -678,9 +678,10 @@ public final class Bjorm implements Operations {
     }
     private <T> List<T> list(Connection c,Select<T> query) throws SQLException {
         EntityMapper<T> m=mapper(query.type());
-        if (!m.children().isEmpty()) {
+        if (!m.children().isEmpty() || !m.parents().isEmpty()) {
             ArrayList<T> rows=new ArrayList<>();
-            readGraph(c,query,rows::add,true);
+            if(!m.children().isEmpty())readGraph(c,query,rows::add,true);
+            else readParents(c,query,rows::add,true);
             return rows;
         }
         try(PreparedStatement ps=prepareRead(c,query.sql(m,type->mapper(type),dialect))) {
@@ -693,6 +694,83 @@ public final class Bjorm implements Operations {
                     checkRows(result.size()+1);result.add(m.read(rs));
                 }
                 return result;
+            }
+        }
+    }
+    /**
+     * Eager to-one relations use a single SQL statement and positional
+     * compile-time mappers. The CTE applies paging to root records BEFORE
+     * joining the referenced rows, so no N+1 SELECTs are generated.
+     * Only a direct one-level @ManyToOne graph is hydrated; referenced
+     * entities are read as ordinary mapped rows, without following their
+     * own relationships.
+     */
+    @SuppressWarnings("unchecked")
+    private <T> void readParents(Connection c,Select<T> query,
+            Consumer<T> emit,boolean bounded) throws SQLException {
+        Objects.requireNonNull(emit,"emit");
+        EntityMapper<T> root=mapper(query.type());
+        if(query.hasJoins())
+            throw new IllegalArgumentException(
+                "Automatic @ManyToOne loading cannot be combined with explicit query JOINs");
+        List<ParentRelation<T>> parents=root.parents();
+        if(parents.isEmpty())throw new IllegalArgumentException("No eager to-one relations registered");
+        String rootSql=query.sql(root,type->mapper(type),dialect);
+        StringBuilder sql=new StringBuilder("WITH roots AS (").append(rootSql)
+            .append(") SELECT ").append(root.qualifiedColumns("r"));
+        ArrayList<EntityMapper<Object>> targets=new ArrayList<>(parents.size());
+        ArrayList<Integer> offsets=new ArrayList<>(parents.size());
+        int offset=root.columnCount()+1;
+        for(int index=0;index<parents.size();index++) {
+            EntityMapper<Object> target=(EntityMapper<Object>)mapper(parents.get(index).targetType());
+            if(!target.children().isEmpty() || !target.parents().isEmpty())
+                throw new UnsupportedOperationException(
+                    "Nested @ManyToOne/@Children graphs require a separate explicit query");
+            targets.add(target);
+            offsets.add(offset);
+            sql.append(", ").append(target.qualifiedColumns("p"+index));
+            offset+=target.columnCount();
+        }
+        sql.append(" FROM roots r");
+        for(int index=0;index<parents.size();index++) {
+            ParentRelation<T> parent=parents.get(index);
+            EntityMapper<Object> target=targets.get(index);
+            sql.append(' ').append(dialect.join(parent.joinType())).append(' ')
+               .append(target.table()).append(" p").append(index)
+               .append(" ON r.").append(root.columnFor(parent.mappedBy()))
+               .append(" = p").append(index).append('.')
+               .append(target.columnFor(target.idProperty()));
+        }
+        boolean firstOrder=true;
+        for(SqlOrder order:query.sorting()) {
+            String field=order.column();
+            int separator=field.lastIndexOf('.');
+            if(separator>=0 && !field.substring(0,separator).equals(query.rootAlias()))
+                throw new IllegalArgumentException("@ManyToOne ORDER BY supports only root columns: "+field);
+            String column=separator<0?field:field.substring(separator+1);
+            root.columnIndex(column); // generated validation, never interpolate arbitrary values
+            sql.append(firstOrder?" ORDER BY ":", ")
+               .append("r.").append(column).append(order.descending()?" DESC":" ASC");
+            firstOrder=false;
+        }
+        try(PreparedStatement ps=prepareRead(c,sql.toString())) {
+            if(bounded)boundRows(ps);
+            query.bind(ps,dialect);
+            try(ResultSet rs=executeQueryObserved(ps)) {
+                int count=0;
+                while(rs.next()) {
+                    if(bounded)checkRows(++count);
+                    if(rs.getObject(root.idColumnIndex())==null)continue;
+                    T value=root.readAt(rs,1);
+                    for(int index=0;index<parents.size();index++) {
+                        EntityMapper<Object> target=targets.get(index);
+                        int start=offsets.get(index);
+                        Object joinedId=rs.getObject(start+target.idColumnIndex()-1);
+                        Object parent=joinedId==null?null:target.readAt(rs,start);
+                        value=root.withParent(value,parents.get(index).property(),parent);
+                    }
+                    emit.accept(value);
+                }
             }
         }
     }
@@ -922,6 +1000,7 @@ public final class Bjorm implements Operations {
         Objects.requireNonNull(consumer);
         EntityMapper<T> m=mapper(query.type());
         if (!m.children().isEmpty()) {readGraph(c,query,consumer,false);return;}
+        if (!m.parents().isEmpty()) {readParents(c,query,consumer,false);return;}
         try(PreparedStatement ps=prepareRead(c,query.sql(m,type->mapper(type),dialect))) {
             query.bind(ps,dialect);
             try(ResultSet rs=executeQueryObserved(ps)){while(rs.next())consumer.accept(m.read(rs));}
@@ -937,7 +1016,7 @@ public final class Bjorm implements Operations {
         Objects.requireNonNull(query,"query");
         Objects.requireNonNull(work,"work");
         EntityMapper<T> mapper=mapper(query.type());
-        if(!mapper.children().isEmpty())
+        if(!mapper.children().isEmpty() || !mapper.parents().isEmpty())
             throw new UnsupportedOperationException("Stream cursor supports flat entities only; use forEach for graphs");
         String sql=query.sql(mapper,type->mapper(type),dialect);
         Thread owner=Thread.currentThread();
@@ -1084,7 +1163,7 @@ public final class Bjorm implements Operations {
             return useWrite(c->Bjorm.this.lockOne(c,type,where,mode));
         }
         public <T> List<T> list(Select<T> query) {return use(c->Bjorm.this.list(c,query));}
-        public <T> Optional<T> first(Select<T> query) {query.limit(1);return use(c->{if(!mapper(query.type()).children().isEmpty()){List<T> values=Bjorm.this.list(c,query);return values.stream().findFirst();}return Bjorm.this.first(c,query,null,mapper(query.type()));});}
+        public <T> Optional<T> first(Select<T> query) {query.limit(1);return use(c->{if(!mapper(query.type()).children().isEmpty() || !mapper(query.type()).parents().isEmpty()){List<T> values=Bjorm.this.list(c,query);return values.stream().findFirst();}return Bjorm.this.first(c,query,null,mapper(query.type()));});}
         public <T> List<Map<String,Object>> fieldRows(Select<T> query,String[] properties) {
             return use(c->{EntityMapper<T> m=mapper(query.type());return Bjorm.this.project(c,query,properties,rowProperties(m,properties));});
         }

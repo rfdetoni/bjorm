@@ -19,6 +19,7 @@ java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.IdStrategyS
 java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.UuidV7ConcurrencySmokeTest
 java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.StaticSchemaSmokeTest
 java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.GraphQuerySmokeTest
+java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.ManyToOneSmokeTest
 java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.GraphSharedRelationSmokeTest
 java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.AnnotatedJoinSmokeTest
 java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.DialectSmokeTest
@@ -91,6 +92,25 @@ if javac -cp "$OUT/core" -processorpath "$OUT/core:$OUT/processor" -processor co
   echo 'FAIL: processor accepted unsafe static schema identifier' >&2; exit 1
 fi
 grep -q 'Invalid static schema identifier' "$OUT/schema-negative.log"
+# Invalid @ManyToOne foreign key must be rejected by the annotation processor.
+cat > "$OUT/InvalidToOne.java" <<'JAVA'
+import com.github.rfdetoni.bjorm.*;
+import com.github.rfdetoni.bjorm.examples.ItUser;
+import java.util.UUID;
+@Table("invalid_to_one")
+public record InvalidToOne(@Id UUID id,Long customerId,String label,
+    @ManyToOne(mappedBy="customerId") ItUser customer) {}
+JAVA
+if javac -cp "$OUT/core:$OUT/example" -processorpath "$OUT/core:$OUT/processor" \
+  -processor com.github.rfdetoni.bjorm.processor.EntityProcessor \
+  -d "$OUT/example" "$OUT/InvalidToOne.java" 2>"$OUT/toone-negative.log"; then
+  echo 'FAIL: processor accepted an incompatible @ManyToOne foreign key' >&2; exit 1
+fi
+if ! grep -q '@ManyToOne foreign key must match target @Id type' "$OUT/toone-negative.log"; then
+  echo 'Unexpected @ManyToOne compile diagnostic:' >&2
+  cat "$OUT/toone-negative.log" >&2
+  exit 1
+fi
 if grep -R -l 'import org\.springframework' bjorm-core/src/main/java bjorm-processor/src/main/java; then
   echo 'FAIL: framework dependency leaked into BJORM core/processor' >&2; exit 1
 fi
