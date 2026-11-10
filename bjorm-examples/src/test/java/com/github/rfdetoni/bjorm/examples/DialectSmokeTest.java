@@ -67,7 +67,10 @@ public final class DialectSmokeTest {
         check(mysql.upsert(new ItProduct(id,"x",java.math.BigDecimal.ONE,Status.ACTIVE,0))==1,
             "MySQL @Version UPSERT can INSERT atomically when PK is absent");
         check(p.sql.startsWith("INSERT INTO bjorm_it_products"),
-            "MySQL @Version UPSERT tries guarded insert before CAS update");
+            "MySQL @Version UPSERT generates single INSERT");
+        check(p.sql.contains("version = bjorm_new.version") &&
+              p.sql.contains("version = bjorm_it_products.version + 1"),
+            "single MySQL DML compares supplied version before incrementing");
         int connectionsBefore = p.binds.size();
         try {
             new ProductQueries_Bjorm(mysql).literalSafety(id);
