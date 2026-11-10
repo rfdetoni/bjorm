@@ -170,6 +170,9 @@ public final class MySqlIntegrationTest {
             ItUser original=db.insertReturning(new ItUser(null,"MySQL user",33));
             check(original.id()!=null && original.id().version()==7,"v7 generated");
             check(db.find(ItUser.class,original.id()).age()==33,"MySQL UUID read from CHAR(36)");
+            UUID streamedId=db.withStream(db.select(ItUser.class).where(ItUser_.id.eq(original.id())),
+                rows->rows.findFirst().orElseThrow().id());
+            check(streamedId.equals(original.id()),"MySQL resource-scoped mapped Stream roundtrip");
             check(db.updateBy(ItUser.class,Map.of("age",35),ItUser_.id.eq(original.id()))==1,
                 "MySQL native updateBy");
             check(db.find(ItUser.class,original.id()).age()==35,"MySQL bulk property roundtrip");
