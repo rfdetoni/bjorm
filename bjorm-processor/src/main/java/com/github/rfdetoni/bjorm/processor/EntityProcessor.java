@@ -356,7 +356,7 @@ public final class EntityProcessor extends AbstractProcessor {
     private static String defaultValue(String type) {
         return switch(type) {
             case "boolean" -> "false";
-            case "char" -> "'\\\\0'";
+            case "char" -> "(char)0";
             case "long" -> "0L";
             case "float" -> "0f";
             case "double" -> "0d";
