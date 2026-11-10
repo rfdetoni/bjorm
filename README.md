@@ -234,6 +234,17 @@ The canonical development branch is **`main`**. All code changes should be pushe
 
 ### Release procedure
 
+A stable release can be requested from an audited `main` commit to
+`.github/release-request.txt` containing only the version (for example,
+`0.3.18`). The `release-maven` workflow checks the current reactor snapshot
+version, validates the release, creates the tag and publishes artifacts, then
+advances `main` to the next development snapshot. The normal
+`workflow_dispatch` route remains available. Release requests do not trigger
+the snapshot build; no release is treated as published until the stable Maven
+deploy step finishes successfully.
+
+
+
 1. Make sure the latest changes have been pushed to `main` and CI passes.
 2. In **GitHub → Actions → release-maven → Run workflow**, select `main` and enter the stable version, e.g. `0.3.17`.
 3. Check that the release version commit and tag exist, the library packages were published, and `main` has the next snapshot version.
