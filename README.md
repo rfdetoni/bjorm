@@ -170,6 +170,29 @@ removes `public` as a fallback. MySQL uses `setCatalog` and restores the
 original catalog on exit, including failure paths. Unsupported dialects fail
 closed. The same rules apply to transaction, batch and scalar APIs.
 
+**Fail-closed native SQL (behavior change):** `query`, `one`, `execute` and
+`scan` are denied by default for a `tenantRequired(...).forTenant(...)`
+instance, including inside `tx`. This also applies to generated `@Query`
+repositories, which execute raw SQL. PostgreSQL `search_path` and MySQL
+catalog changes alone cannot prevent qualified SQL from accessing another
+tenant when a shared database role has cross-schema privileges.
+
+For a trusted server component that audits its SQL and uses restricted
+database credentials, opt in explicitly on the authorized tenant view:
+
+```java
+Bjorm trustedTenantSql = root.forTenant(authorizedSchema)
+    .permitReviewedTenantNativeSql();
+List<MyProjection> rows = trustedTenantSql.query(
+    "SELECT id FROM private_orders WHERE status = ?",
+    trustedTenantSql.params("OPEN"), myGeneratedMapper);
+```
+
+Do not expose this privileged view to arbitrary SQL assembled from HTTP
+requests, LLM output or user input. The explicit opt-in is **not an SQL parser
+or a database privilege boundary**: enforce separate DB roles, schema grants,
+row-level security (where applicable), and tenant checks in IAM.
+
 **Important:** application authorization remains mandatory. Schema selection is
 not a substitute for database permissions, RLS or security review of native SQL.
 Create least-privilege DB roles, validate tenant-to-schema ownership in the IAM,

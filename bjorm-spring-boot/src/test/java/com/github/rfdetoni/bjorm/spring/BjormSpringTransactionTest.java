@@ -94,7 +94,7 @@ class BjormSpringTransactionTest {
         TransactionTemplate template=new TransactionTemplate(manager);
         Bjorm root=Bjorm.tenantRequired(new TransactionAwareDataSourceProxy(raw),
             BjormOptions.defaults(),SqlDialects.POSTGRESQL);
-        Bjorm tenant=root.forTenant("company_a");
+        Bjorm tenant=root.forTenant("company_a").permitReviewedTenantNativeSql();
 
         template.execute(status -> {
             assertEquals(1,tenant.execute("UPDATE items SET label=?",ps->ps.setString(1,"one")));
