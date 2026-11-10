@@ -16,6 +16,7 @@ java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.MappingFlag
 java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.OrdinalSmokeTest
 java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.AuditSmokeTest
 java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.IdStrategySmokeTest
+java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.UuidV7ConcurrencySmokeTest
 java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.StaticSchemaSmokeTest
 java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.GraphQuerySmokeTest
 java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.GraphSharedRelationSmokeTest
