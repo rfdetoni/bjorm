@@ -50,8 +50,23 @@ public final class EntityProcessor extends AbstractProcessor {
     }
     private record Col(String property,String column,String type,String read,String write,boolean id,boolean version,boolean generated,boolean json,boolean uuidV7,String jsonCodec,TypeMirror typeMirror,boolean insertable,boolean updatable,boolean enumOrdinal,boolean createdAt,boolean updatedAt) {}
     private static boolean isNumericId(String type) {return Set.of("int","long","java.lang.Integer","java.lang.Long").contains(type);}
-    private static boolean autoUuid(Id id,String type) {return id!=null && !id.assigned() && (id.uuidV7() || ( !id.generated() && Set.of("java.util.UUID","java.lang.String").contains(type)));}
-    private static boolean databaseId(Id id,String type) {return id!=null && !id.assigned() && (id.generated() || isNumericId(type));}
+    private static boolean autoUuid(Id id,String type) {
+        if(id==null)return false;
+        return switch(id.strategy()) {
+            case ASSIGNED, IDENTITY -> false;
+            case UUID_V7 -> true;
+            case INFERRED -> !id.assigned() && (id.uuidV7() ||
+                (!id.generated() && Set.of("java.util.UUID","java.lang.String").contains(type)));
+        };
+    }
+    private static boolean databaseId(Id id,String type) {
+        if(id==null)return false;
+        return switch(id.strategy()) {
+            case ASSIGNED, UUID_V7 -> false;
+            case IDENTITY -> true;
+            case INFERRED -> !id.assigned() && (id.generated() || isNumericId(type));
+        };
+    }
     private record Relation(String property,String mappedBy,String childType,String getter,String childGetter,String childSetter,boolean childRecord,JoinType joinType,TypeMirror foreignKeyType) {}
     private void entity(TypeElement entity) throws IOException {
         if(!generated.add(entity.getQualifiedName()+"#entity"))return;
@@ -95,8 +110,19 @@ public final class EntityProcessor extends AbstractProcessor {
         if(cols.isEmpty()){error(entity,"@Table requires mapped properties");return;}
         for(Element el:record ? entity.getRecordComponents() : pojoFields(entity)) {
             Id ann=el.getAnnotation(Id.class);
+            if(ann!=null && ann.strategy()!=IdStrategy.INFERRED &&
+               (ann.assigned()||ann.generated()||ann.uuidV7())) {
+                error(el,"@Id strategy cannot be combined with legacy assigned/generated/uuidV7 flags");return;
+            }
             if(ann!=null && ann.assigned() && (ann.generated()||ann.uuidV7())) {
                 error(el,"@Id assigned=true cannot be combined with generated=true or uuidV7=true");return;
+            }
+            if(ann!=null && ann.strategy()==IdStrategy.IDENTITY && !isNumericId(el.asType().toString())) {
+                error(el,"@Id(strategy=IDENTITY) requires int/long/Integer/Long");return;
+            }
+            if(ann!=null && ann.strategy()==IdStrategy.UUID_V7 &&
+               !Set.of("java.util.UUID","java.lang.String").contains(el.asType().toString())) {
+                error(el,"@Id(strategy=UUID_V7) requires UUID or String");return;
             }
         }
         int id=-1,ver=-1,created=-1,updated=-1;
