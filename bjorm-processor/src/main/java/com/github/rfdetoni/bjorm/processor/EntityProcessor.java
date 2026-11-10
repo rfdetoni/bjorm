@@ -246,8 +246,13 @@ public final class EntityProcessor extends AbstractProcessor {
         if(keyColumns.size()>1) {
             for(int keyColumn:keyColumns) {
                 Col col=cols.get(keyColumn);
-                if(col.generated() || col.uuidV7()){
-                    error(entity,"Composite @Id components require strategy=ASSIGNED");return;
+                Element member=(record ? entity.getRecordComponents() : pojoFields(entity))
+                    .stream().filter(item->item.getSimpleName().contentEquals(col.property()))
+                    .findFirst().orElseThrow();
+                Id annotation=member.getAnnotation(Id.class);
+                if(annotation==null || annotation.strategy()!=IdStrategy.ASSIGNED ||
+                   col.generated() || col.uuidV7()){
+                    error(entity,"Composite @Id components require explicit strategy=ASSIGNED");return;
                 }
             }
             if(!relations.isEmpty() || !toOnes.isEmpty()) {
