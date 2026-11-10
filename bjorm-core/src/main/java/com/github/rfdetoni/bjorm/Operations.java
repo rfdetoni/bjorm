@@ -17,6 +17,15 @@ public interface Operations {
     <T> void insert(T entity);
     /** Persist and return the entity with its generated ID; required for immutable records. */
     <T> T insertReturning(T entity);
+    /**
+     * Insert a detached generated copy, leaving the caller-owned mutable POJO unchanged
+     * on success, failed JDBC writes and transaction rollback. Child graphs are unsupported.
+     * The returned entity is a proposed persisted shape, not a commit confirmation when
+     * called inside an externally managed transaction.
+     */
+    <T> T insertDetached(T entity);
+    /** UPSERT with the same non-mutating caller contract as insertDetached. */
+    <T> T upsertDetached(T entity);
     /** Return generated record IDs after a batch; numeric database identity uses per-row inserts. */
     <T> List<T> batchInsertReturning(List<T> entities);
     /** Return an ID-bearing record after a PostgreSQL upsert. */
