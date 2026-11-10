@@ -211,7 +211,7 @@ transaction commits on success and rolls back on exception.
 
 ```java
 long count = db.withStream(
-    db.select(Product.class).where(Product_.active.eq(true)),
+    db.select(Product.class).where(Product_.status.eq(Status.ACTIVE)),
     stream -> stream.filter(p -> p.price().signum() > 0).count()
 );
 ```
