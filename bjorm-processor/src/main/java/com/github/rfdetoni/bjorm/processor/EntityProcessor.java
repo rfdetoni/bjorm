@@ -135,7 +135,7 @@ public final class EntityProcessor extends AbstractProcessor {
         }
         if(id<0){error(entity,"Missing @Id");return;}
         if(cols.size()==1){error(entity,"Entity needs a non-id property");return;}
-        if(cols.stream().noneMatch(c->!c.id() && c.updatable())){
+        if(cols.stream().noneMatch(c->!c.id() && c.updatable() && !c.createdAt())){
             error(entity,"Entity requires at least one updatable non-ID column");return;
         }
         for(Relation r:relations) {
