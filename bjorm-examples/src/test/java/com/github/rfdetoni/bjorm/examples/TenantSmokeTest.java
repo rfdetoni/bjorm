@@ -71,7 +71,7 @@ public final class TenantSmokeTest {
     }
     public static void main(String[] args) {
         Spy pg=new Spy();
-        Bjorm root=Bjorm.tenantRequired(pg.source(),BjormOptions.defaults(),SqlDialects.POSTGRESQL);
+        Bjorm root=Bjorm.tenantRequired(pg.source(),BjormOptions.defaults(),SqlDialects.POSTGRESQL,ItUser_BjormMapper.INSTANCE);
         try {root.execute("UPDATE users SET name='x'",null);throw new AssertionError("unscoped root executed");}
         catch(IllegalStateException expected) {check(pg.connections==0,"must refuse before borrowing connection");}
         for(String unsafe:List.of("public","pg_catalog","pg_temp_1","information_schema","test; DROP TABLE users","UPPER.CASE")) {
@@ -103,7 +103,7 @@ public final class TenantSmokeTest {
         check(pg.events.stream().filter(x->x.startsWith("SET LOCAL search_path")).count()==3,
             "every borrowed PG transaction is explicitly tenant-scoped");
         Spy mysql=new Spy();
-        Bjorm mysqlRoot=Bjorm.tenantRequired(mysql.source(),BjormOptions.defaults(),SqlDialects.MYSQL);
+        Bjorm mysqlRoot=Bjorm.tenantRequired(mysql.source(),BjormOptions.defaults(),SqlDialects.MYSQL,ItUser_BjormMapper.INSTANCE);
         Bjorm tenant=mysqlRoot.forTenant("company_a");
         check(tenant.execute("UPDATE users SET name='y'",ps->{})==1,"MySQL tenant write");
         check(mysql.events.contains("write:company_a:UPDATE users SET name='y'"),"MySQL catalog scoped on write");
