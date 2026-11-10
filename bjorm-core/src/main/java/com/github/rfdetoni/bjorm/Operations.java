@@ -55,6 +55,8 @@ public interface Operations {
     <T> void batchDelete(List<T> entities);
     /** Atomic batch UPSERT; returns generated IDs and reloaded versioned entities. */
     <T> List<T> batchUpsertReturning(List<T> entities);
+    /** Atomic per-row updates with reloaded versions; unlike JDBC executeBatch, returns database state. */
+    <T> List<T> batchUpdateReturning(List<T> entities);
     /** Bulk operation using only compile-time mapped property identifiers. Requires a predicate. */
     <T> int updateBy(Class<T> type, Map<String,?> changes, SqlPredicate predicate);
     /** Bulk delete; deliberately disallowed for mapped child graphs or versioned entities. */
