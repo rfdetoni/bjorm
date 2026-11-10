@@ -56,6 +56,18 @@ public final class MySqlIntegrationTest {
             check(db.find(ItUser.class,original.id()).age()==34 && db.find(ItUser.class,conflictingId)==null,
                 "MySQL secondary-key collision cannot mutate unrelated entity");
             check(db.select(ItUser.class).where(ItUser_.id.eq(original.id())).fetch().size()==1,"MySQL UUID predicate bind");
+            check(db.count(ItUser.class, ItUser_.id.eq(original.id()))==1L,
+                "MySQL typed count uses dialect UUID binding");
+            check(db.exists(ItUser.class, ItUser_.id.eq(original.id())),
+                "MySQL EXISTS uses dialect UUID binding");
+            check(!db.exists(ItUser.class, ItUser_.name.eq("nobody")),
+                "MySQL EXISTS returns false for missing row");
+            db.tx(tx -> {
+                check(tx.lockOne(ItUser.class, ItUser_.id.eq(original.id()), LockMode.UPDATE),
+                    "MySQL FOR UPDATE works inside transaction");
+                check(tx.lockOne(ItUser.class, ItUser_.id.eq(original.id()), LockMode.SHARE),
+                    "MySQL FOR SHARE works inside transaction");
+            });
             ItDocument json=db.insertReturning(new ItDocument(null,"{\"count\":2}"));
             check(db.find(ItDocument.class,json.id()).payload().contains("count"),"MySQL native JSON");
             AutoLongRecord serial=db.insertReturning(new AutoLongRecord(null,"serial"));
