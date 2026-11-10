@@ -268,10 +268,10 @@ public final class MySqlIntegrationTest {
             combined.getLines().add(combinedLine);
             db.insert(combined);
             java.util.concurrent.atomic.AtomicInteger mixedSelects=new java.util.concurrent.atomic.AtomicInteger();
-            Bjorm observed=db.observeSql((operation,nanos,ok)->{
+            Bjorm observedMixedGraph=db.observeSql((operation,nanos,ok)->{
                 if(operation==SqlOperation.QUERY)mixedSelects.incrementAndGet();
             });
-            ItOrderWithCustomer combinedLoaded=observed.find(ItOrderWithCustomer.class,combined.getId());
+            ItOrderWithCustomer combinedLoaded=observedMixedGraph.find(ItOrderWithCustomer.class,combined.getId());
             check(combinedLoaded.getCustomer()!=null &&
                 combinedLoaded.getCustomer().id().equals(invoiceCustomer.id()) &&
                 combinedLoaded.getLines().size()==1,
