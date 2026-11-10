@@ -72,6 +72,9 @@ public interface EntityMapper<T> extends RowMapper<T> {
     Object id(T entity);
     /** Java name of the generated primary-key property. */
     default String idProperty() { return "id"; }
+    /** Multiple assigned @Id properties; generated mapper binds every component. */
+    default boolean compositeId() {return false;}
+    default boolean isIdProperty(String property) {return idProperty().equals(property);}
     default boolean generatedId() { return false; }
     default void acceptGeneratedId(ResultSet keys,T entity) throws SQLException {}
     default boolean optimisticLocking() { return false; }

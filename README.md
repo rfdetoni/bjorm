@@ -588,6 +588,75 @@ db.delete(order);     // one transaction: delete persisted children, then parent
 - Cascade deletion resolves persisted children by foreign key even if the in-memory collection is empty, and deletes descendants before their parents. Use DB foreign keys for referential integrity. This is **not** JPA orphan removal or lazy loading.
 - Every graph is committed or rolled back atomically. Cyclic/repeated in-memory entities are rejected; this API has no identity map, no transparent retry, and no global context.
 
+## Composite primary keys (assigned, compile-time)
+
+For tables with two or more primary-key columns, use multiple
+`@Id(strategy=IdStrategy.ASSIGNED)` properties:
+
+```java
+@Table("catalog_items")
+public record CatalogItem(
+    @Id(strategy=IdStrategy.ASSIGNED) UUID companyId,
+    @Id(strategy=IdStrategy.ASSIGNED) String sku,
+    String label,
+    @Version int version
+) {}
+
+var key = CompositeId.of(companyId, "ITEM-1");
+CatalogItem item = db.find(CatalogItem.class, key);
+CatalogItem updated = db.updateReturning(
+    new CatalogItem(companyId, "ITEM-1", "Updated", item.version()));
+```
+
+The generated mapper binds every ID part in declaration order for
+`SELECT`, `UPDATE` and `DELETE`, and includes the optimistic version in
+the update/delete predicate. `CompositeId` has immutable value equality
+and does not rely on runtime entity reflection. All parts must be supplied
+and non-null. Existing single-ID mapping and its UUIDv7/identity inference
+remain unchanged. The generated DSL exposes each individual property for
+predicate-based queries. Bulk mutation cannot modify any ID component.
+
+**Current boundaries:** composite-key `upsert`, automatic composite-ID
+generation, collection graphs, `@ManyToOne` using a composite FK,
+automatic tuple keyset pagination and auto-generated root ID ordering
+remain unsupported and fail explicitly. Use typed individual sort
+properties and explicit INSERT/UPDATE for these cases.
+
+## Composite primary keys (opt-in)
+
+For entities whose primary key has more than one column, annotate **every**
+component with `@Id(strategy=IdStrategy.ASSIGNED)`. The generated mapper
+constructs an immutable, ordered `CompositeId` from the fields and uses
+**every** key part in `SELECT`, `UPDATE` and `DELETE` predicates.
+Ordinary single-column ID inference and UUIDv7 generation are unchanged.
+
+```java
+@Table("stock_items")
+public record StockItem(
+    @Id(strategy=IdStrategy.ASSIGNED) UUID tenantId,
+    @Id(strategy=IdStrategy.ASSIGNED) String sku,
+    String label,
+    @Version int version
+) {}
+
+CompositeId key = CompositeId.of(tenantId, "SKU-42");
+StockItem item = db.find(StockItem.class, key);
+StockItem saved = db.updateReturning(new StockItem(tenantId,"SKU-42","New",item.version()));
+```
+
+Components are bound to prepared statements in declaration order. Both
+PostgreSQL and MySQL use their normal UUID handling; `@Version` checks are
+also applied to all composite-key updates and deletes. `updateBy` rejects
+changes to **any** primary-key component.
+
+To keep the contract explicit, composite keys currently do not support
+generated identity/UUID keys, graph relations, UPSERT, or automatic
+single-column keyset pagination. Use an explicit mapped tuple predicate
+and ordering for multi-column cursor pagination. `find` requires a
+`CompositeId` with the exact number and order of components; missing or
+null key parts are rejected. This opt-in is not a migration of existing
+one-column entities.
+
 ## Embedded immutable value objects
 
 `@Embedded` flattens a **public immutable record** into the owning

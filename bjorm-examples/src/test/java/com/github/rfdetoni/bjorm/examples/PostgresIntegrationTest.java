@@ -32,6 +32,8 @@ public final class PostgresIntegrationTest {
         try(Connection c=ds.getConnection();Statement st=c.createStatement()){
             st.execute("CREATE TABLE bjorm_it_users (id uuid PRIMARY KEY, name text NOT NULL, age integer NOT NULL)");
             st.execute("CREATE TABLE bjorm_it_invoices (id uuid PRIMARY KEY, customerId uuid REFERENCES bjorm_it_users(id), reference text)");
+            st.execute("CREATE TABLE bjorm_it_composite (tenantId uuid NOT NULL,sku text NOT NULL,label text,version integer NOT NULL DEFAULT 0,PRIMARY KEY(tenantId,sku))");
+            st.execute("CREATE TABLE bjorm_it_composite_pojo (tenantId uuid NOT NULL,sku text NOT NULL,label text,PRIMARY KEY(tenantId,sku))");
             st.execute("CREATE TABLE bjorm_it_embedded_records (id uuid PRIMARY KEY, label text, shipping_street text, shipping_postal text)");
             st.execute("CREATE TABLE bjorm_it_embedded_pojos (id uuid PRIMARY KEY, label text, billing_street text, billing_postal text)");
             st.execute("CREATE SCHEMA bjorm_test");
@@ -70,7 +72,8 @@ public final class PostgresIntegrationTest {
             ExplicitUuidRecord_BjormMapper.INSTANCE,StaticSchemaRecord_BjormMapper.INSTANCE,
             ItInvoice_BjormMapper.INSTANCE,ItInvoiceInner_BjormMapper.INSTANCE,
             ItInvoicePojo_BjormMapper.INSTANCE,
-            ItEmbeddedRecord_BjormMapper.INSTANCE,ItEmbeddedPojo_BjormMapper.INSTANCE);
+            ItEmbeddedRecord_BjormMapper.INSTANCE,ItEmbeddedPojo_BjormMapper.INSTANCE,
+            ItCompositeRecord_BjormMapper.INSTANCE,ItCompositePojo_BjormMapper.INSTANCE);
         UUID id=UUID.randomUUID();ItUser alice=new ItUser(id,"BJORM",34);
         try {
             StaticSchemaRecord fixed=db.insertReturning(new StaticSchemaRecord(null,"initial-static"));
@@ -124,6 +127,29 @@ public final class PostgresIntegrationTest {
                 db.insertReturning(new ItEmbeddedRecord(null,"missing",null));
                 throw new AssertionError("null @Embedded value accepted");
             } catch(IllegalArgumentException expected) {}
+            UUID compositeTenant=UUID.randomUUID();
+            CompositeId compoundId=CompositeId.of(compositeTenant,"ABC");
+            ItCompositeRecord createdComposite=db.insertReturning(new ItCompositeRecord(compositeTenant,"ABC","first",0));
+            check(db.find(ItCompositeRecord.class,compoundId).equals(createdComposite),
+                "PostgreSQL tuple-key find binds every @Id");
+            ItCompositeRecord revisedComposite=db.updateReturning(new ItCompositeRecord(compositeTenant,"ABC","second",0));
+            check(revisedComposite.version()==1 && revisedComposite.label().equals("second"),
+                "PostgreSQL composite key optimistic update and reload");
+            try {db.update(new ItCompositeRecord(compositeTenant,"ABC","stale",0));
+                throw new AssertionError("stale composite key update accepted");}
+            catch(OptimisticLockException expected) {}
+            try {db.updateBy(ItCompositeRecord.class,Map.of("sku","changed"),
+                ItCompositeRecord_.sku.eq("ABC"));
+                throw new AssertionError("composite key part changed via updateBy");}
+            catch(IllegalArgumentException expected) {}
+            check(db.delete(revisedComposite)==1 &&
+                db.find(ItCompositeRecord.class,compoundId)==null,
+                "PostgreSQL tuple key conditional DELETE");
+            ItCompositePojo tuplePojo=new ItCompositePojo();
+            tuplePojo.setTenantId(compositeTenant);tuplePojo.setSku("POJO");tuplePojo.setLabel("tuple");
+            db.insert(tuplePojo);
+            check(db.find(ItCompositePojo.class,CompositeId.of(compositeTenant,"POJO")).getLabel().equals("tuple"),
+                "PostgreSQL composite key POJO roundtrip");
             ExplicitAssignedRecord assigned=db.insertReturning(new ExplicitAssignedRecord(709L,"assigned"));
             check(assigned.id()==709L && db.find(ExplicitAssignedRecord.class,709L).equals(assigned),
                 "PostgreSQL explicit assigned numeric ID");
@@ -422,6 +448,8 @@ public final class PostgresIntegrationTest {
                 st.execute("DROP SCHEMA IF EXISTS bjorm_test CASCADE");
                 st.execute("DROP SCHEMA IF EXISTS bjorm_tenant_a CASCADE");
                 st.execute("DROP SCHEMA IF EXISTS bjorm_tenant_b CASCADE");
+                st.execute("DROP TABLE IF EXISTS bjorm_it_composite");
+                st.execute("DROP TABLE IF EXISTS bjorm_it_composite_pojo");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_invoices");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_embedded_records");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_embedded_pojos");
