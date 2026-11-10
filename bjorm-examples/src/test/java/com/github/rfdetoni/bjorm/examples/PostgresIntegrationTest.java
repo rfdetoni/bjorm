@@ -102,6 +102,13 @@ public final class PostgresIntegrationTest {
             var fields=db.findFields(ItUser.class,ItUser_.name.eq("BJORM"),"name","age");
             check(fields.size()==1 && fields.getFirst().get("age").equals(34),"named Java properties return only selected columns");
             check(db.findColumnOne(ItUser.class,"name",String.class,ItUser_.age.eq(34)).orElseThrow().equals("BJORM"),"typed scalar projection");
+            check(db.count(ItUser.class, ItUser_.name.eq("BJORM")) == 1L, "real PostgreSQL aggregate COUNT");
+            check(db.exists(ItUser.class, ItUser_.name.eq("BJORM")), "real PostgreSQL EXISTS with predicate");
+            check(!db.exists(ItUser.class, ItUser_.name.eq("MISSING")), "real PostgreSQL EXISTS false");
+            db.tx(tx -> {
+                check(tx.count(ItUser.class, ItUser_.name.eq("BJORM")) == 1L, "transaction COUNT");
+                check(tx.exists(ItUser.class, ItUser_.name.eq("BJORM")), "transaction EXISTS");
+            });
 
             try{db.tx(tx->{tx.insert(new ItUser(UUID.randomUUID(),"SHOULD_ROLLBACK",11));throw new IllegalStateException("rollback");});}catch(IllegalStateException expected){}
             check(db.list(ItUser.class,ItUser_.name.eq("SHOULD_ROLLBACK")).isEmpty(),"real transaction rollback");
