@@ -46,15 +46,18 @@ public final class SqlDialects {
         }
         public String upsertSql(String insertSql,String table,String idColumn,
                                 List<String> columns,String versionColumn) {
-            if(versionColumn!=null)
-                throw new UnsupportedOperationException("Optimistic @Version upsert needs vendor-specific conflict handling; MySQL UPSERT is not enabled for versioned entities");
             if(columns.isEmpty())throw new UnsupportedOperationException("MySQL UPSERT requires a non-id update column");
             StringJoiner changes=new StringJoiner(", ");
-            // Duplicate secondary UNIQUE keys must not update a different primary-key row.
-            // This guard fails the statement on NOT NULL textual/UUID primary keys.
-            changes.add(idColumn+" = IF("+table+"."+idColumn+" = bjorm_new."+idColumn+
-                ", "+table+"."+idColumn+", NULL)");
-            for(String column:columns)changes.add(column+" = bjorm_new."+column);
+            // MySQL 8.4 evaluates this guard inside the single row-locked DML.
+            // NULL on a non-null text/UUID PK aborts the entire statement for
+            // a stale @Version or an unrelated secondary UNIQUE collision.
+            String guard=table+"."+idColumn+" = bjorm_new."+idColumn;
+            if(versionColumn!=null)
+                guard+=" AND "+table+"."+versionColumn+" = bjorm_new."+versionColumn;
+            changes.add(idColumn+" = IF("+guard+", "+table+"."+idColumn+", NULL)");
+            for(String column:columns)
+                changes.add(column+" = "+(column.equals(versionColumn)
+                    ? table+"."+column+" + 1" : "bjorm_new."+column));
             // MySQL 8.0.19+ row alias; avoids deprecated VALUES(col).
             return insertSql+" AS bjorm_new ON DUPLICATE KEY UPDATE "+changes;
         }
