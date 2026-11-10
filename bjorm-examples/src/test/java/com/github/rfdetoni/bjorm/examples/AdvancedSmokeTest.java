@@ -197,6 +197,22 @@ public final class AdvancedSmokeTest {
         check(spy.last().sql().equals("SELECT COUNT(*) FROM products WHERE name = ?"),"count uses single SQL aggregate");
         check(spy.last().binds().equals(Map.of(1,"Pencil")),"count predicate bound");
         check(db.exists(Product.class,Product_.name.eq("Pencil")),"exists returns true");
+        try {
+            db.lockOne(Product.class,Product_.name.eq("Pencil"),LockMode.UPDATE);
+            throw new AssertionError("row locks must require active transaction");
+        } catch(IllegalStateException expected) {
+            check(expected.getMessage().contains("active transaction"),"no autocommit lock");
+        }
+        db.tx(tx -> {
+            check(tx.lockOne(Product.class,Product_.name.eq("Pencil"),LockMode.UPDATE),
+                "transaction FOR UPDATE returns existing row");
+            check(spy.last().sql().equals("SELECT id FROM products WHERE name = ? LIMIT 1 FOR UPDATE"),
+                "mapped row lock SQL");
+            check(spy.last().binds().equals(Map.of(1,"Pencil")),"row lock binds typed predicate");
+            check(tx.lockOne(Product.class,Product_.name.eq("Pencil"),LockMode.SHARE),
+                "transaction FOR SHARE returns existing row");
+            check(spy.last().sql().endsWith("LIMIT 1 FOR SHARE"),"shared row lock SQL");
+        });
         check(spy.last().sql().equals("SELECT 1 FROM products WHERE name = ? LIMIT 1"),"exists does not count all rows");
         check(spy.last().binds().equals(Map.of(1,"Pencil")),"exists predicate bound");
         spy.noRows=true;
