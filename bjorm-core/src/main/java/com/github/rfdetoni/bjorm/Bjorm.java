@@ -792,7 +792,7 @@ public final class Bjorm implements Operations {
                 if(updating)m.bindUpdate(ps,entity,dialect);
                 else { requireReturnForImmutable(entity); m.bindInsert(ps,m.materializeInsert(entity),dialect); }
                 ps.addBatch();
-                if(++pending==256){validateBatch(ps.executeBatch(),m,updating);pending=0;}
+                if(++pending==options.batchSize()){validateBatch(ps.executeBatch(),m,updating);pending=0;}
             }
             if(pending>0)validateBatch(ps.executeBatch(),m,updating);
         }
