@@ -266,7 +266,7 @@ public final class PostgresIntegrationTest {
             var sought=db.select(ItUser.class).where(db.seekAfterId(ItUser.class,lower,false))
                 .orderBy(db.primaryKeyOrder(ItUser.class,false)).limit(2).fetch();
             check(!sought.isEmpty() && sought.size()<=2 &&
-                  sought.stream().noneMatch(user->user.id().equals(lower)),
+                  sought.stream().noneMatch(candidate->candidate.id().equals(lower)),
                 "real keyset seek skips cursor ID even with additional users");
             check(db.select(ItUser.class).orderBy(db.mappedOrder(ItUser.class,"name",false)).limit(1).offset(0L)
                 .fetch().size()==1, "mapped order with long offset");
