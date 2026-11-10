@@ -29,6 +29,7 @@ public final class MySqlIntegrationTest {
         };
         try(Connection c=source.getConnection();Statement st=c.createStatement()){
             st.execute("CREATE TABLE bjorm_it_users(id CHAR(36) PRIMARY KEY,name VARCHAR(255) UNIQUE,age INT NOT NULL)");
+            st.execute("CREATE TABLE bjorm_it_instants(id CHAR(36) PRIMARY KEY,label VARCHAR(255),occurred_at TIMESTAMP(6) NULL,version INT NOT NULL DEFAULT 0)");
             st.execute("CREATE TABLE bjorm_it_documents(id CHAR(36) PRIMARY KEY,payload JSON)");
             st.execute("CREATE TABLE bjorm_it_auto_long(id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,label VARCHAR(255))");
             st.execute("CREATE TABLE bjorm_it_orders(id CHAR(36) PRIMARY KEY,description VARCHAR(255))");
@@ -39,7 +40,19 @@ public final class MySqlIntegrationTest {
             Bjorm db=Bjorm.open(source,BjormOptions.defaults(),SqlDialects.MYSQL,
                 ItUser_BjormMapper.INSTANCE,ItDocument_BjormMapper.INSTANCE,
                 AutoLongRecord_BjormMapper.INSTANCE,ItOrder_BjormMapper.INSTANCE,
-                ItOrderLine_BjormMapper.INSTANCE,ItOrderNote_BjormMapper.INSTANCE);
+                ItOrderLine_BjormMapper.INSTANCE,ItOrderNote_BjormMapper.INSTANCE,
+                ItInstant_BjormMapper.INSTANCE);
+            Instant testTime=Instant.parse("2026-11-10T10:20:30Z");
+            ItInstant savedInstant=db.insertReturning(new ItInstant(null,"Original",testTime,0));
+            check(testTime.equals(db.find(ItInstant.class,savedInstant.id()).occurredAt()),
+                "MySQL generated INSERT/SELECT Instant");
+            check(db.update(new ItInstant(savedInstant.id(),"Edited",testTime.plusSeconds(60),0))==1,
+                "MySQL generated UPDATE Instant");
+            check(testTime.plusSeconds(60).equals(db.find(ItInstant.class,savedInstant.id()).occurredAt()),
+                "MySQL generated Instant update roundtrip");
+            ItInstant nullTime=db.insertReturning(new ItInstant(null,"Null",null,0));
+            check(db.find(ItInstant.class,nullTime.id()).occurredAt()==null,
+                "MySQL nullable Instant roundtrip");
             ItUser original=db.insertReturning(new ItUser(null,"MySQL user",33));
             check(original.id()!=null && original.id().version()==7,"v7 generated");
             check(db.find(ItUser.class,original.id()).age()==33,"MySQL UUID read from CHAR(36)");
@@ -89,7 +102,7 @@ public final class MySqlIntegrationTest {
         }finally {
             try(Connection c=source.getConnection();Statement st=c.createStatement()){
                 for(String name:List.of("bjorm_it_order_notes","bjorm_it_order_lines","bjorm_it_orders",
-                    "bjorm_it_documents","bjorm_it_auto_long","bjorm_it_users"))
+                    "bjorm_it_instants","bjorm_it_documents","bjorm_it_auto_long","bjorm_it_users"))
                     st.execute("DROP TABLE IF EXISTS "+name);
             }
         }
