@@ -77,7 +77,7 @@ public final class EntityProcessor extends AbstractProcessor {
             throw new IllegalArgumentException("@ManyToOne supports LEFT and INNER only");
         if(!(field.asType() instanceof DeclaredType dt) ||
            !(dt.asElement() instanceof TypeElement target) ||
-           !cAnnotated(target,Table.class))
+           !mappedTable(target))
             throw new IllegalArgumentException("@ManyToOne must reference a @Table entity");
         return new ToOne(field.getSimpleName().toString(),annotation.mappedBy(),
             target.getQualifiedName().toString(),annotation.type());
@@ -193,7 +193,7 @@ public final class EntityProcessor extends AbstractProcessor {
         }
         for(Relation r:relations) {
             TypeElement child=elements.getTypeElement(r.childType());
-            if(child==null||!cAnnotated(child,Table.class)) {error(entity,"@Children target must be a @Table entity: "+r.childType());return;}
+            if(child==null||!mappedTable(child)) {error(entity,"@Children target must be a @Table entity: "+r.childType());return;}
             if(!types.isSameType(r.foreignKeyType(),cols.get(id).typeMirror())) {error(entity,"@Children mappedBy property must have the same type as parent ID: "+r.mappedBy());return;}
         }
         if(!relations.isEmpty() && !toOnes.isEmpty()){
@@ -204,7 +204,7 @@ public final class EntityProcessor extends AbstractProcessor {
             Col fk=cols.stream().filter(c->c.property().equals(toOne.mappedBy())).findFirst().orElse(null);
             if(fk==null){error(entity,"@ManyToOne mappedBy requires a scalar FK property: "+toOne.mappedBy());return;}
             TypeElement target=elements.getTypeElement(toOne.targetType());
-            if(target==null || !cAnnotated(target,Table.class)){
+            if(target==null || !mappedTable(target)){
                 error(entity,"@ManyToOne target must be @Table: "+toOne.targetType());return;
             }
             List<? extends Element> properties=target.getKind()==ElementKind.RECORD
@@ -269,9 +269,18 @@ public final class EntityProcessor extends AbstractProcessor {
         }
         return fields;
     }
+    /**
+     * @Table has SOURCE retention in 0.x. A target compiled in a previous
+     * module cannot expose that annotation, but its generated mapper remains
+     * available on the compilation classpath. Support both paths.
+     */
+    private boolean mappedTable(TypeElement target) {
+        return cAnnotated(target,Table.class) ||
+            elements.getTypeElement(target.getQualifiedName()+"_BjormMapper")!=null;
+    }
     private static boolean cAnnotated(Element el,Class<? extends java.lang.annotation.Annotation> ann){
         if(el.getAnnotation(ann)!=null)return true;
-        // Annotations with CLASS retention on compiled sibling modules may not
+        // CLASS-retained annotations on compiled sibling modules may not
         // be visible through getAnnotation(...); mirror metadata remains available
         // to javac and is the stable compile-time contract.
         String qualified=ann.getCanonicalName();
