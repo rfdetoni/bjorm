@@ -487,7 +487,7 @@ public final class EntityProcessor extends AbstractProcessor {
             if(!record) {
                 w.write("public "+clazz+" copyForWrite("+clazz+" value){");
                 if(!relations.isEmpty()) {
-                    w.write("throw new UnsupportedOperationException(\"Detached writes do not support mutable child graphs\");}\\n");
+                    w.write("throw new UnsupportedOperationException(\"Detached writes do not support mutable child graphs\");}\n");
                 } else {
                     w.write(clazz+" copy=new "+clazz+"();");
                     for(Element member:pojoFields(entity)) {
@@ -499,7 +499,7 @@ public final class EntityProcessor extends AbstractProcessor {
                         if(getter!=null && hasSetter(entity,"set"+suffix,type))
                             w.write("copy.set"+suffix+"(value."+getter+"());");
                     }
-                    w.write("return copy;}\\n");
+                    w.write("return copy;}\n");
                 }
             }
             Col createdAt=cols.stream().filter(Col::createdAt).findFirst().orElse(null);
