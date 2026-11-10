@@ -244,6 +244,15 @@ public final class EntityProcessor extends AbstractProcessor {
             }
             w.write("default -> throw new IllegalArgumentException(\"Unknown mapped property: \"+property);};}\n");
 
+            w.write("public String bulkParameterSql(String property,com.github.rfdetoni.bjorm.SqlDialect dialect){return switch(property){\n");
+            for(Col c:cols) if(c.json())w.write("case \""+c.property()+"\" -> dialect.jsonParameter();\n");
+            w.write("default -> {columnFor(property);yield \"?\";}};}\n");
+            w.write("public Object bulkParameterValue(String property,Object value){return switch(property){\n");
+            for(int ci=0;ci<cols.size();ci++) {
+                Col c=cols.get(ci);
+                if(typedJson(c))w.write("case \""+c.property()+"\" -> com.github.rfdetoni.bjorm.JsonValues.write(("+c.type()+")value,JSON_"+ci+");\n");
+            }
+            w.write("default -> {columnFor(property);yield value;}};}\n");
             w.write("public String qualifiedColumns(String alias){return "+String.join("+\", \"+",cols.stream().map(c->"alias+\"."+c.column()+"\"").toList())+";}\n");
 
             w.write("public int columnCount(){return "+cols.size()+";}\n");
