@@ -106,7 +106,11 @@ if javac -cp "$OUT/core:$OUT/example" -processorpath "$OUT/core:$OUT/processor" 
   -d "$OUT/example" "$OUT/InvalidToOne.java" 2>"$OUT/toone-negative.log"; then
   echo 'FAIL: processor accepted an incompatible @ManyToOne foreign key' >&2; exit 1
 fi
-grep -q '@ManyToOne foreign key must match target @Id type' "$OUT/toone-negative.log"
+if ! grep -q '@ManyToOne foreign key must match target @Id type' "$OUT/toone-negative.log"; then
+  echo 'Unexpected @ManyToOne compile diagnostic:' >&2
+  cat "$OUT/toone-negative.log" >&2
+  exit 1
+fi
 if grep -R -l 'import org\.springframework' bjorm-core/src/main/java bjorm-processor/src/main/java; then
   echo 'FAIL: framework dependency leaked into BJORM core/processor' >&2; exit 1
 fi
