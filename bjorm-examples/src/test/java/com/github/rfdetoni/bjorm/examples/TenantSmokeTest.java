@@ -78,6 +78,15 @@ public final class TenantSmokeTest {
             try {root.forTenant(unsafe);throw new AssertionError("unsafe schema accepted: "+unsafe);}
             catch(IllegalArgumentException expected) {}
         }
+        Bjorm mixed=Bjorm.tenantRequired(pg.source(),BjormOptions.defaults(),
+            SqlDialects.POSTGRESQL,StaticSchemaRecord_BjormMapper.INSTANCE);
+        int connectionBefore=pg.connections;
+        try {mixed.forTenant("company_a");
+            throw new AssertionError("fixed-schema mapper accepted in tenant-required context");}
+        catch(IllegalStateException expected) {
+            check(expected.getMessage().contains("Fixed-schema"),"static mapping must be explicitly refused");
+        }
+        check(pg.connections==connectionBefore,"fixed schema is rejected before connection checkout");
         Bjorm scoped=root.forTenant("company_a");
         try {scoped.forTenant("company_b");throw new AssertionError("tenant rebind allowed");}
         catch(IllegalStateException expected) {}
