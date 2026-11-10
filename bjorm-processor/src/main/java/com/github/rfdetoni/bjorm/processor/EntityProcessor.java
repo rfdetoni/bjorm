@@ -69,6 +69,51 @@ public final class EntityProcessor extends AbstractProcessor {
     }
     private record Relation(String property,String mappedBy,String childType,String getter,String childGetter,String childSetter,boolean childRecord,JoinType joinType,TypeMirror foreignKeyType) {}
     private record ToOne(String property,String mappedBy,String targetType,JoinType joinType) {}
+    private record EmbeddedSpec(String property,String type,String read,String setter,int columnCount) {}
+    /**
+     * Flatten a public record's scalar components directly into the parent
+     * binder/reader. No runtime reflective field inspection or nested mapper.
+     */
+    private void embedded(Element field,String reader,String setter,List<Col> cols,
+                          List<EmbeddedSpec> embedded) {
+        Embedded annotation=field.getAnnotation(Embedded.class);
+        if(field.getAnnotation(Id.class)!=null || field.getAnnotation(Version.class)!=null ||
+           field.getAnnotation(Children.class)!=null || field.getAnnotation(ManyToOne.class)!=null ||
+           field.getAnnotation(Transient.class)!=null || field.getAnnotation(Json.class)!=null)
+            throw new IllegalArgumentException("@Embedded cannot be an ID, version, transient or graph relation");
+        if(!(field.asType() instanceof DeclaredType dt) ||
+           !(dt.asElement() instanceof TypeElement valueType) ||
+           valueType.getKind()!=ElementKind.RECORD ||
+           !valueType.getModifiers().contains(Modifier.PUBLIC))
+            throw new IllegalArgumentException("@Embedded requires a public record value type");
+        String property=field.getSimpleName().toString();
+        String prefix=annotation.prefix().isEmpty()?property+"_":annotation.prefix();
+        int before=cols.size();
+        for(RecordComponentElement member:valueType.getRecordComponents()) {
+            if(member.getAnnotation(Id.class)!=null || member.getAnnotation(Version.class)!=null ||
+               member.getAnnotation(Transient.class)!=null || member.getAnnotation(Children.class)!=null ||
+               member.getAnnotation(ManyToOne.class)!=null || member.getAnnotation(Embedded.class)!=null ||
+               member.getAnnotation(CreatedAt.class)!=null || member.getAnnotation(UpdatedAt.class)!=null)
+                throw new IllegalArgumentException("@Embedded only supports direct scalar record components");
+            String name=member.getSimpleName().toString(),type=member.asType().toString();
+            if(!supported(type) && member.getAnnotation(Json.class)==null)
+                throw new IllegalArgumentException("Unsupported @Embedded component: "+type);
+            String sqlColumn=prefix+colName(member,name);
+            if(!identifier(sqlColumn))
+                throw new IllegalArgumentException("Invalid @Embedded SQL column: "+sqlColumn);
+            Id noId=null;
+            cols.add(new Col(property+"."+name,sqlColumn,type,reader+"."+name+"()","",
+                false,false,false,member.getAnnotation(Json.class)!=null,false,
+                jsonCodec(member),member.asType(),
+                member.getAnnotation(Column.class)==null||member.getAnnotation(Column.class).insertable(),
+                member.getAnnotation(Column.class)==null||member.getAnnotation(Column.class).updatable(),
+                member.getAnnotation(EnumOrdinal.class)!=null,false,false));
+        }
+        if(before==cols.size())
+            throw new IllegalArgumentException("@Embedded value record must contain a scalar field");
+        embedded.add(new EmbeddedSpec(property,valueType.getQualifiedName().toString(),
+            reader,setter,cols.size()-before));
+    }
     private ToOne toOne(Element field) {
         ManyToOne annotation=field.getAnnotation(ManyToOne.class);
         if(!identifier(annotation.mappedBy()))
@@ -97,16 +142,20 @@ public final class EntityProcessor extends AbstractProcessor {
         List<Col> cols=new ArrayList<>();
         List<Relation> relations=new ArrayList<>();
         List<ToOne> toOnes=new ArrayList<>();
+        List<EmbeddedSpec> embeddeds=new ArrayList<>();
         if(record){
             for(RecordComponentElement c:entity.getRecordComponents()){
                 String prop=c.getSimpleName().toString();
                 if(c.getAnnotation(Transient.class)!=null) {
-                    if(c.getAnnotation(Id.class)!=null || c.getAnnotation(Version.class)!=null || c.getAnnotation(Children.class)!=null || c.getAnnotation(ManyToOne.class)!=null)
+                    if(c.getAnnotation(Id.class)!=null || c.getAnnotation(Version.class)!=null || c.getAnnotation(Children.class)!=null || c.getAnnotation(ManyToOne.class)!=null || c.getAnnotation(Embedded.class)!=null)
                         {error(c,"@Transient cannot annotate an ID, version or relation");return;}
                     continue;
                 }
                 if(c.getAnnotation(Children.class)!=null) {relations.add(relation(c,"value."+prop+"()"));continue;}
                 if(c.getAnnotation(ManyToOne.class)!=null) {toOnes.add(toOne(c));continue;}
+                if(c.getAnnotation(Embedded.class)!=null) {
+                    embedded(c,"value."+prop+"()",null,cols,embeddeds);continue;
+                }
                 Id idAnn=c.getAnnotation(Id.class);
                 cols.add(new Col(prop,colName(c,prop),c.asType().toString(),"value."+prop+"()","",idAnn!=null,c.getAnnotation(Version.class)!=null,databaseId(idAnn,c.asType().toString()),c.getAnnotation(Json.class)!=null,autoUuid(idAnn,c.asType().toString()),jsonCodec(c),c.asType(),c.getAnnotation(Column.class)==null||c.getAnnotation(Column.class).insertable(),c.getAnnotation(Column.class)==null||c.getAnnotation(Column.class).updatable(),c.getAnnotation(EnumOrdinal.class)!=null,c.getAnnotation(CreatedAt.class)!=null,c.getAnnotation(UpdatedAt.class)!=null));
             }
@@ -127,6 +176,13 @@ public final class EntityProcessor extends AbstractProcessor {
                         error(el,"@ManyToOne needs public getter and setter for "+prop);return;
                     }
                     toOnes.add(toOne(el));continue;
+                }
+                if(el.getAnnotation(Embedded.class)!=null) {
+                    if(getter==null || !hasSetter(entity,"set"+suff,type)){
+                        error(el,"@Embedded needs public getter and setter for "+prop);return;
+                    }
+                    embedded(el,"value."+getter+"()","value.set"+suff,cols,embeddeds);
+                    continue;
                 }
                 String setter="set"+suff;
                 if(getter==null||!hasSetter(entity,setter,type)) {error(el,"POJO needs public getter and setter for "+prop);return;}
@@ -216,7 +272,7 @@ public final class EntityProcessor extends AbstractProcessor {
                 error(entity,"@ManyToOne foreign key must match target @Id type: "+toOne.mappedBy());return;
             }
         }
-        generateMapper(entity,qualifiedTable,schema,cols,id,ver,record,relations,toOnes);
+        generateMapper(entity,qualifiedTable,schema,cols,id,ver,record,relations,toOnes,embeddeds);
         mapperServices.add(packageOf(entity)+"."+entity.getSimpleName()+"_BjormMapper");
         generatePaths(entity,cols);
     }
@@ -322,7 +378,7 @@ public final class EntityProcessor extends AbstractProcessor {
                 ?"ps.setObject("+param+","+col.read()+"==null?null:"+col.read()+".ordinal());"
                 :setter(param,col.read(),col.type(),dialect);
     }
-    private void generateMapper(TypeElement entity,String table,String schema,List<Col> cols,int id,int version,boolean record,List<Relation> relations,List<ToOne> toOnes) throws IOException {
+    private void generateMapper(TypeElement entity,String table,String schema,List<Col> cols,int id,int version,boolean record,List<Relation> relations,List<ToOne> toOnes,List<EmbeddedSpec> embeddeds) throws IOException {
         String clazz=entity.getSimpleName().toString(),pkg=packageOf(entity),mapper=clazz+"_BjormMapper";
         String conflictTarget=schema.isEmpty()?table:table.substring(schema.length()+1);
         String fields=String.join(", ",cols.stream().map(Col::column).toList());
@@ -590,7 +646,7 @@ public final class EntityProcessor extends AbstractProcessor {
         String clazz=entity.getSimpleName().toString();
         try(Writer w=file(packageOf(entity),clazz+"_",entity)) {
             w.write("package "+packageOf(entity)+";\npublic final class "+clazz+"_ {private "+clazz+"_(){}\n");
-            for(Col c:cols)w.write("public static final com.github.rfdetoni.bjorm.Field<"+boxed(c.type())+"> "+c.property()+" = new com.github.rfdetoni.bjorm.Field<>(\""+c.column()+"\");\n");
+            for(Col c:cols)w.write("public static final com.github.rfdetoni.bjorm.Field<"+boxed(c.type())+"> "+c.property().replace('.','_')+" = new com.github.rfdetoni.bjorm.Field<>(\""+c.column()+"\");\n");
             w.write("}\n");
         }
     }
