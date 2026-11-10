@@ -257,6 +257,7 @@ public final class AdvancedSmokeTest {
         check(spy.calls.size()==before+1,"forEach executed single query");
         db.scan("SELECT id, name FROM products WHERE name = ?", ps->ps.setString(1,"Pencil"),ProductSummary_BjormRowMapper.INSTANCE,
             row->check(row.name().equals("Pencil"),"native projection cursor"));
+        check(spy.last().binds().get(1).equals("Pencil"),"streamed projection bind");
         int closedBefore=spy.closedResultSets.get(), statementsBefore=spy.closedStatements.get();
         long streamed=db.withStream(db.select(Product.class),
             rows->rows.filter(item->item.getName().equals("Pencil")).count());
@@ -278,7 +279,7 @@ public final class AdvancedSmokeTest {
               spy.closedResultSets.get()==closedBefore+2 &&
               spy.closedStatements.get()==statementsBefore+2,
               "callback failure rolls back and closes JDBC resources");
-        check(spy.last().binds().get(1).equals("Pencil"),"streamed projection bind");
+
         // FindOne must return Optional, fetch a single row server-side, and bind filters.
         Optional<Product> first=db.findOne(Product.class,Product_.name.eq("Pencil"));
         check(first.isPresent() && first.get().getName().equals("Pencil"),"findOne maps matching entity");
