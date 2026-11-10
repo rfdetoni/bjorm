@@ -194,7 +194,7 @@ public final class Bjorm implements Operations {
     public <T> T upsertReturning(T entity) {
         Objects.requireNonNull(entity);
         EntityMapper<T> m=mapper(entity.getClass());
-        if(m.children().isEmpty() && !m.optimisticLocking()) return withConnection(c->{
+        if(m.children().isEmpty() && !m.upsertNeedsReload() && !m.optimisticLocking()) return withConnection(c->{
             T prepared=m.materializeUpsert(entity);
             upsertPrepared(c,prepared);
             return prepared;
@@ -826,7 +826,7 @@ public final class Bjorm implements Operations {
         public <T> T upsertReturning(T value) {return use(c->{
             T persisted=Bjorm.this.persistGraph(c,value,true,new IdentityHashMap<>());
             EntityMapper<T> mapper=Bjorm.this.mapper(value.getClass());
-            return mapper.optimisticLocking()
+            return mapper.optimisticLocking() || mapper.upsertNeedsReload()
                 ?Bjorm.this.find(c,mapper.type(),mapper.id(persisted)):persisted;
         });}
         public <T> int upsert(T value) {requireReturnForImmutable(value);return use(c->{
@@ -947,7 +947,7 @@ public final class Bjorm implements Operations {
                 else if(value.getClass()!=expected)throw new IllegalArgumentException("Batch requires one entity type");
                 T prepared=Bjorm.this.persistGraph(c,value,true,new IdentityHashMap<>());
                 EntityMapper<T> mapper=Bjorm.this.mapper(value.getClass());
-                persisted.add(mapper.optimisticLocking()
+                persisted.add(mapper.optimisticLocking() || mapper.upsertNeedsReload()
                     ?Bjorm.this.find(c,mapper.type(),mapper.id(prepared)):prepared);
             }
             return List.copyOf(persisted);
