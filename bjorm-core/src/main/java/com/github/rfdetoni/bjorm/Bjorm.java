@@ -15,6 +15,7 @@ public final class Bjorm implements Operations {
     private final boolean tenantRequired;
     private final String tenantSchema;
     private final SqlObserver sqlObserver;
+    private final boolean reviewedTenantNativeSql;
     private static final java.util.regex.Pattern TENANT_IDENTIFIER =
         java.util.regex.Pattern.compile("[A-Za-z_][A-Za-z_0-9]{0,62}");
 
@@ -27,6 +28,17 @@ public final class Bjorm implements Operations {
         this.tenantRequired=true;
         this.tenantSchema=tenantSchema;
         this.sqlObserver=source.sqlObserver;
+        this.reviewedTenantNativeSql=source.reviewedTenantNativeSql;
+    }
+    private Bjorm(Bjorm source,boolean allowNativeSql) {
+        this.dataSource=source.dataSource;
+        this.options=source.options;
+        this.dialect=source.dialect;
+        this.mappers=source.mappers;
+        this.tenantRequired=source.tenantRequired;
+        this.tenantSchema=source.tenantSchema;
+        this.sqlObserver=source.sqlObserver;
+        this.reviewedTenantNativeSql=allowNativeSql;
     }
     private Bjorm(Bjorm source,SqlObserver observer) {
         this.dataSource=source.dataSource;
@@ -36,6 +48,7 @@ public final class Bjorm implements Operations {
         this.tenantRequired=source.tenantRequired;
         this.tenantSchema=source.tenantSchema;
         this.sqlObserver=Objects.requireNonNull(observer,"observer");
+        this.reviewedTenantNativeSql=source.reviewedTenantNativeSql;
     }
     private Bjorm(DataSource dataSource,BjormOptions options,SqlDialect dialect,EntityMapper<?>... registered) {
         this.dataSource = Objects.requireNonNull(dataSource, "dataSource");
@@ -48,6 +61,7 @@ public final class Bjorm implements Operations {
         tenantRequired=false;
         tenantSchema=null;
         sqlObserver=null;
+        reviewedTenantNativeSql=false;
     }
     /** Discover compile-time generated mappers once at startup via Java ServiceLoader. */
     public static Bjorm open(DataSource dataSource) {
@@ -104,6 +118,22 @@ public final class Bjorm implements Operations {
     public SqlDialect dialect(){return dialect;}
     /** Returns an immutable context with execution timing hooks; no SQL or tenant IDs are emitted. */
     public Bjorm observeSql(SqlObserver observer) {return new Bjorm(this,observer);}
+    /**
+     * Explicitly opt in to arbitrary native SQL for an already authorized
+     * tenant. Only use in vetted server code with least-privileged DB roles.
+     * Unlike generated mapped SQL, native SQL can qualify another schema or
+     * execute SET ROLE, so it is denied in tenant-required contexts by default.
+     */
+    public Bjorm permitReviewedTenantNativeSql() {
+        if(!tenantRequired || tenantSchema==null)
+            throw new IllegalStateException("Native SQL exception requires an authorized scoped tenant");
+        return new Bjorm(this,true);
+    }
+    private void requireNativeSqlPermission() {
+        requireTenant();
+        if(tenantRequired && !reviewedTenantNativeSql)
+            throw new SecurityException("Native SQL disabled for tenant; use mapped DSL or explicit reviewed permission");
+    }
     private static void notifyObserver(SqlObserver observer,SqlOperation operation,
                                       long start,boolean succeeded) {
         try {observer.completed(operation,System.nanoTime()-start,succeeded);}
@@ -354,14 +384,14 @@ public final class Bjorm implements Operations {
         query.limit(1);
         return withConnection(c->scalarOne(c,query,property,type));
     }
-    public <T> List<T> query(String sql,StatementBinder bind,RowMapper<T> mapper) {return withConnection(c->query(c,sql,bind,mapper));}
-    public <T> T one(String sql,StatementBinder bind,RowMapper<T> mapper) {return withConnection(c->one(c,sql,bind,mapper));}
-    public int execute(String sql,StatementBinder bind) {return withConnection(c->execute(c,sql,bind));}
+    public <T> List<T> query(String sql,StatementBinder bind,RowMapper<T> mapper) {requireNativeSqlPermission();return withConnection(c->query(c,sql,bind,mapper));}
+    public <T> T one(String sql,StatementBinder bind,RowMapper<T> mapper) {requireNativeSqlPermission();return withConnection(c->one(c,sql,bind,mapper));}
+    public int execute(String sql,StatementBinder bind) {requireNativeSqlPermission();return withConnection(c->execute(c,sql,bind));}
     public <T> void forEach(Class<T> type,SqlPredicate where,Consumer<T> consumer) {
         forEach(select(type).whereNullable(where),consumer);
     }
     public <T> void forEach(Select<T> query,Consumer<T> consumer) { tx(tx->tx.forEach(query,consumer)); }
-    public <T> void scan(String sql,StatementBinder binder,RowMapper<T> mapper,Consumer<T> consumer) {tx(tx->tx.scan(sql,binder,mapper,consumer));}
+    public <T> void scan(String sql,StatementBinder binder,RowMapper<T> mapper,Consumer<T> consumer) {requireNativeSqlPermission();tx(tx->tx.scan(sql,binder,mapper,consumer));}
     public <T> void batchInsert(List<T> values) {tx(tx->tx.batchInsert(values));}
     public <T> List<T> batchInsertReturning(List<T> values) {return txResult(tx->tx.batchInsertReturning(values));}
     public <T> void batchUpdate(List<T> values) {tx(tx->tx.batchUpdate(values));}
@@ -996,12 +1026,12 @@ public final class Bjorm implements Operations {
             query.limit(1);
             return use(c->Bjorm.this.scalarOne(c,query,property,type));
         }
-        public <T> List<T> query(String sql,StatementBinder bind,RowMapper<T> mapper) {return useWrite(c->Bjorm.this.query(c,sql,bind,mapper));}
-        public <T> T one(String sql,StatementBinder bind,RowMapper<T> mapper) {return useWrite(c->Bjorm.this.one(c,sql,bind,mapper));}
-        public int execute(String sql,StatementBinder bind) {return useWrite(c->Bjorm.this.execute(c,sql,bind));}
+        public <T> List<T> query(String sql,StatementBinder bind,RowMapper<T> mapper) {requireNativeSqlPermission();return useWrite(c->Bjorm.this.query(c,sql,bind,mapper));}
+        public <T> T one(String sql,StatementBinder bind,RowMapper<T> mapper) {requireNativeSqlPermission();return useWrite(c->Bjorm.this.one(c,sql,bind,mapper));}
+        public int execute(String sql,StatementBinder bind) {requireNativeSqlPermission();return useWrite(c->Bjorm.this.execute(c,sql,bind));}
         public <T> void forEach(Class<T> type,SqlPredicate where,Consumer<T> consumer) {forEach(select(type).whereNullable(where),consumer);}
         public <T> void forEach(Select<T> query,Consumer<T> consumer) {use(c->{Bjorm.this.forEach(c,query,consumer);return null;});}
-        public <T> void scan(String sql,StatementBinder binder,RowMapper<T> mapper,Consumer<T> consumer) {useWrite(c->{Bjorm.this.scan(c,sql,binder,mapper,consumer);return null;});}
+        public <T> void scan(String sql,StatementBinder binder,RowMapper<T> mapper,Consumer<T> consumer) {requireNativeSqlPermission();useWrite(c->{Bjorm.this.scan(c,sql,binder,mapper,consumer);return null;});}
         public <T> void batchInsert(List<T> list) {useWrite(c->{Bjorm.this.batch(c,list,false);return null;});}
         public <T> List<T> batchInsertReturning(List<T> list) {return useWrite(c->{
             Objects.requireNonNull(list);
