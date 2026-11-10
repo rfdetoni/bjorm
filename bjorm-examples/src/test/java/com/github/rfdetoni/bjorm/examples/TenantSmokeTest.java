@@ -2,6 +2,7 @@ package com.github.rfdetoni.bjorm.examples;
 
 import com.github.rfdetoni.bjorm.Bjorm;
 import com.github.rfdetoni.bjorm.BjormOptions;
+import com.github.rfdetoni.bjorm.IsolationLevel;
 import com.github.rfdetoni.bjorm.SqlDialects;
 import javax.sql.DataSource;
 import java.lang.reflect.InvocationHandler;
@@ -25,6 +26,7 @@ public final class TenantSmokeTest {
         String catalog="root_catalog";
         boolean autoCommit=true;
         boolean failWrite;
+        int isolation=Connection.TRANSACTION_READ_COMMITTED;
         int connections;
         DataSource source() {
             return proxy(DataSource.class,(obj,method,args)->switch(method.getName()) {
@@ -35,6 +37,10 @@ public final class TenantSmokeTest {
         Connection connection() {
             return proxy(Connection.class,(obj,method,args)->switch(method.getName()) {
                 case "getAutoCommit" -> autoCommit;
+                case "getTransactionIsolation" -> isolation;
+                case "setTransactionIsolation" -> {
+                    isolation=(Integer)args[0];events.add("isolation="+isolation);yield null;
+                }
                 case "setAutoCommit" -> {autoCommit=(boolean)args[0];events.add("auto="+autoCommit);yield null;}
                 case "getCatalog" -> catalog;
                 case "setCatalog" -> {catalog=(String)args[0];events.add("catalog="+catalog);yield null;}
@@ -93,6 +99,21 @@ public final class TenantSmokeTest {
         scoped.tx(tx->check(tx.execute("UPDATE users SET name='x'",ps->{})==1,"PG explicit transaction"));
         check(pg.events.stream().filter(x->x.startsWith("SET LOCAL search_path")).count()==3,
             "every borrowed PG transaction is explicitly tenant-scoped");
+        scoped.tx(IsolationLevel.SERIALIZABLE,tx -> {
+            check(pg.isolation==Connection.TRANSACTION_SERIALIZABLE,"explicit PG SERIALIZABLE");
+            check(tx.execute("UPDATE users SET name='tx'",ps->{})==1,"explicit isolation operation");
+        });
+        check(pg.isolation==Connection.TRANSACTION_READ_COMMITTED && pg.autoCommit,
+            "PG borrowed connection transaction state restored after isolation");
+        pg.failWrite=true;
+        try {
+            scoped.tx(IsolationLevel.REPEATABLE_READ,tx->
+                tx.execute("UPDATE users SET name='fail'",ps->{}));
+            throw new AssertionError("PG transaction failure accepted");
+        } catch(RuntimeException expected) {}
+        check(pg.isolation==Connection.TRANSACTION_READ_COMMITTED && pg.autoCommit,
+            "PG isolation restored after rollback");
+        pg.failWrite=false;
         Spy mysql=new Spy();
         Bjorm mysqlRoot=Bjorm.tenantRequired(mysql.source(),BjormOptions.defaults(),SqlDialects.MYSQL);
         Bjorm tenant=mysqlRoot.forTenant("company_a");
@@ -106,6 +127,15 @@ public final class TenantSmokeTest {
         mysql.failWrite=false;
         tenant.tx(tx->check(tx.execute("UPDATE users SET name='tx'",ps->{})==1,"MySQL transactional catalog"));
         check(mysql.catalog.equals("root_catalog"),"MySQL catalog restored after transaction");
+        tenant.tx(IsolationLevel.REPEATABLE_READ,tx -> {
+            check(mysql.isolation==Connection.TRANSACTION_REPEATABLE_READ,
+                "MySQL explicit isolation active inside transaction");
+            check(tx.execute("UPDATE users SET name='isolated'",ps->{})==1,
+                "MySQL isolated transaction");
+        });
+        check(mysql.isolation==Connection.TRANSACTION_READ_COMMITTED &&
+              mysql.autoCommit && mysql.catalog.equals("root_catalog"),
+              "MySQL transaction isolation and catalog restored");
         System.out.println("PASS: tenant required, scoped PG SET LOCAL, rollback and MySQL catalog reset");
     }
 }
