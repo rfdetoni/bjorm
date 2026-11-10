@@ -11,10 +11,36 @@ import java.util.concurrent.atomic.*;
 /** Exercises generated repositories, POJO, projections, optimistic locking, batch and keys without external libraries. */
 public final class AdvancedSmokeTest {
     private record Call(int connection,String sql,Map<Integer,Object> binds) {}
+    private record PreparedOnce(UUID id,String label) {}
+    /** A non-idempotent mapper proves each UPSERT materializes the entity only once. */
+    private static final class CountingMapper implements EntityMapper<PreparedOnce> {
+        final AtomicInteger preparations=new AtomicInteger();
+        public Class<PreparedOnce> type(){return PreparedOnce.class;}
+        public String insertSql(){return "INSERT INTO prepared_once (id, label) VALUES (?, ?)";}
+        public String updateSql(){return "UPDATE prepared_once SET label=? WHERE id=?";}
+        public String deleteSql(){return "DELETE FROM prepared_once WHERE id=?";}
+        public String selectSql(){return "SELECT id, label FROM prepared_once WHERE id=?";}
+        public String selectAllSql(){return "SELECT id, label FROM prepared_once";}
+        public String upsertSql(){return "INSERT INTO prepared_once (id, label) VALUES (?, ?) ON CONFLICT (id) DO UPDATE SET label=EXCLUDED.label";}
+        public void bindInsert(PreparedStatement ps,PreparedOnce value)throws SQLException{
+            ps.setObject(1,value.id());ps.setString(2,value.label());
+        }
+        public void bindUpdate(PreparedStatement ps,PreparedOnce value)throws SQLException{
+            ps.setString(1,value.label());ps.setObject(2,value.id());
+        }
+        public void bindId(PreparedStatement ps,int index,Object id)throws SQLException{ps.setObject(index,id);}
+        public Object id(PreparedOnce value){return value.id();}
+        public PreparedOnce read(ResultSet rs)throws SQLException{return new PreparedOnce((UUID)rs.getObject(1),rs.getString(2));}
+        public PreparedOnce materializeInsert(PreparedOnce value) {
+            preparations.incrementAndGet();
+            return value.id()==null?new PreparedOnce(UuidV7.next(),value.label()):value;
+        }
+    }
     private static void check(boolean condition,String description){if(!condition)throw new AssertionError(description);}
     private static Object proxy(Class<?> type,InvocationHandler handler){return Proxy.newProxyInstance(AdvancedSmokeTest.class.getClassLoader(),new Class<?>[]{type},handler);}
     private static final class JdbcSpy {
         final List<Call> calls=new ArrayList<>();
+        final List<Integer> fetchSizes=new ArrayList<>();
         final AtomicInteger connections=new AtomicInteger(),commits=new AtomicInteger(),rollbacks=new AtomicInteger();
         int updateResult=1;
         boolean noRows=false;
@@ -65,7 +91,8 @@ public final class AdvancedSmokeTest {
                     yield result(new Object[]{id,"Pencil"});
                 }
                 case "getGeneratedKeys"->result(new Object[]{42L});
-                case "close","clearParameters","setFetchSize","setQueryTimeout","setMaxRows"->null;
+                case "setFetchSize"->{fetchSizes.add((Integer)a[0]);yield null;}
+                case "close","clearParameters","setQueryTimeout","setMaxRows"->null;
                 default->throw new UnsupportedOperationException("PreparedStatement."+m.getName());
             });
         }
@@ -95,14 +122,22 @@ public final class AdvancedSmokeTest {
     }
     public static void main(String[] args){
         JdbcSpy spy=new JdbcSpy();
-        Bjorm db=Bjorm.open(spy.dataSource(),Product_BjormMapper.INSTANCE,Identity_BjormMapper.INSTANCE,User_BjormMapper.INSTANCE,JsonDocument_BjormMapper.INSTANCE,AutoUuidRecord_BjormMapper.INSTANCE,AutoStringRecord_BjormMapper.INSTANCE,AutoLongRecord_BjormMapper.INSTANCE,AutoIntRecord_BjormMapper.INSTANCE,AutoUuidPojo_BjormMapper.INSTANCE,AutoParentRecord_BjormMapper.INSTANCE,AutoChildRecord_BjormMapper.INSTANCE);
+        CountingMapper counting=new CountingMapper();
+        Bjorm db=Bjorm.open(spy.dataSource(),counting,Product_BjormMapper.INSTANCE,Identity_BjormMapper.INSTANCE,User_BjormMapper.INSTANCE,JsonDocument_BjormMapper.INSTANCE,AutoUuidRecord_BjormMapper.INSTANCE,AutoStringRecord_BjormMapper.INSTANCE,AutoLongRecord_BjormMapper.INSTANCE,AutoIntRecord_BjormMapper.INSTANCE,AutoUuidPojo_BjormMapper.INSTANCE,AutoParentRecord_BjormMapper.INSTANCE,AutoChildRecord_BjormMapper.INSTANCE);
         Bjorm discovered=Bjorm.open(spy.dataSource());
         check(discovered.find(Product.class,spy.id)!=null,"generated mapper service discovery");
         Product p=new Product();p.setId(spy.id);p.setName("Pencil");p.setPrice(new BigDecimal("12.50"));p.setStatus(Status.ACTIVE);
         p.insert(db);
         check(spy.last().sql().startsWith("INSERT INTO products"),"POJO mapper INSERT");
         check(spy.last().binds().get(4).equals("ACTIVE"),"enum binds as name");
+        int beforeInvalidFind=spy.connections.get();
+        try {db.find(Product.class,null);throw new AssertionError("find(null) must be rejected");}
+        catch(NullPointerException expected) {
+            check(expected.getMessage().contains("id required"),"find rejects null ID explicitly");
+        }
+        check(spy.connections.get()==beforeInvalidFind,"find(null) does not borrow a connection");
         Product loaded=db.find(Product.class,spy.id);
+        check(spy.fetchSizes.contains(db.options().fetchSize()),"ordinary find applies fetch-size hint");
         check(loaded.getStatus()==Status.ACTIVE&&loaded.getPrice().compareTo(p.getPrice())==0,"POJO generated row mapper");
         db.update(p);
         check(spy.last().sql().equals("UPDATE products SET name = ?, unit_price = ?, status = ?, version = version + 1 WHERE id = ? AND version = ?"),"optimistic UPDATE shape");
@@ -178,6 +213,13 @@ public final class AdvancedSmokeTest {
         check(record.id()==null && persisted.id()!=null && persisted.id().version()==7,"record copy generated automatically");
         check(persisted.insert(db).id().equals(persisted.id()),"ActiveRecord returns ID-bearing immutable record");
         check(db.upsertReturning(new AutoUuidRecord(null,"upsert")).id()!=null,"record upsert generates id");
+        check(new AutoUuidRecord(null,"active-upsert").upsert(db).id()!=null,
+            "ActiveRecord.upsert returns materialized immutable record");
+        PreparedOnce once=db.upsertReturning(new PreparedOnce(null,"one-shot"));
+        check(once.id()!=null && counting.preparations.get()==1,
+            "upsertReturning calls materializeInsert exactly once");
+        db.tx(tx->tx.upsertReturning(new PreparedOnce(null,"transaction-one-shot")));
+        check(counting.preparations.get()==2,"transaction graph upsert also materializes once");
         var batch=db.batchInsertReturning(List.of(new AutoUuidRecord(null,"B1"),new AutoUuidRecord(null,"B2")));
         check(batch.size()==2 && batch.get(0).id().version()==7 && !batch.get(0).id().equals(batch.get(1).id()),"record batch generates unique IDs");
         String textId=db.insertReturning(new AutoStringRecord(null,"string")).id();
@@ -191,6 +233,15 @@ public final class AdvancedSmokeTest {
             List.of(new AutoChildRecord(null,null,"record-child"))));
         check(nested.id().version()==7 && nested.children().getFirst().id().version()==7 &&
             nested.children().getFirst().parentId().equals(nested.id()),"immutable graph parent and child IDs/FK assigned");
+        int beforeRejectedBatch=spy.calls.size();
+        try {
+            db.batchInsert(List.of(new AutoParentRecord(null,"unsafe-batch",
+                List.of(new AutoChildRecord(null,null,"must-not-disappear")))));
+            throw new AssertionError("batchInsert must not discard graph children");
+        } catch(IllegalArgumentException expected) {
+            check(expected.getMessage().contains("entity graphs"),"graph batch fails loudly");
+        }
+        check(spy.calls.size()==beforeRejectedBatch,"rejected graph batch writes no SQL");
         Identity identity=new Identity();identity.setLabel("ok");db.insert(identity);
         check(identity.getId()==42L,"JDBC generated key populated");
         check(spy.last().sql().equals("INSERT INTO identities (label) VALUES (?)"),"generated ID omitted from INSERT");
@@ -247,6 +298,10 @@ public final class AdvancedSmokeTest {
         check(spy.last().binds().equals(Map.of(1,"Pencil")),"findFields binds filter");
         List<BigDecimal> prices=db.findColumn(Product.class,"price",BigDecimal.class,Product_.name.eq("Pencil"));
         check(prices.equals(List.of(new BigDecimal("12.50"))),"findColumn reads scalar using generated mapper");
+        check(db.findColumn(Product.class,"version",int.class).equals(List.of(0)),
+            "primitive int.class is boxed for scalarList");
+        check(db.findColumnOne(Product.class,"version",int.class).orElseThrow()==0,
+            "primitive int.class is boxed for scalarOne");
         check(spy.last().sql().equals("SELECT unit_price FROM products WHERE name = ?"),"findColumn selects only requested column");
         check(db.findColumnOne(Product.class,"name",String.class,Product_.name.eq("Pencil")).orElseThrow().equals("Pencil"),"findColumnOne typed Optional");
         check(spy.last().sql().equals("SELECT name FROM products WHERE name = ? LIMIT ?"),"findColumnOne limits at database");
