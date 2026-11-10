@@ -17,6 +17,14 @@ public interface Operations {
     <T> int delete(T entity);
     <T> T find(Class<T> type, Object id);
     <T> List<T> list(Class<T> type, SqlPredicate predicate);
+    /** SQL COUNT(*) over a mapped table and typed predicate; does not materialize entities. */
+    <T> long count(Class<T> type, SqlPredicate predicate);
+    /** SQL SELECT 1 WHERE ... LIMIT 1; uses short-circuit index access when possible. */
+    <T> boolean exists(Class<T> type, SqlPredicate predicate);
+    /** Lock at most one matched row in an existing transaction. Returns false if absent. */
+    <T> boolean lockOne(Class<T> type, SqlPredicate predicate, LockMode mode);
+    default <T> long count(Class<T> type) { return count(type, null); }
+    default <T> boolean exists(Class<T> type) { return exists(type, null); }
     <T> List<T> list(Select<T> query);
     <T> Optional<T> first(Select<T> query);
     <T> List<Map<String,Object>> fieldRows(Select<T> query,String[] properties);

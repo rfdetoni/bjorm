@@ -2,6 +2,11 @@
 
 ## 0.3.18-SNAPSHOT
 
+- Expose native typed `COUNT(*)` consistently on both database and transaction `Operations`.
+- Add `exists()` as `SELECT 1 ... LIMIT 1`, binding predicate parameters through the active SQL dialect without entity instantiation.
+- Add transaction-only `lockOne()` with `LockMode.UPDATE/SHARE`, explicit auto-commit guard and no implicit transaction.
+- Add JDBC-spy and PostgreSQL integration regressions for aggregates, row locks and transaction connection reuse.
+
 - Add framework-neutral validated Pageable and Slice<T> with safe sort-property grammar, bounded offset policy and count-free lookahead construction.
 - Add pagination smoke regression and align reactor version pins.
 

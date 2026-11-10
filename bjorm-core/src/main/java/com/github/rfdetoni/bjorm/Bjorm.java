@@ -114,22 +114,54 @@ public final class Bjorm implements Operations {
     }
     public <T> T find(Class<T> type,Object id) {return withConnection(c->find(c,type,id));}
     public <T> List<T> list(Class<T> type,SqlPredicate where) {return select(type).whereNullable(where).fetch();}
-    /** Count mapped rows matching a typed predicate without materializing entities. */
+    /** Native count/exists use generated table mapping and typed, bound predicates. */
     public <T> long count(Class<T> type, SqlPredicate where) {
-        return withConnection(c -> {
-            EntityMapper<T> m = mapper(type);
-            String sql = "SELECT COUNT(*) FROM " + m.table() + (where == null ? "" : " WHERE " + where.sql());
-            try (PreparedStatement ps = prepare(c,sql)) {
-                if (where != null) {
-                    int i = 1;
-                    for (Object value : where.params()) dialect.bindValue(ps,i++,value);
-                }
-                try (ResultSet rs = ps.executeQuery()) {
-                    if (!rs.next()) throw new SQLException("COUNT returned no row");
-                    return rs.getLong(1);
-                }
+        return withConnection(c -> count(c,type,where));
+    }
+    public <T> boolean exists(Class<T> type, SqlPredicate where) {
+        return withConnection(c -> exists(c,type,where));
+    }
+    private <T> long count(Connection c, Class<T> type, SqlPredicate where) throws SQLException {
+        String sql = "SELECT COUNT(*) FROM " + mapper(type).table() +
+            (where == null ? "" : " WHERE " + where.sql());
+        try (PreparedStatement ps = prepare(c,sql)) {
+            bindPredicate(ps,where);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) throw new SQLException("COUNT returned no row");
+                return rs.getLong(1);
             }
-        });
+        }
+    }
+    private <T> boolean exists(Connection c, Class<T> type, SqlPredicate where) throws SQLException {
+        String sql = "SELECT 1 FROM " + mapper(type).table() +
+            (where == null ? "" : " WHERE " + where.sql()) + " LIMIT 1";
+        try (PreparedStatement ps = prepare(c,sql)) {
+            bindPredicate(ps,where);
+            try (ResultSet rs = ps.executeQuery()) { return rs.next(); }
+        }
+    }
+    /** Only meaningful on a live transaction. SELECT ... LIMIT 1 FOR UPDATE/SHARE. */
+    public <T> boolean lockOne(Class<T> type, SqlPredicate where, LockMode mode) {
+        return withConnection(c -> lockOne(c,type,where,mode));
+    }
+    private <T> boolean lockOne(Connection c, Class<T> type, SqlPredicate where,
+                                LockMode mode) throws SQLException {
+        Objects.requireNonNull(where, "Row lock requires a predicate");
+        Objects.requireNonNull(mode, "mode");
+        if (c.getAutoCommit())
+            throw new IllegalStateException("BJORM row locking requires an active transaction");
+        EntityMapper<T> m=mapper(type);
+        String sql = "SELECT " + m.columnFor(m.idProperty()) + " FROM " + m.table() +
+            " WHERE " + where.sql() + " LIMIT 1 " + mode.sql();
+        try (PreparedStatement ps = prepare(c,sql)) {
+            bindPredicate(ps,where);
+            try (ResultSet rs=ps.executeQuery()) { return rs.next(); }
+        }
+    }
+    private void bindPredicate(PreparedStatement ps, SqlPredicate predicate) throws SQLException {
+        if (predicate == null) return;
+        int i=1;
+        for (Object value:predicate.params()) dialect.bindValue(ps,i++,value);
     }
     /** Resolve Spring-style property sorting using generated mapping, never raw client SQL. */
     public <T> SqlOrder mappedOrder(Class<T> type, String property, boolean descending) {
@@ -615,6 +647,11 @@ public final class Bjorm implements Operations {
         public <T> int delete(T value) {return use(c->Bjorm.this.removeGraph(c,value,new HashSet<>()));}
         public <T> T find(Class<T> type,Object id) {return use(c->Bjorm.this.find(c,type,id));}
         public <T> List<T> list(Class<T> type,SqlPredicate where) {return list(select(type).whereNullable(where));}
+        public <T> long count(Class<T> type,SqlPredicate where) {return use(c->Bjorm.this.count(c,type,where));}
+        public <T> boolean exists(Class<T> type,SqlPredicate where) {return use(c->Bjorm.this.exists(c,type,where));}
+        public <T> boolean lockOne(Class<T> type,SqlPredicate where,LockMode mode) {
+            return use(c->Bjorm.this.lockOne(c,type,where,mode));
+        }
         public <T> List<T> list(Select<T> query) {return use(c->Bjorm.this.list(c,query));}
         public <T> Optional<T> first(Select<T> query) {query.limit(1);return use(c->{if(!mapper(query.type()).children().isEmpty()){List<T> values=Bjorm.this.list(c,query);return values.stream().findFirst();}return Bjorm.this.first(c,query,null,mapper(query.type()));});}
         public <T> List<Map<String,Object>> fieldRows(Select<T> query,String[] properties) {

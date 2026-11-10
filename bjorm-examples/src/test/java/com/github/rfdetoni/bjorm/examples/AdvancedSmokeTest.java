@@ -44,6 +44,8 @@ public final class AdvancedSmokeTest {
                 case "executeUpdate"->{calls.add(new Call(connection,sql,Map.copyOf(binds)));yield updateResult;}
                 case "executeQuery"->{calls.add(new Call(connection,sql,Map.copyOf(binds)));
                     if(noRows)yield result(null);
+                    if(sql.startsWith("SELECT COUNT(*) FROM ")) yield result(new Object[]{3L});
+                    if(sql.startsWith("SELECT 1 FROM ")) yield result(new Object[]{1});
                     if(sql.startsWith("SELECT ") && sql.contains(" FROM products")) {
                         String[] columns=sql.substring(7,sql.indexOf(" FROM products")).split(",");
                         Object[] values=new Object[columns.length];
@@ -191,7 +193,30 @@ public final class AdvancedSmokeTest {
         check(first.isPresent() && first.get().getName().equals("Pencil"),"findOne maps matching entity");
         check(spy.last().sql().equals("SELECT id, name, unit_price, status, version FROM products WHERE name = ? LIMIT ?"),"findOne pushes LIMIT 1 to SQL");
         check(spy.last().binds().equals(Map.of(1,"Pencil",2,1)),"findOne binds filter and LIMIT 1");
+        check(db.count(Product.class,Product_.name.eq("Pencil"))==3L,"count avoids entity materialization");
+        check(spy.last().sql().equals("SELECT COUNT(*) FROM products WHERE name = ?"),"count uses single SQL aggregate");
+        check(spy.last().binds().equals(Map.of(1,"Pencil")),"count predicate bound");
+        check(db.exists(Product.class,Product_.name.eq("Pencil")),"exists returns true");
+        check(spy.last().sql().equals("SELECT 1 FROM products WHERE name = ? LIMIT 1"),"exists does not count all rows");
+        check(spy.last().binds().equals(Map.of(1,"Pencil")),"exists predicate bound");
+        try {
+            db.lockOne(Product.class,Product_.name.eq("Pencil"),LockMode.UPDATE);
+            throw new AssertionError("row locks must require active transaction");
+        } catch(IllegalStateException expected) {
+            check(expected.getMessage().contains("active transaction"),"no autocommit lock");
+        }
+        db.tx(tx -> {
+            check(tx.lockOne(Product.class,Product_.name.eq("Pencil"),LockMode.UPDATE),
+                "transaction FOR UPDATE returns existing row");
+            check(spy.last().sql().equals("SELECT id FROM products WHERE name = ? LIMIT 1 FOR UPDATE"),
+                "mapped row lock SQL");
+            check(spy.last().binds().equals(Map.of(1,"Pencil")),"row lock binds typed predicate");
+            check(tx.lockOne(Product.class,Product_.name.eq("Pencil"),LockMode.SHARE),
+                "transaction FOR SHARE returns existing row");
+            check(spy.last().sql().endsWith("LIMIT 1 FOR SHARE"),"shared row lock SQL");
+        });
         spy.noRows=true;
+        check(!db.exists(Product.class,Product_.name.eq("missing")),"exists returns false for empty result");
         check(db.findOne(Product.class,Product_.name.eq("missing")).isEmpty(),"findOne returns empty Optional");
         check(db.findOneFields(Product.class,Product_.name.eq("missing"),"name").isEmpty(),"findOneFields no row");
         spy.noRows=false;
@@ -228,6 +253,8 @@ public final class AdvancedSmokeTest {
         check(db.select(Product.class).where(Product_.name.eq("Pencil")).first().isPresent(),"DSL first entity");
         int startConns=spy.connections.get();
         db.tx(tx -> {
+            check(tx.count(Product.class,Product_.name.eq("Pencil"))==3L,"count stays in transaction");
+            check(tx.exists(Product.class,Product_.name.eq("Pencil")),"exists stays in transaction");
             check(tx.findOne(Product.class,Product_.name.eq("Pencil")).isPresent(),"findOne in transaction");
             check(tx.findFields(Product.class,Product_.name.eq("Pencil"),"name").size()==1,"findFields in transaction");
         });
