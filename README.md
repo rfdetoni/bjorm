@@ -201,6 +201,32 @@ untrusted native SQL. Prefer per-tenant DB grants when tenants are mutually
 untrusted; a connection with access to every schema can still execute
 fully-qualified native SQL if the application exposes it.
 
+## Cursor-backed Stream with automatic cleanup
+
+`withStream(select, callback)` exposes a sequential Java `Stream` backed
+by an open JDBC `ResultSet` within an explicit transaction. The callback
+runs before resources are closed. Both the `ResultSet` and its
+`PreparedStatement` close on normal return **and** on errors; the
+transaction commits on success and rolls back on exception.
+
+```java
+long count = db.withStream(
+    db.select(Product.class).where(Product_.active.eq(true)),
+    stream -> stream.filter(p -> p.price().signum() > 0).count()
+);
+```
+
+Do not escape the stream from the callback or use `parallel()`: the
+iterator checks that it is consumed only by the transaction's owner
+thread. The cursor intentionally does **not** materialize a full list,
+but this does not guarantee constant memory if the JDBC driver buffers
+results internally. PostgreSQL cursor fetching requires a transaction
+(`autoCommit=false`) plus a positive fetch size, which BJORM sets.
+For MySQL, enable cursor fetching in the driver (e.g. `useCursorFetch=true`
+with appropriate server-side statement settings) if streaming large
+results. The new API streams flat mapped entities; for `@Children`
+graphs continue to use `forEach` or bounded pages.
+
 ## Opt-in SQL execution metrics without sensitive data
 
 `Bjorm.observeSql(SqlObserver)` creates an immutable view that tracks the
