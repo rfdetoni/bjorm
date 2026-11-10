@@ -16,6 +16,7 @@ java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.MappingFlag
 java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.OrdinalSmokeTest
 java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.AuditSmokeTest
 java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.IdStrategySmokeTest
+java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.StaticSchemaSmokeTest
 java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.GraphQuerySmokeTest
 java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.GraphSharedRelationSmokeTest
 java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.AnnotatedJoinSmokeTest
@@ -79,6 +80,16 @@ if javac -cp "$OUT/core" -processorpath "$OUT/core:$OUT/processor" -processor co
   echo 'FAIL: processor accepted conflicting @Id policy flags' >&2; exit 1
 fi
 grep -q 'cannot be combined with legacy' "$OUT/id-negative.log"
+cat > "$OUT/UnsafeSchema.java" <<'JAVA'
+import com.github.rfdetoni.bjorm.*;
+import java.util.UUID;
+@Table(value="safe_table",schema="bad;DROP TABLE users")
+public record UnsafeSchema(@Id UUID id,String name) {}
+JAVA
+if javac -cp "$OUT/core" -processorpath "$OUT/core:$OUT/processor" -processor com.github.rfdetoni.bjorm.processor.EntityProcessor -d "$OUT/example" "$OUT/UnsafeSchema.java" 2>"$OUT/schema-negative.log"; then
+  echo 'FAIL: processor accepted unsafe static schema identifier' >&2; exit 1
+fi
+grep -q 'Invalid static schema identifier' "$OUT/schema-negative.log"
 if grep -R -l 'import org\.springframework' bjorm-core/src/main/java bjorm-processor/src/main/java; then
   echo 'FAIL: framework dependency leaked into BJORM core/processor' >&2; exit 1
 fi

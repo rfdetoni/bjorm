@@ -82,5 +82,7 @@ public interface EntityMapper<T> extends RowMapper<T> {
         columnFor(property);
         return value;
     }
+    /** Fixed schema selected at compilation; never interchangeable with runtime tenant routing. */
+    default String staticSchema() { return ""; }
     default String table() { return ""; }
 }

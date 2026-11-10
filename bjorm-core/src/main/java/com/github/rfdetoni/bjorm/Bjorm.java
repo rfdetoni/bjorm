@@ -90,6 +90,15 @@ public final class Bjorm implements Operations {
                 "performance_schema","sys","pg_catalog").contains(schema.toLowerCase(Locale.ROOT)))
             throw new IllegalArgumentException("Unsafe tenant schema identifier");
         if(tenantSchema!=null)throw new IllegalStateException("Cannot rebind an already-scoped BJORM instance");
+        // Static schema SQL bypasses search_path and could cross tenant boundaries.
+        // Refuse the entire mapper registry, not just an individual operation.
+        for(EntityMapper<?> mapper:mappers.values()) {
+            if(mapper.staticSchema()!=null && !mapper.staticSchema().isBlank())
+                throw new IllegalStateException("Fixed-schema @Table mapping cannot be used with tenantRequired BJORM");
+            // Custom mapper implementations must not bypass the generated metadata check.
+            if(mapper.table()==null || !TENANT_IDENTIFIER.matcher(mapper.table()).matches())
+                throw new IllegalStateException("Tenant-required mappers must target unqualified, safe table identifiers");
+        }
         return new Bjorm(this,schema);
     }
     public SqlDialect dialect(){return dialect;}

@@ -71,13 +71,22 @@ public final class TenantSmokeTest {
     }
     public static void main(String[] args) {
         Spy pg=new Spy();
-        Bjorm root=Bjorm.tenantRequired(pg.source(),BjormOptions.defaults(),SqlDialects.POSTGRESQL);
+        Bjorm root=Bjorm.tenantRequired(pg.source(),BjormOptions.defaults(),SqlDialects.POSTGRESQL,ItUser_BjormMapper.INSTANCE);
         try {root.execute("UPDATE users SET name='x'",null);throw new AssertionError("unscoped root executed");}
         catch(IllegalStateException expected) {check(pg.connections==0,"must refuse before borrowing connection");}
         for(String unsafe:List.of("public","pg_catalog","pg_temp_1","information_schema","test; DROP TABLE users","UPPER.CASE")) {
             try {root.forTenant(unsafe);throw new AssertionError("unsafe schema accepted: "+unsafe);}
             catch(IllegalArgumentException expected) {}
         }
+        Bjorm mixed=Bjorm.tenantRequired(pg.source(),BjormOptions.defaults(),
+            SqlDialects.POSTGRESQL,StaticSchemaRecord_BjormMapper.INSTANCE);
+        int connectionBefore=pg.connections;
+        try {mixed.forTenant("company_a");
+            throw new AssertionError("fixed-schema mapper accepted in tenant-required context");}
+        catch(IllegalStateException expected) {
+            check(expected.getMessage().contains("Fixed-schema"),"static mapping must be explicitly refused");
+        }
+        check(pg.connections==connectionBefore,"fixed schema is rejected before connection checkout");
         Bjorm scoped=root.forTenant("company_a");
         try {scoped.forTenant("company_b");throw new AssertionError("tenant rebind allowed");}
         catch(IllegalStateException expected) {}
@@ -94,7 +103,7 @@ public final class TenantSmokeTest {
         check(pg.events.stream().filter(x->x.startsWith("SET LOCAL search_path")).count()==3,
             "every borrowed PG transaction is explicitly tenant-scoped");
         Spy mysql=new Spy();
-        Bjorm mysqlRoot=Bjorm.tenantRequired(mysql.source(),BjormOptions.defaults(),SqlDialects.MYSQL);
+        Bjorm mysqlRoot=Bjorm.tenantRequired(mysql.source(),BjormOptions.defaults(),SqlDialects.MYSQL,ItUser_BjormMapper.INSTANCE);
         Bjorm tenant=mysqlRoot.forTenant("company_a");
         check(tenant.execute("UPDATE users SET name='y'",ps->{})==1,"MySQL tenant write");
         check(mysql.events.contains("write:company_a:UPDATE users SET name='y'"),"MySQL catalog scoped on write");
