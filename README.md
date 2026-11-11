@@ -97,8 +97,16 @@ db.tx(tx -> {
 ```
 
 `LockMode.UPDATE` and `LockMode.SHARE` map to `FOR UPDATE` and
-`FOR SHARE` (PostgreSQL and MySQL 8.4). `lockOne` requires a non-null
-typed predicate and a live transaction. A call with an auto-commit connection
+`FOR SHARE` (PostgreSQL and MySQL 8.4). `UPDATE_NOWAIT` / `SHARE_NOWAIT`
+fail immediately when a matching row is locked by another transaction;
+`UPDATE_SKIP_LOCKED` / `SHARE_SKIP_LOCKED` return `false` when the selected
+row is locked, without waiting. `SKIP LOCKED` is appropriate for competing
+workers but must not be treated as a consistent snapshot or proof that a
+row does not exist. PostgreSQL raises SQLSTATE `55P03` for NOWAIT;
+MySQL 8.4 raises error 3572. These modes are exercised with two actual
+competing JDBC connections in integration tests.
+
+`lockOne` requires a non-null typed predicate and a live transaction. A call with an auto-commit connection
 fails explicitly; doing row locking outside a transaction would silently
 release the lock. A row-missing predicate returns `false`.
 
