@@ -5,6 +5,7 @@
 ## Verified capabilities
 
 - No JPA, Hibernate, or runtime entity reflection. Generated record/POJO mappers, typed fields, projections, compiled `@Query` methods and optional ServiceLoader mapper registration.
+- PostgreSQL native DML `executeReturning` maps bounded generated-result rows in an explicit JDBC transaction; MySQL fails closed. Results cannot prove commit within an external transaction.
 - PostgreSQL 17 and MySQL 8.4 dialects, typed JSON codecs, `@Converted` generated JDBC value converters, `@Embedded` scalar value records, `@EnumOrdinal`, `@Transient`, audit timestamps and compile-validated `@Id` strategies.
 - UUIDv7, database identity columns, assigned composite primary keys, optimistic versioned writes, versioned MySQL single-statement compare-and-swap UPSERT, PostgreSQL UPSERT, mapped `updateBy/deleteBy`, bounded batches, count/exists and projections.
 - Root `@Children`, direct `@ManyToOne`, child direct `@ManyToOne`, and eager one-query UNION ALL graph hydration. Composite-key to-one JOINs and bounded multi-hop to-one loading are supported on flat targets, but cycles, referenced targets with to-many children, composite-key @Children and multi-hop references inside to-many graphs remain unsupported.
