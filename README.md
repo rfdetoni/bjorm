@@ -980,6 +980,29 @@ mapper retains a shared converter instance. Native `@Query` parameters
 need explicit JDBC values; they are not automatically associated with a
 particular entity converter.
 
+## Dialect-aware JSON/JSONB predicates
+
+`SqlJsonPredicates.contains` supports PostgreSQL `jsonb @> CAST(? AS jsonb)`
+and MySQL `JSON_CONTAINS(column, CAST(? AS JSON))`. Use the current BJORM
+dialect and a generated mapped `Field`:
+
+```java
+SqlPredicate filter = SqlJsonPredicates.contains(
+    ItDocument_.payload, db.dialect(), "{\"published\":true}");
+SqlPredicate matching = SqlJsonPredicates.textEquals(
+    ItDocument_.payload, db.dialect(), List.of("meta", "status"), "ready");
+```
+
+`textEquals` binds each PostgreSQL `jsonb_extract_path_text` key
+as a parameter; MySQL binds a constructed, strictly validated
+`JSON_EXTRACT` object path as a single parameter. Only simple object keys
+(maximum 16 segments) are supported, not arbitrary user JSONPath syntax.
+Values and paths are never concatenated into SQL. SQL NULL and JSON null
+are not treated as equal to a non-null expected text; use separate SQL null
+predicates when that distinction matters. Always index frequent JSON
+predicates for the target database; this feature does not silently generate
+schema DDL or claim equivalent index plans across dialects.
+
 ## Typed JSON (no Jackson dependency in core)
 
 `@Json String` still binds the text directly. For a domain object, list or map, supply a codec whose parameter exactly matches the Java property type:

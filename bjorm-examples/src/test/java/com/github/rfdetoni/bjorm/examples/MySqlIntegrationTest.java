@@ -397,6 +397,19 @@ public final class MySqlIntegrationTest {
                     "MySQL SERIALIZABLE transaction accepts mapped SQL"));
             ItDocument json=db.insertReturning(new ItDocument(null,"{\"count\":2}"));
             check(db.find(ItDocument.class,json.id()).payload().contains("count"),"MySQL native JSON");
+            ItDocument searchableJson=db.insertReturning(new ItDocument(null,
+                "{\"meta\":{\"status\":\"ready\"},\"flags\":{\"published\":true}}"));
+            check(db.count(ItDocument.class,
+                SqlJsonPredicates.contains(ItDocument_.payload,db.dialect(),
+                    "{\"flags\":{\"published\":true}}")
+                    .and(ItDocument_.id.eq(searchableJson.id())))==1L,
+                "MySQL JSON_CONTAINS accepts bound JSON value");
+            check(db.count(ItDocument.class,
+                SqlJsonPredicates.textEquals(ItDocument_.payload,db.dialect(),
+                    List.of("meta","status"),"ready")
+                    .and(ItDocument_.id.eq(searchableJson.id())))==1L,
+                "MySQL JSON_EXTRACT receives a bound validated path");
+
             AutoLongRecord serial=db.insertReturning(new AutoLongRecord(null,"serial"));
             check(serial.id()!=null&&serial.id()>0,"MySQL AUTO_INCREMENT key");
             ItOrderWithCustomer combined=new ItOrderWithCustomer();
