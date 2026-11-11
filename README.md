@@ -747,6 +747,34 @@ a separate entity relation, or an explicit projection for those cases.
 The processor rejects unsupported types, invalid SQL column names and
 colliding generated DSL property names at compile time.
 
+## Composite-key foreign keys (compile-time JOIN)
+
+`@ManyToOne(mappedByParts={...})` supports referencing a flat entity whose
+primary key has two or more explicitly assigned `@Id` components. Provide
+**all local FK Java property names in the same declaration order as the
+target key**. Both their number and types are checked by the annotation
+processor, with no runtime entity reflection:
+
+```java
+@Table("products")
+public record ProductKey(@Id(strategy=IdStrategy.ASSIGNED) UUID tenantId,
+                         @Id(strategy=IdStrategy.ASSIGNED) String sku,
+                         String title) {}
+
+@Table("line_items")
+public record LineItem(@Id UUID id, UUID tenantId, String productSku,
+    String label,
+    @ManyToOne(mappedByParts={"tenantId","productSku"}) ProductKey product) {}
+```
+
+The generated SQL joins on **both** key parts using prepared entity
+mappers. A nullable `LEFT` relation yields `null` when no complete target
+matches; the FK must still be protected by a matching database constraint.
+Existing single-key `@ManyToOne(mappedBy="customerId")` remains unchanged.
+The referenced entity must be flat: recursively referenced graphs, cycles
+and composite-key `@Children` still need a separate planner. Rebinding or
+manually setting a resolved reference does not cascade persistence to it.
+
 ## Eager ManyToOne with compile-time joins
 
 `@ManyToOne(mappedBy="customerId")` connects a scalar foreign key on the
