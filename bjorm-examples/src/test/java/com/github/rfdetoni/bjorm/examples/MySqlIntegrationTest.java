@@ -34,6 +34,7 @@ public final class MySqlIntegrationTest {
             st.execute("CREATE TABLE bjorm_it_invoices(id CHAR(36) PRIMARY KEY,customerId CHAR(36),reference VARCHAR(255),FOREIGN KEY(customerId) REFERENCES bjorm_it_users(id))");
             st.execute("CREATE TABLE bjorm_it_composite(tenantId CHAR(36) NOT NULL,sku VARCHAR(255) NOT NULL,label VARCHAR(255),version INT NOT NULL DEFAULT 0,PRIMARY KEY(tenantId,sku))");
             st.execute("CREATE TABLE bjorm_it_composite_pojo(tenantId CHAR(36) NOT NULL,sku VARCHAR(255) NOT NULL,label VARCHAR(255),PRIMARY KEY(tenantId,sku))");
+            st.execute("CREATE TABLE bjorm_it_composite_refs(id CHAR(36) PRIMARY KEY,tenantId CHAR(36),sku VARCHAR(255),label VARCHAR(255),FOREIGN KEY(tenantId,sku) REFERENCES bjorm_it_composite(tenantId,sku))");
             st.execute("CREATE TABLE bjorm_it_embedded_records(id CHAR(36) PRIMARY KEY,label VARCHAR(255),shipping_street VARCHAR(255),shipping_postal VARCHAR(255))");
             st.execute("CREATE TABLE bjorm_it_embedded_pojos(id CHAR(36) PRIMARY KEY,label VARCHAR(255),billing_street VARCHAR(255),billing_postal VARCHAR(255))");
             st.execute("CREATE TABLE bjorm_it_converted(id CHAR(36) PRIMARY KEY,amount DECIMAL(18,2),label VARCHAR(255))");
@@ -66,7 +67,7 @@ public final class MySqlIntegrationTest {
                 ItInvoice_BjormMapper.INSTANCE,ItInvoiceInner_BjormMapper.INSTANCE,
                 ItInvoicePojo_BjormMapper.INSTANCE,
                 ItEmbeddedRecord_BjormMapper.INSTANCE,ItEmbeddedPojo_BjormMapper.INSTANCE,
-                ItCompositeRecord_BjormMapper.INSTANCE,ItCompositePojo_BjormMapper.INSTANCE,ItConvertedRecord_BjormMapper.INSTANCE);
+                ItCompositeRecord_BjormMapper.INSTANCE,ItCompositePojo_BjormMapper.INSTANCE,ItConvertedRecord_BjormMapper.INSTANCE,ItCompositeReference_BjormMapper.INSTANCE);
             ItUser invoiceCustomer=db.insertReturning(new ItUser(null,"MySQL Invoice Customer",27));
             ItInvoice invoice=db.insertReturning(new ItInvoice(null,invoiceCustomer.id(),"MYSQL-INV",null));
             java.util.concurrent.atomic.AtomicInteger queryCount=new java.util.concurrent.atomic.AtomicInteger();
@@ -167,6 +168,20 @@ public final class MySqlIntegrationTest {
                 ItCompositeRecord_.sku.eq("SKU-MY"));
                 throw new AssertionError("MySQL bulk write altered tuple identifier");}
             catch(IllegalArgumentException expected) {}
+            ItCompositeRecord anotherComposite=db.insertReturning(new ItCompositeRecord(
+                compositeTenant,"OTHER","different key part",0));
+            ItCompositeReference linkedComposite=db.insertReturning(new ItCompositeReference(
+                null,compositeTenant,"SKU-MY","linked",null));
+            check(db.find(ItCompositeReference.class,linkedComposite.id()).product().equals(modified),
+                "MySQL composite FK eager JOIN must include both UUID and SKU key parts");
+            check(db.select(ItCompositeReference.class).where(
+                ItCompositeReference_.id.eq(linkedComposite.id())).limit(1).fetch().getFirst()
+                .product().sku().equals("SKU-MY"),"MySQL composite FK root paging");
+            ItCompositeReference optionalComposite=db.insertReturning(new ItCompositeReference(
+                null,null,null,"nullable",null));
+            check(db.find(ItCompositeReference.class,optionalComposite.id()).product()==null,
+                "MySQL nullable composite FK LEFT JOIN");
+            db.delete(linkedComposite);db.delete(optionalComposite);db.delete(anotherComposite);
             check(db.delete(modified)==1 && db.find(ItCompositeRecord.class,compoundKey)==null,
                 "MySQL versioned composite PK delete");
             ItCompositePojo tuplePojo=new ItCompositePojo();
@@ -508,7 +523,7 @@ public final class MySqlIntegrationTest {
             System.out.println("PASS: MySQL 8.4 CRUD, native upsert, JSON, UUID v7, AUTO_INCREMENT and eager JOIN graph");
         }finally {
             try(Connection c=source.getConnection();Statement st=c.createStatement()){
-                for(String name:List.of("bjorm_it_converted","bjorm_it_composite","bjorm_it_composite_pojo","bjorm_it_embedded_records","bjorm_it_embedded_pojos","bjorm_it_invoices","bjorm_it_order_notes","bjorm_it_order_lines_to_one","bjorm_it_order_lines","bjorm_it_orders",
+                for(String name:List.of("bjorm_it_converted","bjorm_it_composite_refs","bjorm_it_composite","bjorm_it_composite_pojo","bjorm_it_embedded_records","bjorm_it_embedded_pojos","bjorm_it_invoices","bjorm_it_order_notes","bjorm_it_order_lines_to_one","bjorm_it_order_lines","bjorm_it_orders",
                     "bjorm_it_columns","bjorm_it_ordinal","bjorm_it_audit","bjorm_it_audit_pojo",
                     "bjorm_it_explicit_assigned","bjorm_it_explicit_identity","bjorm_it_explicit_uuid",
                     "bjorm_it_static",
