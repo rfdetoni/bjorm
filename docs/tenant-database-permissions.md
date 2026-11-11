@@ -185,10 +185,16 @@ back. The returned copy includes generated IDs and audit fields after a
 successful statement, but in an **external transaction** it does not prove the
 transaction has committed. Discard that returned copy on rollback.
 
-These APIs intentionally reject `@Children` graphs; mutable nested child
-objects would require deep graph copying and their own atomicity guarantees.
-Generated detached POJO copies now also reconstruct `@Embedded` scalar value
-records instead of sharing those nested instances. Typed non-String `@Json`
+Detached `@Children` graphs now recursively copy every node before JDBC,
+including two or more levels of immutable records or POJOs with public
+collection replacement setters. The generated copies receive new FKs and IDs,
+while caller-owned objects remain unchanged. A cycle, shared mutable child
+instance or unsupported collection replacement fails before connection checkout.
+The entire graph is persisted in one JDBC transaction (or joins the existing
+framework-owned transaction); a rollback removes the attempted parent and
+children. Never treat a returned detached copy from an external transaction
+as proof of commit. Generated detached POJO copies also reconstruct
+`@Embedded` scalar value records instead of sharing nested instances. Typed non-String `@Json`
 fields are explicitly rejected on detached POJOs **and records**: arbitrary user codecs cannot
 be assumed to avoid mutating shared domain objects. Use an immutable DTO,
 explicit caller-owned snapshot, or a future generated deep-copy contract
