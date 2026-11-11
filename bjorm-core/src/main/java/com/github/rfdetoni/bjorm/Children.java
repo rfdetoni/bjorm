@@ -7,7 +7,10 @@ import java.lang.annotation.*;
 @Retention(RetentionPolicy.CLASS)
 @Target({ElementType.FIELD, ElementType.RECORD_COMPONENT})
 public @interface Children {
-    String mappedBy();
+    /** Single FK property; use mappedByParts for a composite parent primary key. */
+    String mappedBy() default "";
+    /** Child FK property names ordered to match every parent @Id. */
+    String[] mappedByParts() default {};
     /** LEFT (default) preserves parents with no children. INNER filters those parents out of find/list. */
     JoinType type() default JoinType.LEFT;
 }
