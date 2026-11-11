@@ -57,6 +57,23 @@ public final class TypedJsonSmokeTest {
                     new MoneyValue(new java.math.BigDecimal("42.00")),"immutable"));
             throw new AssertionError("Detached record must reject conversion without a verified deep-copy contract");
         } catch(UnsupportedOperationException expected) {}
+        SqlPredicate pgPath=SqlJsonPredicates.textEquals(
+            new Field<String>("payload"),SqlDialects.POSTGRESQL,
+            List.of("meta","status"),"ready");
+        if(pgPath.sql().contains("meta") || pgPath.sql().contains("status") ||
+            !pgPath.params().equals(List.of("meta","status","ready")))
+            throw new AssertionError("PostgreSQL JSON path/value must be bound, not interpolated");
+        SqlPredicate mysqlPath=SqlJsonPredicates.textEquals(
+            new Field<String>("payload"),SqlDialects.MYSQL,
+            List.of("meta","status"),"ready");
+        if(mysqlPath.sql().contains("$.meta.status") ||
+            !mysqlPath.params().equals(List.of("$.meta.status","ready")))
+            throw new AssertionError("MySQL JSON path must be a bound value");
+        try {
+            SqlJsonPredicates.textEquals(new Field<String>("payload"),SqlDialects.POSTGRESQL,
+                List.of("meta); DROP TABLE users; --"),"anything");
+            throw new AssertionError("Unsafe JSON path segment was accepted");
+        } catch(IllegalArgumentException expected) {}
         System.out.println("PASS: dialect-aware JSON binding, decoding and detached record/POJO safety");
     }
 }
