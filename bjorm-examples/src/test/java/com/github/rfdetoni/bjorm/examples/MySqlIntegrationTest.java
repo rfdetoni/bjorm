@@ -115,6 +115,14 @@ public final class MySqlIntegrationTest {
                 detachedEmbeddedSource.getBilling()==embeddedAddress &&
                 detachedEmbeddedSaved.getId()!=null,
                 "MySQL detached write creates a separate embedded value snapshot");
+            UUID rejectedConvertedId=UUID.randomUUID();
+            try {
+                db.insertDetached(new ItConvertedRecord(rejectedConvertedId,
+                    new MoneyValue(new java.math.BigDecimal("19.00")),"unsafe detached"));
+                throw new AssertionError("MySQL detached record with converter was accepted");
+            } catch(UnsupportedOperationException expected) {}
+            check(db.find(ItConvertedRecord.class,rejectedConvertedId)==null,
+                "MySQL fail-closed detached copy must not execute INSERT");
             ItConvertedRecord converted=db.insertReturning(new ItConvertedRecord(
                 UUID.randomUUID(),new MoneyValue(new java.math.BigDecimal("22.50")),"convertible"));
             check(db.find(ItConvertedRecord.class,converted.id()).amount().equals(converted.amount()),

@@ -146,10 +146,10 @@ These APIs intentionally reject `@Children` graphs; mutable nested child
 objects would require deep graph copying and their own atomicity guarantees.
 Generated detached POJO copies now also reconstruct `@Embedded` scalar value
 records instead of sharing those nested instances. Typed non-String `@Json`
-fields are explicitly rejected on detached POJOs: arbitrary user codecs cannot
+fields are explicitly rejected on detached POJOs **and records**: arbitrary user codecs cannot
 be assumed to avoid mutating shared domain objects. Use an immutable DTO,
 explicit caller-owned snapshot, or a future generated deep-copy contract
-before opting in to such writes.
+before opting in to such writes. Converted columns with user-defined converter\nimplementations are also rejected for detached POJOs and records until\na deep-copy contract is available.
 Existing `insert`, `insertReturning` and `upsertReturning` retain their
 0.x in-place POJO materialization semantics for compatibility. For immutable
 records, the detached methods reuse the normal immutable copy behavior.
