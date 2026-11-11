@@ -32,6 +32,7 @@ public final class PostgresIntegrationTest {
         try(Connection c=ds.getConnection();Statement st=c.createStatement()){
             st.execute("CREATE TABLE bjorm_it_users (id uuid PRIMARY KEY, name text NOT NULL, age integer NOT NULL)");
             st.execute("CREATE TABLE bjorm_it_invoices (id uuid PRIMARY KEY, customerId uuid REFERENCES bjorm_it_users(id), reference text)");
+            st.execute("CREATE TABLE bjorm_it_invoice_links (id uuid PRIMARY KEY,invoiceId uuid REFERENCES bjorm_it_invoices(id),label text)");
             st.execute("CREATE TABLE bjorm_it_composite (tenantId uuid NOT NULL,sku text NOT NULL,label text,version integer NOT NULL DEFAULT 0,PRIMARY KEY(tenantId,sku))");
             st.execute("CREATE TABLE bjorm_it_composite_pojo (tenantId uuid NOT NULL,sku text NOT NULL,label text,PRIMARY KEY(tenantId,sku))");
             st.execute("CREATE TABLE bjorm_it_composite_refs (id uuid PRIMARY KEY,tenantId uuid,sku text,label text,FOREIGN KEY(tenantId,sku) REFERENCES bjorm_it_composite(tenantId,sku))");
@@ -76,7 +77,7 @@ public final class PostgresIntegrationTest {
             ItAuditRecord_BjormMapper.INSTANCE,ItAuditPojo_BjormMapper.INSTANCE,
             ExplicitAssignedRecord_BjormMapper.INSTANCE,ExplicitIdentityRecord_BjormMapper.INSTANCE,
             ExplicitUuidRecord_BjormMapper.INSTANCE,StaticSchemaRecord_BjormMapper.INSTANCE,
-            ItInvoice_BjormMapper.INSTANCE,ItInvoiceInner_BjormMapper.INSTANCE,
+            ItInvoice_BjormMapper.INSTANCE,ItInvoiceLink_BjormMapper.INSTANCE,ItInvoiceInner_BjormMapper.INSTANCE,
             ItInvoicePojo_BjormMapper.INSTANCE,
             ItEmbeddedRecord_BjormMapper.INSTANCE,ItEmbeddedPojo_BjormMapper.INSTANCE,
             ItCompositeRecord_BjormMapper.INSTANCE,ItCompositePojo_BjormMapper.INSTANCE,ItConvertedRecord_BjormMapper.INSTANCE,ItCompositeReference_BjormMapper.INSTANCE,
@@ -100,6 +101,22 @@ public final class PostgresIntegrationTest {
                 hydrated.customer().name().equals("Invoice Customer"),
                 "PostgreSQL ManyToOne record hydrates parent");
             check(selects.get()==1,"ManyToOne record hydrates in one SQL SELECT, not N+1");
+            ItInvoiceLink link=db.insertReturning(new ItInvoiceLink(null,createdInvoice.id(),"linked",null));
+            java.util.concurrent.atomic.AtomicInteger multiHopQueries=new java.util.concurrent.atomic.AtomicInteger();
+            Bjorm observedHops=db.observeSql((operation,duration,ok)->{
+                if(operation==SqlOperation.QUERY)multiHopQueries.incrementAndGet();
+            });
+            ItInvoiceLink loadedLink=observedHops.find(ItInvoiceLink.class,link.id());
+            check(loadedLink.invoice()!=null && loadedLink.invoice().customer()!=null &&
+                loadedLink.invoice().customer().id().equals(invoiceCustomer.id()) &&
+                multiHopQueries.get()==1,
+                "PostgreSQL nested to-one references hydrate from exactly one SQL SELECT");
+            check(db.select(ItInvoiceLink.class).where(ItInvoiceLink_.id.eq(link.id()))
+                .limit(1).fetch().getFirst().invoice().customer()!=null,
+                "PostgreSQL root paging remains correct for two-hop to-one graph");
+            ItInvoiceLink emptyLink=db.insertReturning(new ItInvoiceLink(null,null,"missing-parent",null));
+            check(db.find(ItInvoiceLink.class,emptyLink.id()).invoice()==null,
+                "PostgreSQL outer nullable to-one preserves the root");
             SqlPredicate correlated=ItInvoice_.customerId.as("i").sameAs(ItUser_.id.as("u"))
                 .and(ItInvoice_.reference.as("i").eq("invoice-linked"));
             check(db.select(ItUser.class).as("u")
@@ -742,6 +759,7 @@ public final class PostgresIntegrationTest {
                 st.execute("DROP TABLE IF EXISTS bjorm_it_composite_refs");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_composite");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_composite_pojo");
+                st.execute("DROP TABLE IF EXISTS bjorm_it_invoice_links");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_invoices");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_embedded_records");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_embedded_pojos");

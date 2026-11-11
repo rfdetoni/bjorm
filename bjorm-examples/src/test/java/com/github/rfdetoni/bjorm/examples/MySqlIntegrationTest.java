@@ -32,6 +32,7 @@ public final class MySqlIntegrationTest {
         try(Connection c=source.getConnection();Statement st=c.createStatement()){
             st.execute("CREATE TABLE bjorm_it_users(id CHAR(36) PRIMARY KEY,name VARCHAR(255) UNIQUE,age INT NOT NULL)");
             st.execute("CREATE TABLE bjorm_it_invoices(id CHAR(36) PRIMARY KEY,customerId CHAR(36),reference VARCHAR(255),FOREIGN KEY(customerId) REFERENCES bjorm_it_users(id))");
+            st.execute("CREATE TABLE bjorm_it_invoice_links(id CHAR(36) PRIMARY KEY,invoiceId CHAR(36),label VARCHAR(255),FOREIGN KEY(invoiceId) REFERENCES bjorm_it_invoices(id))");
             st.execute("CREATE TABLE bjorm_it_composite(tenantId CHAR(36) NOT NULL,sku VARCHAR(255) NOT NULL,label VARCHAR(255),version INT NOT NULL DEFAULT 0,PRIMARY KEY(tenantId,sku))");
             st.execute("CREATE TABLE bjorm_it_composite_pojo(tenantId CHAR(36) NOT NULL,sku VARCHAR(255) NOT NULL,label VARCHAR(255),PRIMARY KEY(tenantId,sku))");
             st.execute("CREATE TABLE bjorm_it_composite_refs(id CHAR(36) PRIMARY KEY,tenantId CHAR(36),sku VARCHAR(255),label VARCHAR(255),FOREIGN KEY(tenantId,sku) REFERENCES bjorm_it_composite(tenantId,sku))");
@@ -67,7 +68,7 @@ public final class MySqlIntegrationTest {
                 ItAuditRecord_BjormMapper.INSTANCE,ItAuditPojo_BjormMapper.INSTANCE,
                 ExplicitAssignedRecord_BjormMapper.INSTANCE,ExplicitIdentityRecord_BjormMapper.INSTANCE,
                 ExplicitUuidRecord_BjormMapper.INSTANCE,StaticSchemaRecord_BjormMapper.INSTANCE,
-                ItInvoice_BjormMapper.INSTANCE,ItInvoiceInner_BjormMapper.INSTANCE,
+                ItInvoice_BjormMapper.INSTANCE,ItInvoiceLink_BjormMapper.INSTANCE,ItInvoiceInner_BjormMapper.INSTANCE,
                 ItInvoicePojo_BjormMapper.INSTANCE,
                 ItEmbeddedRecord_BjormMapper.INSTANCE,ItEmbeddedPojo_BjormMapper.INSTANCE,
                 ItCompositeRecord_BjormMapper.INSTANCE,ItCompositePojo_BjormMapper.INSTANCE,ItConvertedRecord_BjormMapper.INSTANCE,ItCompositeReference_BjormMapper.INSTANCE,
@@ -81,6 +82,22 @@ public final class MySqlIntegrationTest {
             check(observed.find(ItInvoice.class,invoice.id()).customer().name().equals("MySQL Invoice Customer"),
                 "MySQL ManyToOne record hydrated");
             check(queryCount.get()==1,"MySQL eager parent loaded without N+1 SQL");
+            ItInvoiceLink link=db.insertReturning(new ItInvoiceLink(null,invoice.id(),"linked",null));
+            java.util.concurrent.atomic.AtomicInteger multiHopQueries=new java.util.concurrent.atomic.AtomicInteger();
+            Bjorm observedHops=db.observeSql((operation,duration,ok)->{
+                if(operation==SqlOperation.QUERY)multiHopQueries.incrementAndGet();
+            });
+            ItInvoiceLink loadedLink=observedHops.find(ItInvoiceLink.class,link.id());
+            check(loadedLink.invoice()!=null && loadedLink.invoice().customer()!=null &&
+                loadedLink.invoice().customer().id().equals(invoiceCustomer.id()) &&
+                multiHopQueries.get()==1,
+                "MySQL two-hop to-one graph requires exactly one query");
+            check(db.select(ItInvoiceLink.class).where(ItInvoiceLink_.id.eq(link.id()))
+                .limit(1).fetch().getFirst().invoice().customer()!=null,
+                "MySQL two-hop root paging is preserved");
+            ItInvoiceLink emptyLink=db.insertReturning(new ItInvoiceLink(null,null,"missing-parent",null));
+            check(db.find(ItInvoiceLink.class,emptyLink.id()).invoice()==null,
+                "MySQL nullable outer to-one retains root");
             SqlPredicate correlated=ItInvoice_.customerId.as("i").sameAs(ItUser_.id.as("u"))
                 .and(ItInvoice_.reference.as("i").eq("MYSQL-INV"));
             check(db.select(ItUser.class).as("u")
@@ -590,7 +607,7 @@ public final class MySqlIntegrationTest {
             System.out.println("PASS: MySQL 8.4 CRUD, native upsert, JSON, UUID v7, AUTO_INCREMENT and eager JOIN graph");
         }finally {
             try(Connection c=source.getConnection();Statement st=c.createStatement()){
-                for(String name:List.of("bjorm_it_shared_leaves","bjorm_it_shared_branches","bjorm_it_shared_roots","bjorm_it_converted","bjorm_it_composite_refs","bjorm_it_composite","bjorm_it_composite_pojo","bjorm_it_embedded_records","bjorm_it_embedded_pojos","bjorm_it_invoices","bjorm_it_order_notes","bjorm_it_order_lines_to_one","bjorm_it_order_lines","bjorm_it_orders",
+                for(String name:List.of("bjorm_it_shared_leaves","bjorm_it_shared_branches","bjorm_it_shared_roots","bjorm_it_converted","bjorm_it_composite_refs","bjorm_it_composite","bjorm_it_composite_pojo","bjorm_it_embedded_records","bjorm_it_embedded_pojos","bjorm_it_invoice_links","bjorm_it_invoices","bjorm_it_order_notes","bjorm_it_order_lines_to_one","bjorm_it_order_lines","bjorm_it_orders",
                     "bjorm_it_columns","bjorm_it_ordinal","bjorm_it_audit","bjorm_it_audit_pojo",
                     "bjorm_it_explicit_assigned","bjorm_it_explicit_identity","bjorm_it_explicit_uuid",
                     "bjorm_it_static",

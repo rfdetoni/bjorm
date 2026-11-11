@@ -891,15 +891,47 @@ public final class Bjorm implements Operations {
                 " = "+targetAlias+"."+target.columnFor(targetKeys.get(i)));
         return predicates.toString();
     }
-    /**
-     * Eager to-one relations use a single SQL statement and positional
-     * compile-time mappers. The CTE applies paging to root records BEFORE
-     * joining the referenced rows, so no N+1 SELECTs are generated.
-     * Only a direct one-level @ManyToOne graph is hydrated; referenced
-     * entities are read as ordinary mapped rows, without following their
-     * own relationships.
-     */
+    /** A compile-time mapped to-one path, ordered parents before descendants. */
+    private record ParentHop(int parentSlot,ParentRelation<Object> relation,
+                             EntityMapper<Object> target,int offset,String alias) {}
+
+    /** Build a finite single-query join tree. Never follow to-many targets or type cycles. */
     @SuppressWarnings("unchecked")
+    private void collectParentHops(EntityMapper<?> source,int parentSlot,
+                                   Set<Class<?>> ancestors,List<ParentHop> hops,
+                                   int[] nextOffset) {
+        if(!ancestors.add(source.type()))
+            throw new UnsupportedOperationException(
+                "Recursive @ManyToOne type cycle requires an explicit query: "+source.type());
+        if(ancestors.size()>8)
+            throw new UnsupportedOperationException("Eager @ManyToOne path exceeds eight types");
+        for(ParentRelation<?> relationship:source.parents()) {
+            if(hops.size()>=64)
+                throw new UnsupportedOperationException("Eager to-one graph exceeds 64 mapped relation slots");
+            EntityMapper<Object> target=mapper(relationship.targetType());
+            if(!target.children().isEmpty())
+                throw new UnsupportedOperationException(
+                    "Referenced to-many graphs require a separate explicit query: "+target.type());
+            // A nested INNER JOIN after a nullable ancestor would wrongly filter
+            // away the root. Until grouped joins are available, fail explicitly.
+            if(parentSlot>=0 && relationship.joinType()!=JoinType.LEFT)
+                throw new UnsupportedOperationException(
+                    "Nested @ManyToOne requires LEFT join to preserve nullable ancestors");
+            int slotIndex=hops.size();
+            ParentHop hop=new ParentHop(parentSlot,(ParentRelation<Object>)relationship,
+                target,nextOffset[0],"p"+slotIndex);
+            hops.add(hop);
+            nextOffset[0]+=target.columnCount();
+            collectParentHops(target,slotIndex,ancestors,hops,nextOffset);
+        }
+        ancestors.remove(source.type());
+    }
+
+    /**
+     * Eager multi-hop to-one relations in one SQL statement. A CTE pages root
+     * rows before joining referenced entities. Every JOIN is key-based and
+     * every mapper is compiler-generated; no N+1 or runtime entity reflection.
+     */
     private <T> void readParents(Connection c,Select<T> query,
             Consumer<T> emit,boolean bounded) throws SQLException {
         Objects.requireNonNull(emit,"emit");
@@ -907,31 +939,33 @@ public final class Bjorm implements Operations {
         if(query.hasJoins())
             throw new IllegalArgumentException(
                 "Automatic @ManyToOne loading cannot be combined with explicit query JOINs");
-        List<ParentRelation<T>> parents=root.parents();
-        if(parents.isEmpty())throw new IllegalArgumentException("No eager to-one relations registered");
+        if(root.parents().isEmpty())
+            throw new IllegalArgumentException("No eager to-one relations registered");
+        ArrayList<ParentHop> hops=new ArrayList<>();
+        collectParentHops(root,-1,new HashSet<>(),hops,
+            new int[]{root.columnCount()+1});
+        // Index zero contains root references. Index i+1 contains relations
+        // directly attached to hop i, precomputed once rather than per row.
+        ArrayList<List<Integer>> children=new ArrayList<>(hops.size()+1);
+        for(int i=0;i<=hops.size();i++)children.add(new ArrayList<>());
+        for(int i=0;i<hops.size();i++)
+            children.get(hops.get(i).parentSlot()+1).add(i);
+
         String rootSql=query.sql(root,type->mapper(type),dialect);
         StringBuilder sql=new StringBuilder("WITH roots AS (").append(rootSql)
             .append(") SELECT ").append(root.qualifiedColumns("r"));
-        ArrayList<EntityMapper<Object>> targets=new ArrayList<>(parents.size());
-        ArrayList<Integer> offsets=new ArrayList<>(parents.size());
-        int offset=root.columnCount()+1;
-        for(int index=0;index<parents.size();index++) {
-            EntityMapper<Object> target=(EntityMapper<Object>)mapper(parents.get(index).targetType());
-            if(!target.children().isEmpty() || !target.parents().isEmpty())
-                throw new UnsupportedOperationException(
-                    "Nested @ManyToOne/@Children graphs require a separate explicit query");
-            targets.add(target);
-            offsets.add(offset);
-            sql.append(", ").append(target.qualifiedColumns("p"+index));
-            offset+=target.columnCount();
-        }
+        for(ParentHop hop:hops)
+            sql.append(", ").append(hop.target().qualifiedColumns(hop.alias()));
         sql.append(" FROM roots r");
-        for(int index=0;index<parents.size();index++) {
-            ParentRelation<T> parent=parents.get(index);
-            EntityMapper<Object> target=targets.get(index);
-            sql.append(' ').append(dialect.join(parent.joinType())).append(' ')
-               .append(target.table()).append(" p").append(index)
-               .append(" ON ").append(parentJoin(root,"r",target,"p"+index,parent));
+        for(ParentHop hop:hops) {
+            EntityMapper<?> source=hop.parentSlot()<0
+                ?root:hops.get(hop.parentSlot()).target();
+            String sourceAlias=hop.parentSlot()<0
+                ?"r":hops.get(hop.parentSlot()).alias();
+            sql.append(' ').append(dialect.join(hop.relation().joinType())).append(' ')
+               .append(hop.target().table()).append(' ').append(hop.alias())
+               .append(" ON ").append(parentJoin(source,sourceAlias,hop.target(),
+                   hop.alias(),hop.relation()));
         }
         boolean firstOrder=true;
         for(SqlOrder order:query.sorting()) {
@@ -940,7 +974,7 @@ public final class Bjorm implements Operations {
             if(separator>=0 && !field.substring(0,separator).equals(query.rootAlias()))
                 throw new IllegalArgumentException("@ManyToOne ORDER BY supports only root columns: "+field);
             String column=separator<0?field:field.substring(separator+1);
-            root.columnIndex(column); // generated validation, never interpolate arbitrary values
+            root.columnIndex(column);
             sql.append(firstOrder?" ORDER BY ":", ")
                .append("r.").append(column).append(order.descending()?" DESC":" ASC");
             firstOrder=false;
@@ -953,14 +987,21 @@ public final class Bjorm implements Operations {
                 while(rs.next()) {
                     if(bounded)checkRows(++count);
                     if(rs.getObject(root.idColumnIndex())==null)continue;
-                    T value=root.readAt(rs,1);
-                    for(int index=0;index<parents.size();index++) {
-                        EntityMapper<Object> target=targets.get(index);
-                        int start=offsets.get(index);
-                        Object joinedId=rs.getObject(start+target.idColumnIndex()-1);
-                        Object parent=joinedId==null?null:target.readAt(rs,start);
-                        value=root.withParent(value,parents.get(index).property(),parent);
+                    Object[] values=new Object[hops.size()];
+                    for(int i=hops.size()-1;i>=0;i--) {
+                        ParentHop hop=hops.get(i);
+                        Object joinedId=rs.getObject(hop.offset()+hop.target().idColumnIndex()-1);
+                        Object value=joinedId==null?null:hop.target().readAt(rs,hop.offset());
+                        if(value!=null)
+                            for(int childSlot:children.get(i+1))
+                                value=hop.target().withParent(value,
+                                    hops.get(childSlot).relation().property(),values[childSlot]);
+                        values[i]=value;
                     }
+                    T value=root.readAt(rs,1);
+                    for(int rootSlot:children.getFirst())
+                        value=root.withParent(value,hops.get(rootSlot).relation().property(),
+                            values[rootSlot]);
                     emit.accept(value);
                 }
             }

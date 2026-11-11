@@ -835,22 +835,32 @@ reconstructed at compile time; POJOs require a public getter and setter.
 
 The generated JOIN runs over a CTE containing the root query so root
 `WHERE`, `LIMIT` and `OFFSET` apply before eager hydration.
-This implementation supports **one direct to-one level**. A root entity
-may now declare both `@Children` and `@ManyToOne`: BJORM appends the
-parent's columns and JOIN to each `UNION ALL` branch for the sibling child
-collections, and hydrates both associations **in the same SQL statement**.
+Standalone root entities without `@Children` support multiple eager
+`@ManyToOne` hops, including chains such as invoice link → invoice →
+customer, in **one SELECT**. A recursive join tree is built only from
+compiler-generated metadata, bounded to eight distinct entity types and
+64 relation slots; cycles and referenced targets with to-many graphs fail
+explicitly. Nested references currently require `LEFT` joins because
+an INNER after a nullable ancestor would incorrectly filter away the root.
+Root `WHERE`, `LIMIT` and `OFFSET` still apply before the JOINs.
+
+A root entity may also declare both `@Children` and `@ManyToOne`:
+BJORM appends the parent's columns and JOIN to each `UNION ALL`
+branch for sibling child collections and hydrates those direct associations
+**in the same SQL statement**.
 The referenced parent is not inserted, updated or deleted transitively.
 A child inside an `@Children` graph may also declare a **direct**
-`@ManyToOne` to a flat single-key target. Each `UNION ALL` branch joins
+`@ManyToOne` to a flat target, including a composite-key target
+with `mappedByParts`. Each `UNION ALL` branch joins
 only the referenced targets belonging to its active child path, while all
 branches project the same positional columns. The parent and nested child
 references are hydrated in **one JDBC query**, including nullable LEFT JOINs.
-Root pagination still executes before child expansion. Recursive references,
-association targets with their own graphs, and composite-key to-one targets
-remain unsupported and fail explicitly.
-For standalone ManyToOne loading, explicit user-written JOINs cannot be
-mixed with the implicit reference JOIN. Use a dedicated projection for
-nested or customized association shapes.
+Root pagination still executes before child expansion. Self-referential
+cycles, to-one targets with their own child collections, and multi-hop
+references **inside an existing @Children graph** remain unsupported
+and fail explicitly. For standalone ManyToOne loading, explicit
+user-written JOINs cannot be mixed with the implicit reference JOIN.
+Use a dedicated projection for unsupported nested association shapes.
 
 ## Spring MVC Pageable, Page and Slice
 

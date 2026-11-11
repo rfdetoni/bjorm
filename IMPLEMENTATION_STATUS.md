@@ -7,7 +7,7 @@
 - No JPA, Hibernate, or runtime entity reflection. Generated record/POJO mappers, typed fields, projections, compiled `@Query` methods and optional ServiceLoader mapper registration.
 - PostgreSQL 17 and MySQL 8.4 dialects, typed JSON codecs, `@Converted` generated JDBC value converters, `@Embedded` scalar value records, `@EnumOrdinal`, `@Transient`, audit timestamps and compile-validated `@Id` strategies.
 - UUIDv7, database identity columns, assigned composite primary keys, optimistic versioned writes, versioned MySQL single-statement compare-and-swap UPSERT, PostgreSQL UPSERT, mapped `updateBy/deleteBy`, bounded batches, count/exists and projections.
-- Root `@Children`, direct `@ManyToOne`, child direct `@ManyToOne`, and eager one-query UNION ALL graph hydration. Cyclic relationships, multi-hop referenced graphs and composite FKs are **not** fully supported.
+- Root `@Children`, direct `@ManyToOne`, child direct `@ManyToOne`, and eager one-query UNION ALL graph hydration. Composite-key to-one JOINs and bounded multi-hop to-one loading are supported on flat targets, but cycles, referenced targets with to-many children, composite-key @Children and multi-hop references inside to-many graphs remain unsupported.
 - Transaction-only identity reuse, JDBC cursor streaming with transaction lifetime, explicit transaction isolation (`READ_COMMITTED`, `REPEATABLE_READ`, `SERIALIZABLE`), explicit bounded idempotent serialization/deadlock retries, and optional SQL execution timing **without SQL text or parameters**.
 - Opt-in `insertDetached/upsertDetached` for safe supported shapes, retaining mutable legacy writes for source compatibility. Generated `@Children` graphs are recursively snapshotted before JDBC, including deep POJO/record children; repeated shared nodes/cycles and values without a deep-copy contract (mutable JSON/converted records) are rejected.
 - `lockOne` and bounded `lockRows` (flat entities) with UPDATE/SHARE, NOWAIT and SKIP LOCKED. Row locks must belong to an existing caller-owned transaction.
@@ -26,7 +26,7 @@ Root graph pagination currently uses a single CTE/UNION ALL plan; select joins t
 ## Still pending (issue #11)
 
 1. External Spring rollback/commit consumer guarantees and integration of production IAM, pool lifecycle, provisioning and credential revocation. The core now supports deep detached snapshots and an opt-in restricted per-tenant DataSource registry; broader orchestration remains external.
-2. Recursive to-one, referenced targets with nested graphs, composite-key FKs and full arbitrary-depth relationship planner.
+2. Remaining graph planner limits: self-referential type cycles, to-one targets with nested to-many collections, composite-key @Children and multi-hop to-one inside @Children; benchmark wide/deep JOIN plans before changing defaults.
 3. Controlled JMH/pgJDBC runs, allocation and tail-latency measurements, two-phase graph pagination comparison and real workload tuning.
 4. Complete soft-delete, automatic filters, advanced JSONB, typed subqueries, formula projections, safe retries/extended RETURNING, Oracle/SQL Server dialect integration, and explicitly scoped lazy loading.
 
