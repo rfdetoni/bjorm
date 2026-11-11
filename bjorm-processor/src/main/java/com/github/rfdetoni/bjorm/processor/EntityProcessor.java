@@ -682,21 +682,50 @@ public final class EntityProcessor extends AbstractProcessor {
                 for(int ri=0;ri<relations.size();ri++) {
                     Relation r=relations.get(ri);
                     TypeElement child=elements.getTypeElement(r.childType());
-                    String getForeign=r.childRecord()?"value."+r.mappedBy()+"()":"value."+findGetter(child,Character.toUpperCase(r.mappedBy().charAt(0))+r.mappedBy().substring(1),r.childGetter())+"()";
                     w.write((ri>0?",\n":"")+"new com.github.rfdetoni.bjorm.ChildRelation<"+clazz+">(){\n");
                     w.write("public Class<?> childType(){return "+r.childType()+".class;}\n");
                     w.write("public String mappedBy(){return \""+r.mappedBy()+"\";}\n");
+                    w.write("public java.util.List<String> mappedByParts(){return java.util.List.of("+
+                        String.join(", ",r.foreignKeys().stream().map(name->"\""+name+"\"").toList())+");}\n");
                     w.write("public com.github.rfdetoni.bjorm.JoinType joinType(){return com.github.rfdetoni.bjorm.JoinType."+r.joinType().name()+";}\n");
                     w.write("public String property(){return \""+r.property()+"\";}\n");
                     w.write("public Iterable<?> children("+clazz+" value){return "+r.getter()+";}\n");
+                    ArrayList<String> expected=new ArrayList<>(),reads=new ArrayList<>();
+                    for(int n=0;n<r.foreignKeys().size();n++) {
+                        String fk=r.foreignKeys().get(n);
+                        String type=r.fkTypes().get(n);
+                        String key=r.foreignKeys().size()==1?"id":
+                            "((com.github.rfdetoni.bjorm.CompositeId)id).part("+n+")";
+                        expected.add("(("+type+")"+key+")");
+                        String suffix=Character.toUpperCase(fk.charAt(0))+fk.substring(1);
+                        reads.add(r.childRecord()?"value."+fk+"()":
+                            "value."+findGetter(child,suffix,type)+"()");
+                    }
                     w.write("public void attach(Object id,Object child){"+r.childType()+" value=("+r.childType()+")child;\n");
-                    w.write("if("+getForeign+"!=null && !java.util.Objects.equals("+getForeign+",id))throw new IllegalArgumentException(\"Foreign key conflicts with parent ID\");\n");
-                    if(r.childRecord())w.write("if(!java.util.Objects.equals("+getForeign+",id))throw new IllegalArgumentException(\"Record child requires attached()\");\n");
-                    else w.write("value."+r.childSetter()+"(("+r.childGetter()+")id);\n");
+                    for(int n=0;n<reads.size();n++)
+                        w.write("if("+reads.get(n)+"!=null && !java.util.Objects.equals("+
+                            reads.get(n)+","+expected.get(n)+"))throw new IllegalArgumentException(\"Foreign key conflicts with parent ID\");\n");
+                    if(r.childRecord()) {
+                        for(int n=0;n<reads.size();n++)
+                            w.write("if(!java.util.Objects.equals("+reads.get(n)+","+expected.get(n)+"))"+
+                                "throw new IllegalArgumentException(\"Record child requires attached()\");\n");
+                    } else {
+                        for(int n=0;n<reads.size();n++)
+                            w.write("value."+r.fkSetters().get(n)+"("+expected.get(n)+");\n");
+                    }
                     w.write("}\n");
-                    if(r.childRecord())w.write("public Object attached(Object id,Object child){"+r.childType()+" value=("+r.childType()+")child;"+
-                        "if(value."+r.mappedBy()+"()!=null && !value."+r.mappedBy()+"().equals(id))throw new IllegalArgumentException(\"Foreign key conflicts with parent ID\");"+
-                        "return new "+r.childType()+"("+recordArguments(child,r.mappedBy(),"("+r.childGetter()+")id")+");}\n");
+                    if(r.childRecord()) {
+                        w.write("public Object attached(Object id,Object child){"+r.childType()+
+                            " value=("+r.childType()+")child;\n");
+                        for(int n=0;n<reads.size();n++)
+                            w.write("if("+reads.get(n)+"!=null && !java.util.Objects.equals("+
+                                reads.get(n)+","+expected.get(n)+"))throw new IllegalArgumentException(\"Foreign key conflicts with parent ID\");\n");
+                        Map<String,String> replacements=new HashMap<>();
+                        for(int n=0;n<r.foreignKeys().size();n++)
+                            replacements.put(r.foreignKeys().get(n),expected.get(n));
+                        w.write("return new "+r.childType()+"("+
+                            recordArgumentsWith(child,replacements)+");}\n");
+                    }
                     w.write("}");
                 }
                 w.write(");\n");
