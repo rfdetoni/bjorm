@@ -511,6 +511,16 @@ public final class Bjorm implements Operations {
     public <T> List<T> query(String sql,StatementBinder bind,RowMapper<T> mapper) {requireNativeSqlPermission();return withConnection(c->query(c,sql,bind,mapper));}
     public <T> T one(String sql,StatementBinder bind,RowMapper<T> mapper) {requireNativeSqlPermission();return withConnection(c->one(c,sql,bind,mapper));}
     public int execute(String sql,StatementBinder bind) {requireNativeSqlPermission();return withConnection(c->execute(c,sql,bind));}
+    /** Run PostgreSQL DML RETURNING in an owned (or framework-joined) transaction. */
+    public <T> List<T> executeReturning(String sql,StatementBinder binder,RowMapper<T> mapper) {
+        requireNativeSqlPermission();
+        requireReturningDialect();
+        return operationTxResult(tx->tx.executeReturning(sql,binder,mapper));
+    }
+    private void requireReturningDialect() {
+        if(!"postgresql".equals(dialect.name()))
+            throw new UnsupportedOperationException("Native DML RETURNING is supported only for PostgreSQL");
+    }
     public <T> void forEach(Class<T> type,SqlPredicate where,Consumer<T> consumer) {
         forEach(select(type).whereNullable(where),consumer);
     }
@@ -1304,6 +1314,33 @@ public final class Bjorm implements Operations {
     private int execute(Connection c,String sql,StatementBinder binder) throws SQLException {
         try(PreparedStatement ps=prepare(c,sql)) {Objects.requireNonNull(binder).bind(ps);return executeUpdateObserved(ps);}
     }
+    /** Execute a DML statement that yields rows; never truncate silently. */
+    private <T> List<T> executeReturning(Connection c,String sql,StatementBinder binder,
+                                          RowMapper<T> mapper) throws SQLException {
+        Objects.requireNonNull(sql,"sql");
+        Objects.requireNonNull(mapper,"mapper");
+        if(c.getAutoCommit())
+            throw new IllegalStateException("RETURNING must run inside a transaction");
+        try(PreparedStatement ps=prepareRead(c,sql)) {
+            boundRows(ps);
+            Objects.requireNonNull(binder,"binder").bind(ps);
+            ArrayList<T> rows=new ArrayList<>();
+            try(ResultSet rs=executeReturningObserved(ps)) {
+                while(rs.next()) {
+                    checkRows(rows.size()+1);
+                    rows.add(mapper.read(rs));
+                }
+            }
+            return List.copyOf(rows);
+        }
+    }
+    private ResultSet executeReturningObserved(PreparedStatement ps) throws SQLException {
+        SqlObserver observer=sqlObserver;
+        if(observer==null)return ps.executeQuery();
+        long start=System.nanoTime();boolean ok=false;
+        try {ResultSet rs=ps.executeQuery();ok=true;return rs;}
+        finally {notifyObserver(observer,SqlOperation.UPDATE,start,ok);}
+    }
     private <T> void forEach(Connection c,Select<T> query,Consumer<T> consumer) throws SQLException {
         Objects.requireNonNull(consumer);
         EntityMapper<T> m=mapper(query.type());
@@ -1505,6 +1542,11 @@ public final class Bjorm implements Operations {
         public <T> List<T> query(String sql,StatementBinder bind,RowMapper<T> mapper) {requireNativeSqlPermission();return useWrite(c->Bjorm.this.query(c,sql,bind,mapper));}
         public <T> T one(String sql,StatementBinder bind,RowMapper<T> mapper) {requireNativeSqlPermission();return useWrite(c->Bjorm.this.one(c,sql,bind,mapper));}
         public int execute(String sql,StatementBinder bind) {requireNativeSqlPermission();return useWrite(c->Bjorm.this.execute(c,sql,bind));}
+        public <T> List<T> executeReturning(String sql,StatementBinder binder,RowMapper<T> mapper) {
+            requireNativeSqlPermission();
+            requireReturningDialect();
+            return useWrite(c->Bjorm.this.executeReturning(c,sql,binder,mapper));
+        }
         public <T> void forEach(Class<T> type,SqlPredicate where,Consumer<T> consumer) {forEach(select(type).whereNullable(where),consumer);}
         public <T> void forEach(Select<T> query,Consumer<T> consumer) {use(c->{Bjorm.this.forEach(c,query,consumer);return null;});}
         public <T,R> R withStream(Select<T> query,Function<Stream<T>,R> work) {

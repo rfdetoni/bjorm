@@ -425,6 +425,42 @@ public final class PostgresIntegrationTest {
             check(db.list(AutoChildRecord.class,AutoChildRecord_.parentId.eq(root.id())).isEmpty(),"record graph cascade delete");
             db.insert(alice);
             check(db.find(ItUser.class,id).equals(alice),"actual database CRUD");
+            UUID returningId=UUID.randomUUID();
+            db.insert(new ItUser(returningId,"dml-returning",40));
+            List<Integer> returnedAges=db.executeReturning(
+                "UPDATE bjorm_it_users SET age=age+1 WHERE id=? RETURNING age",
+                db.params(returningId),rs->rs.getInt(1));
+            check(returnedAges.equals(List.of(41)) &&
+                db.find(ItUser.class,returningId).age()==41,
+                "PostgreSQL DML RETURNING atomically maps the updated row");
+            try {
+                db.tx(tx->{
+                    List<Integer> rollbackResult=tx.executeReturning(
+                        "UPDATE bjorm_it_users SET age=age+1 WHERE id=? RETURNING age",
+                        tx.params(returningId),rs->rs.getInt(1));
+                    check(rollbackResult.equals(List.of(42)),
+                        "PostgreSQL DML RETURNING joins caller-owned transaction");
+                    throw new IllegalStateException("roll back native DML RETURNING");
+                });
+                throw new AssertionError("DML RETURNING transaction unexpectedly committed");
+            } catch(IllegalStateException expected) {}
+            check(db.find(ItUser.class,returningId).age()==41,
+                "PostgreSQL native DML RETURNING must rollback with transaction");
+            UUID extraReturningId=UUID.randomUUID();
+            db.insert(new ItUser(extraReturningId,"dml-returning-second",50));
+            Bjorm boundedReturning=Bjorm.open(ds,new BjormOptions(30,1,32),
+                SqlDialects.POSTGRESQL,ItUser_BjormMapper.INSTANCE);
+            try {
+                boundedReturning.executeReturning(
+                    "UPDATE bjorm_it_users SET age=age+1 WHERE name LIKE ? RETURNING id",
+                    boundedReturning.params("dml-returning%"),rs->JdbcValues.uuid(rs,1));
+                throw new AssertionError("Unbounded native RETURNING silently truncated results");
+            } catch(IllegalStateException expected) {}
+            check(db.find(ItUser.class,returningId).age()==41 &&
+                db.find(ItUser.class,extraReturningId).age()==50,
+                "RETURNING exceeding buffered row budget rolls back the entire DML");
+
+
             check(db.list(ItUser.class,ItUser_.name.eq("BJORM")).stream().anyMatch(x->x.id().equals(id)),"DSL binding against PostgreSQL");
             check(db.findOne(ItUser.class,ItUser_.name.eq("BJORM")).orElseThrow().equals(alice),"findOne Optional against PostgreSQL");
             check(db.findOne(ItUser.class,ItUser_.name.eq("missing")).isEmpty(),"findOne missing record");

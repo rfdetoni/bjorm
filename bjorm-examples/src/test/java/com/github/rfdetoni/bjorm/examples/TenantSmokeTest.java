@@ -102,6 +102,13 @@ public final class TenantSmokeTest {
             throw new AssertionError("Native SQL bypassed tenant permissions");}
         catch(SecurityException expected) {}
         check(pg.connections==borrowed,"native SQL denied before connection checkout");
+        try {
+            guarded.executeReturning("UPDATE bjorm_it_users SET age=10 RETURNING age",
+                guarded.params(),rs->rs.getInt(1));
+            throw new AssertionError("Tenant-scoped DML RETURNING bypassed native SQL policy");
+        } catch(SecurityException expected) {}
+        check(pg.connections==borrowed,
+            "Tenant-scoped native DML RETURNING is denied before JDBC checkout");
         int beforeLock=pg.events.size();
         try {
             guarded.lockOne(ItUser.class,ItUser_.name.eq("x"),
