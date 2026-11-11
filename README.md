@@ -915,6 +915,34 @@ change audit fields. With those annotations the generated lifecycle
 rules documented above apply; authenticated-user audit attribution
 remains the responsibility of the domain/service layer.
 
+## Typed correlated subqueries
+
+`SqlSubqueries` composes prepared, type-checked predicates without interpolating
+table names or end-user SQL. Pass a **compile-time mapper**, a validated alias
+and a `SqlPredicate` made from generated `Field<T>` values:
+
+```java
+SqlPredicate linked = ItInvoice_.customerId.as("i")
+    .sameAs(ItUser_.id.as("u"))
+    .and(ItInvoice_.reference.as("i").eq("INV-42"));
+
+List<ItUser> customers = db.select(ItUser.class).as("u")
+    .where(SqlSubqueries.exists(ItInvoice_BjormMapper.INSTANCE, "i", linked))
+    .fetch();
+
+// Also available: SqlSubqueries.notExists(...), and
+// SqlSubqueries.in(ItUser_.id.as("u"), ItInvoice_BjormMapper.INSTANCE,
+//                  "i", ItInvoice_.customerId.as("i"), filter).
+```
+
+Aliases and table identifiers are strictly validated; `SqlSubqueries`
+rejects statically qualified tables, so they cannot bypass tenant-required
+schema/catalog routing through this DSL. Subquery values remain positional
+JDBC parameters, including on MySQL (UUID string binding). Use distinct aliases
+and an explicit root alias when writing correlated predicates. The queried
+table must exist in the current authorized database; this DSL does not
+perform joins across databases or open additional connections.
+
 ## Custom JDBC value converters (opt-in)
 
 A `@Converted` property maps one immutable domain value into one JDBC

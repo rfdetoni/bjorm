@@ -95,6 +95,23 @@ public final class PostgresIntegrationTest {
                 hydrated.customer().name().equals("Invoice Customer"),
                 "PostgreSQL ManyToOne record hydrates parent");
             check(selects.get()==1,"ManyToOne record hydrates in one SQL SELECT, not N+1");
+            SqlPredicate correlated=ItInvoice_.customerId.as("i").sameAs(ItUser_.id.as("u"))
+                .and(ItInvoice_.reference.as("i").eq("invoice-linked"));
+            check(db.select(ItUser.class).as("u")
+                .where(SqlSubqueries.exists(ItInvoice_BjormMapper.INSTANCE,"i",correlated))
+                .fetch().stream().anyMatch(entry->invoiceCustomer.id().equals(entry.id())),
+                "PostgreSQL typed correlated EXISTS binds values and links FK");
+            check(db.select(ItUser.class).as("u")
+                .where(SqlSubqueries.notExists(ItInvoice_BjormMapper.INSTANCE,"i",correlated))
+                .fetch().stream().noneMatch(entry->invoiceCustomer.id().equals(entry.id())),
+                "PostgreSQL typed correlated NOT EXISTS");
+            check(db.select(ItUser.class).as("u")
+                .where(SqlSubqueries.in(ItUser_.id.as("u"),
+                    ItInvoice_BjormMapper.INSTANCE,"i",ItInvoice_.customerId.as("i"),
+                    ItInvoice_.reference.as("i").eq("invoice-linked")))
+                .fetch().stream().anyMatch(entry->invoiceCustomer.id().equals(entry.id())),
+                "PostgreSQL typed IN subquery with prepared bound filter");
+
             check(db.select(ItInvoice.class).where(ItInvoice_.customerId.eq(invoiceCustomer.id()))
                     .orderBy(ItInvoice_.reference.asc()).limit(1).fetch().getFirst().customer()!=null,
                 "PostgreSQL pageable ManyToOne root query");
