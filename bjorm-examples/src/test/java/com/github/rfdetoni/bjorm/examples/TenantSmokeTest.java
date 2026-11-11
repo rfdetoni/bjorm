@@ -166,6 +166,37 @@ public final class TenantSmokeTest {
                 ItInvoice_.customerId.as("other"),ItInvoice_.reference.as("i").eq("bad"));
             throw new AssertionError("A projection from a foreign subquery alias was accepted");
         } catch(IllegalArgumentException expected) {}
+        Spy isolatedA=new Spy(),isolatedB=new Spy();
+        Bjorm isolatedRoot=Bjorm.tenantRequired(
+            java.util.Map.of("company_a",isolatedA.source(),"company_b",isolatedB.source()),
+            BjormOptions.defaults(),SqlDialects.MYSQL,ItUser_BjormMapper.INSTANCE);
+        try {isolatedRoot.find(ItUser.class,java.util.UUID.randomUUID());
+            throw new AssertionError("Tenant registry root borrowed an unscoped connection");}
+        catch(IllegalStateException expected) {}
+        check(isolatedA.connections==0 && isolatedB.connections==0,
+            "Tenant registry root has no fallback JDBC connection");
+        try {isolatedRoot.forTenant("unknown_company");
+            throw new AssertionError("Unknown tenant selected a JDBC DataSource");}
+        catch(SecurityException expected) {}
+        check(isolatedA.connections==0 && isolatedB.connections==0,
+            "Unknown tenant is denied before opening any credentialed connection");
+        Bjorm selectedA=isolatedRoot.forTenant("company_a").permitReviewedTenantNativeSql();
+        check(selectedA.execute("UPDATE users SET name='registry-a'",ps->{})==1,
+            "Tenant A uses registered least-privilege DataSource");
+        check(isolatedA.events.stream().anyMatch(e->e.contains("write:company_a:")) &&
+            isolatedB.connections==0,"Tenant A cannot borrow tenant B credentials");
+        Bjorm selectedB=isolatedRoot.observeSql((operation,nanos,ok)->{})
+            .forTenant("company_b").permitReviewedTenantNativeSql();
+        check(selectedB.execute("UPDATE users SET name='registry-b'",ps->{})==1,
+            "Tenant B is bound to its own immutable DataSource");
+        check(isolatedB.events.stream().anyMatch(e->e.contains("write:company_b:")),
+            "Tenant B connection cannot reuse tenant A credentials");
+        try {selectedA.forTenant("company_b");throw new AssertionError("Scoped tenant switched pool");}
+        catch(IllegalStateException expected) {}
+        try {Bjorm.tenantRequired(java.util.Map.of("public",isolatedA.source()),
+            BjormOptions.defaults(),SqlDialects.MYSQL,ItUser_BjormMapper.INSTANCE);
+            throw new AssertionError("Unsafe tenant registry key accepted");}
+        catch(IllegalArgumentException expected) {}
         System.out.println("PASS: tenant required, scoped PG SET LOCAL, rollback and MySQL catalog reset");
     }
 }

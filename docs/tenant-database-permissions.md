@@ -25,6 +25,49 @@ and idle eviction), or an explicitly audited intermediary that provides the
 same database-enforced restriction. A shared all-tenant datasource offers
 application-level routing only, not hard database-level isolation.
 
+## Isolated pools built into BJORM (opt-in)
+
+To make cross-tenant **credential reuse impossible by routing**, supply a
+whitelist of pre-provisioned tenant-specific DataSources. BJORM stores an
+immutable copy, does not retain a fallback administrative connection, and
+refuses unregistered tenant IDs **before JDBC checkout**:
+
+```java
+Map<String, DataSource> authorizedPools = Map.of(
+    "tenant_a", tenantARestrictedPool,
+    "tenant_b", tenantBRestrictedPool);
+
+Bjorm root = Bjorm.tenantRequired(authorizedPools, BjormOptions.defaults(),
+    SqlDialects.POSTGRESQL, User_BjormMapper.INSTANCE);
+
+// Authenticate and authorize the user/tenant in IAM BEFORE choosing a scope.
+Bjorm scope = root.forTenant(authorizedTenantId);
+scope.insertReturning(new User(...));
+```
+
+Each pool must connect as **its own least-privileged database LOGIN**, not a
+shared elevated account. For MySQL, use the tenant's own default catalog
+and its own credentials. For PostgreSQL, use a restricted LOGIN granted
+only that schema's objects. Existing `tenantRequired(DataSource,...)`
+remains supported for compatibility, but its caller must independently
+enforce privilege isolation.
+
+A root can only access keys in its registry; `forTenant` cannot rebind
+an existing tenant-scoped context. For stronger per-request least
+privilege, expose only the authorized tenant's pool to the application
+component rather than sharing a multi-tenant root with untrusted code.
+The root keeps no global mutable tenant state and uses no ThreadLocal.
+IAM membership checks and provisioning/rotation/revocation remain the
+application's responsibility: when a pool is rotated, construct a fresh
+root and close the old pool; revoke the old database credential to disable
+previously issued scopes. Do not mistake removal from an application
+registry for revocation of an existing live database connection.
+
+The integration suite exercises this API with **real** restricted
+PostgreSQL LOGIN credentials and two distinct MySQL tenant accounts. A
+JDBC-spy regression confirms that unregistered tenants cannot borrow
+connections or fall back to another tenant's pool.
+
 ## PostgreSQL: provisioning example (execute as migration administrator)
 
 Use unique schema and role identifiers from a trusted registry. Example values
@@ -149,7 +192,7 @@ records instead of sharing those nested instances. Typed non-String `@Json`
 fields are explicitly rejected on detached POJOs **and records**: arbitrary user codecs cannot
 be assumed to avoid mutating shared domain objects. Use an immutable DTO,
 explicit caller-owned snapshot, or a future generated deep-copy contract
-before opting in to such writes. Converted columns with user-defined converter\nimplementations are also rejected for detached POJOs and records until\na deep-copy contract is available.
+before opting in to such writes. Converted columns with user-defined converter implementations are also rejected\nfor detached POJOs and records until a deep-copy contract is available.
 Existing `insert`, `insertReturning` and `upsertReturning` retain their
 0.x in-place POJO materialization semantics for compatibility. For immutable
 records, the detached methods reuse the normal immutable copy behavior.

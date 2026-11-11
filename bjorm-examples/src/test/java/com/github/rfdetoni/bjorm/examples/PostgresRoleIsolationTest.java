@@ -101,6 +101,15 @@ public final class PostgresRoleIsolationTest {
                 check(result.next() && role.equals(result.getString(1)),
                     "Application must authenticate as its own LOGIN role, not SET ROLE from admin");
             }
+            Bjorm allowedRegistry=Bjorm.tenantRequired(
+                java.util.Map.of(tenantA,restricted),
+                BjormOptions.defaults(),SqlDialects.POSTGRESQL,ItUser_BjormMapper.INSTANCE);
+            check("allowed".equals(allowedRegistry.forTenant(tenantA)
+                .find(ItUser.class,shared).name()),
+                "Registry routes to the restricted PostgreSQL LOGIN connection");
+            try {allowedRegistry.forTenant(tenantB);
+                throw new AssertionError("Unregistered PostgreSQL tenant pool was selected");}
+            catch(SecurityException expected) {}
             Bjorm root=Bjorm.tenantRequired(restricted,BjormOptions.defaults(),
                 SqlDialects.POSTGRESQL,ItUser_BjormMapper.INSTANCE);
             Bjorm permitted=root.forTenant(tenantA);
