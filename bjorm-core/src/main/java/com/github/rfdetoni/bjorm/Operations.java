@@ -44,7 +44,9 @@ public interface Operations {
     <T> boolean lockOne(Class<T> type, SqlPredicate predicate, LockMode mode);
     /** Lock up to limit flat rows in primary-key order inside the caller-owned transaction.
      * SKIP_LOCKED results are suitable for concurrent queues, not a consistent snapshot. */
-    <T> List<T> lockRows(Class<T> type, SqlPredicate predicate, LockMode mode, int limit);
+    default <T> List<T> lockRows(Class<T> type, SqlPredicate predicate, LockMode mode, int limit) {
+        throw new UnsupportedOperationException("Bounded row locking is not supported by this Operations implementation");
+    }
     default <T> long count(Class<T> type) { return count(type, null); }
     default <T> boolean exists(Class<T> type) { return exists(type, null); }
     <T> List<T> list(Select<T> query);
