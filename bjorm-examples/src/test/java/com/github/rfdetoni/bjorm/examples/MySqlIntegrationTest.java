@@ -414,6 +414,21 @@ public final class MySqlIntegrationTest {
             db.tx(TransactionIsolation.SERIALIZABLE,tx->
                 check(tx.count(ItUser.class,ItUser_.id.eq(original.id()))==1L,
                     "MySQL SERIALIZABLE transaction accepts mapped SQL"));
+            java.util.concurrent.atomic.AtomicInteger mysqlReplayCount=
+                new java.util.concurrent.atomic.AtomicInteger();
+            UUID mysqlAborted=UUID.randomUUID(),mysqlCommitted=UUID.randomUUID();
+            db.txResultRetryable(TransactionIsolation.SERIALIZABLE,2,tx->{
+                int attempt=mysqlReplayCount.incrementAndGet();
+                tx.insertReturning(new ItUser(attempt==1?mysqlAborted:mysqlCommitted,
+                    "mysql-replay-"+attempt,31));
+                if(attempt==1)
+                    throw new BjormException("Simulated MySQL serialization conflict",
+                        new SQLException("retry transaction","40001"));
+                return null;
+            });
+            check(mysqlReplayCount.get()==2 && db.find(ItUser.class,mysqlAborted)==null &&
+                db.find(ItUser.class,mysqlCommitted)!=null,
+                "MySQL bounded retry rolls back first transaction and commits the second");
             ItDocument json=db.insertReturning(new ItDocument(null,"{\"count\":2}"));
             check(db.find(ItDocument.class,json.id()).payload().contains("count"),"MySQL native JSON");
             ItDocument searchableJson=db.insertReturning(new ItDocument(null,

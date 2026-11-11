@@ -110,6 +110,9 @@ class BjormSpringTransactionTest {
             assertThrows(IllegalStateException.class,
                 ()->tenant.tx(TransactionIsolation.SERIALIZABLE, inner->{}),
                 "Explicit isolation must not override Spring-managed transaction");
+            assertThrows(IllegalStateException.class,
+                ()->tenant.txResultRetryable(TransactionIsolation.SERIALIZABLE,3,inner->null),
+                "BJORM retries must not replay an externally managed Spring transaction");
             return null;
         });
         assertEquals(1,spy.commits.get(),"Spring manager commits exactly once");

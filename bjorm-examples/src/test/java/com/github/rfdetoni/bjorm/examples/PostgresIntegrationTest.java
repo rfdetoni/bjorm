@@ -480,6 +480,21 @@ public final class PostgresIntegrationTest {
             db.tx(TransactionIsolation.READ_COMMITTED,tx->
                 check(tx.count(ItUser.class,ItUser_.name.eq("BJORM"))==1L,
                     "PostgreSQL READ COMMITTED transaction accepts mapped SQL"));
+            java.util.concurrent.atomic.AtomicInteger pgReplayCount=
+                new java.util.concurrent.atomic.AtomicInteger();
+            UUID pgAborted=UUID.randomUUID(),pgCommitted=UUID.randomUUID();
+            db.txResultRetryable(TransactionIsolation.SERIALIZABLE,2,tx->{
+                int attempt=pgReplayCount.incrementAndGet();
+                tx.insertReturning(new ItUser(attempt==1?pgAborted:pgCommitted,
+                    "pg-replay-"+attempt,31));
+                if(attempt==1)
+                    throw new BjormException("Simulated PostgreSQL serialization conflict",
+                        new SQLException("retry transaction","40001"));
+                return null;
+            });
+            check(pgReplayCount.get()==2 && db.find(ItUser.class,pgAborted)==null &&
+                db.find(ItUser.class,pgCommitted)!=null,
+                "PostgreSQL bounded retry rolls back first transaction and commits the second");
             try{db.tx(tx->{tx.insert(new ItUser(UUID.randomUUID(),"SHOULD_ROLLBACK",11));throw new IllegalStateException("rollback");});}catch(IllegalStateException expected){}
             check(db.list(ItUser.class,ItUser_.name.eq("SHOULD_ROLLBACK")).isEmpty(),"real transaction rollback");
             ItProduct product=new ItProduct(id,"Pencil",new BigDecimal("4.50"),Status.ACTIVE,0);

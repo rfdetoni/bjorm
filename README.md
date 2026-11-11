@@ -499,8 +499,31 @@ levels are `READ_COMMITTED`, `REPEATABLE_READ`, and `SERIALIZABLE`.
 The setting is applied only to newly owned connections **before** starting
 the transaction, then the previous setting is restored. It is rejected in
 Spring-owned/existing transactions to avoid changing an outer boundary.
-BJORM performs **no automatic retry**: serialization failures must be
-handled by a caller with verified idempotency and a new transaction.
+BJORM performs **no implicit retry**. To opt in to replaying an
+**entire**, idempotent, BJORM-owned transaction, use:
+
+```java
+var saved = db.txResultRetryable(TransactionIsolation.SERIALIZABLE, 3, tx -> {
+    // Only idempotent JDBC work scoped to tx. No HTTP, queue publishes or files.
+    return tx.insertReturning(new Order(...)); // choose stable IDs across retries
+});
+```
+
+Or use `db.txResultRetryable(3, callback)` without an isolation override.
+Retries are strictly limited to 1–8 total attempts, only for SQLSTATE
+`40001` (transaction serialization failure, including MySQL deadlock) and
+PostgreSQL `40P01` (deadlock). Each failure fully rolls back and closes
+its transaction before a new connection/transaction is obtained.
+No retry is attempted for unique violations, arbitrary runtime failures,
+timeouts or externally owned Spring JDBC transactions.
+
+**Important:** A callback may run multiple times. Ensure input IDs are stable
+and avoid publishing messages, calling APIs, modifying files or changing
+external state inside it. Those effects cannot be rolled back by the JDBC
+transaction. In Spring, use a transaction-level retry policy at the application
+boundary instead; do not nest BJORM retries inside `@Transactional`.
+No backoff is provided; application workloads with sustained contention
+should handle admission control and retry budgets explicitly.
 
 A real-driver JUnit integration test exercises this contract through
 `DataSourceTransactionManager` and `TransactionAwareDataSourceProxy` on
