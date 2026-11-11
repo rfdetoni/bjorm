@@ -124,6 +124,17 @@ public final class PostgresIntegrationTest {
             db.insert(embeddedPojo);
             check(db.find(ItEmbeddedPojo.class,embeddedPojo.getId()).getBilling().equals(embeddedAddress),
                 "PostgreSQL embedded value via POJO getter/setter");
+            ItEmbeddedPojo detachedEmbeddedSource=new ItEmbeddedPojo();
+            detachedEmbeddedSource.setLabel("pg-detached-embedded");
+            detachedEmbeddedSource.setBilling(embeddedAddress);
+            ItEmbeddedPojo detachedEmbeddedSaved=db.insertDetached(detachedEmbeddedSource);
+            check(detachedEmbeddedSaved!=detachedEmbeddedSource &&
+                detachedEmbeddedSaved.getBilling()!=embeddedAddress &&
+                detachedEmbeddedSaved.getBilling().equals(embeddedAddress) &&
+                detachedEmbeddedSource.getId()==null &&
+                detachedEmbeddedSource.getBilling()==embeddedAddress &&
+                detachedEmbeddedSaved.getId()!=null,
+                "PostgreSQL detached write creates a separate embedded value snapshot");
             try {
                 db.insertReturning(new ItEmbeddedRecord(null,"missing",null));
                 throw new AssertionError("null @Embedded value accepted");
