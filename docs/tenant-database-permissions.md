@@ -116,9 +116,20 @@ of wildcard host access where possible.
 6. Monitor role/tenant provisioning drift and revoke privileges when a tenant
    is deprovisioned. Keep migrations separate from normal traffic.
 
-**Coverage limitation:** MySQL least-privilege account isolation requires
-deployment-specific user provisioning and is not yet automatically exercised
-by the current CI matrix. PostgreSQL temporary-login isolation is tested.
+**Integration coverage:** The MySQL 8.4 CI job provisions two disposable
+catalogs and two real LOGIN accounts, each granted CRUD privileges exclusively
+on its own database. `MySqlRoleIsolationTest` checks allowed reads/writes and
+real JDBC privilege denial for qualified `SELECT`, `INSERT`, `UPDATE` and
+`DELETE`, including reviewed native SQL and attempts to bind the other tenant.
+Both accounts and databases are removed in a `finally` block. To run locally,
+use an **expendable MySQL instance**, set `BJORM_MYSQL_ROLE_TEST_ADMIN=true`,
+`BJORM_MYSQL_JDBC_URL`, `BJORM_MYSQL_ADMIN_USER`,
+`BJORM_MYSQL_ADMIN_PASSWORD`, and configure the MySQL JDBC driver JAR in
+`BJORM_MYSQL_DRIVER_JAR`. This does not validate application-level IAM,
+rotation, production pool eviction, or a managed-cloud provisioning workflow;
+those integrations must be verified for each deployment.
+
+PostgreSQL also tests temporary restricted login isolation.
 
 ## Audit timestamps and safe detached writes
 
