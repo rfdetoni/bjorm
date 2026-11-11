@@ -1157,9 +1157,10 @@ public final class Bjorm implements Operations {
                 GraphSlot slot=slots.get(i);
                 EntityMapper<Object> parent=slot.parent==0?(EntityMapper<Object>)root:slots.get(slot.parent-1).mapper;
                 String parentAlias=slot.parent==0?"r":slots.get(slot.parent-1).alias;
-                sql.append(' ').append(dialect.join(slot.relation.joinType())).append(' ').append(slot.mapper.table()).append(' ').append(slot.alias)
-                   .append(" ON ").append(slot.alias).append('.').append(slot.mapper.columnFor(slot.relation.mappedBy()))
-                   .append(" = ").append(parentAlias).append('.').append(parent.columnFor(parent.idProperty()));
+                sql.append(' ').append(dialect.join(slot.relation.joinType())).append(' ')
+                   .append(slot.mapper.table()).append(' ').append(slot.alias)
+                   .append(" ON ").append(childJoin(slot.mapper,slot.alias,parent,parentAlias,
+                       slot.relation));
             }
             for(int i=0;i<parents.size();i++) {
                 ParentRelation<T> relation=parents.get(i);
@@ -1185,7 +1186,9 @@ public final class Bjorm implements Operations {
             sql.append(query.sorting().getFirst()==order?" ORDER BY ":", ")
                .append(root.columnIndex(column)).append(order.descending()?" DESC":" ASC");
         }
-        sql.append(query.sorting().isEmpty()?" ORDER BY ":", ").append(root.idColumnIndex());
+        for(int i=0;i<root.idProperties().size();i++)
+            sql.append(query.sorting().isEmpty()&&i==0?" ORDER BY ":", ")
+               .append(root.columnIndex(root.columnFor(root.idProperties().get(i))));
         try(PreparedStatement ps=prepareRead(c,sql.toString())) {
             if(bounded)boundRows(ps);
             query.bind(ps,dialect);
@@ -1195,7 +1198,7 @@ public final class Bjorm implements Operations {
                 int fetchedRows=0;
                 int groupRows=0;
                 while(rs.next()) {
-                    Object id=rs.getObject(root.idColumnIndex());
+                    Object id=joinedKey(rs,root,1);
                     // RIGHT/FULL outer rows without a root cannot materialize a parent entity.
                     if(id==null)continue;
                     if(current==null || !Objects.equals(lastId,id)) {
@@ -1219,7 +1222,7 @@ public final class Bjorm implements Operations {
                     GraphNode cursor=current;
                     for(int slotIndex:path) {
                         GraphSlot slot=slots.get(slotIndex);
-                        Object childId=rs.getObject(slot.offset+slot.mapper.idColumnIndex()-1);
+                        Object childId=joinedKey(rs,slot.mapper,slot.offset);
                         if(childId==null)break;
                         LinkedHashMap<Object,GraphNode> byId=cursor.children.computeIfAbsent(slotIndex,k->new LinkedHashMap<>());
                         GraphNode child=byId.get(childId);
