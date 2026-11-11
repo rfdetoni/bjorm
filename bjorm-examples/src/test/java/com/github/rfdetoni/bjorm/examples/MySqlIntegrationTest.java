@@ -382,6 +382,15 @@ public final class MySqlIntegrationTest {
             ItUser original=db.insertReturning(new ItUser(null,"MySQL user",33));
             check(original.id()!=null && original.id().version()==7,"v7 generated");
             check(db.find(ItUser.class,original.id()).age()==33,"MySQL UUID read from CHAR(36)");
+            try {
+                db.executeReturning(
+                    "UPDATE bjorm_it_users SET age=age+1 WHERE id=? RETURNING age",
+                    db.params(original.id()),rs->rs.getInt(1));
+                throw new AssertionError("MySQL unsupported DML RETURNING was executed");
+            } catch(UnsupportedOperationException expected) {}
+            check(db.find(ItUser.class,original.id()).age()==33,
+                "Unsupported MySQL native RETURNING must fail without modifying a row");
+
             UUID streamedId=db.withStream(db.select(ItUser.class).where(ItUser_.id.eq(original.id())),
                 rows->rows.findFirst().orElseThrow().id());
             check(streamedId.equals(original.id()),"MySQL resource-scoped mapped Stream roundtrip");
