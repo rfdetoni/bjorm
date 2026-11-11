@@ -197,6 +197,21 @@ public final class TenantSmokeTest {
             BjormOptions.defaults(),SqlDialects.MYSQL,ItUser_BjormMapper.INSTANCE);
             throw new AssertionError("Unsafe tenant registry key accepted");}
         catch(IllegalArgumentException expected) {}
+        Spy preflight=new Spy();
+        Bjorm detachedDb=Bjorm.open(preflight.source(),ItOrder_BjormMapper.INSTANCE,
+            ItOrderLine_BjormMapper.INSTANCE,ItOrderNote_BjormMapper.INSTANCE);
+        ItOrder duplicateRoot=new ItOrder();
+        duplicateRoot.setDescription("unsafe shared child");
+        ItOrderLine sharedChild=new ItOrderLine();
+        sharedChild.setSku("SHARED");
+        duplicateRoot.getLines().add(sharedChild);
+        duplicateRoot.getLines().add(sharedChild);
+        try {detachedDb.insertDetached(duplicateRoot);
+            throw new AssertionError("Repeated detached child was accepted");}
+        catch(IllegalArgumentException expected) {}
+        check(preflight.connections==0 && duplicateRoot.getId()==null &&
+            sharedChild.getId()==null && sharedChild.getOrderId()==null,
+            "Detached graph validation must reject repeated objects before JDBC or mutation");
         System.out.println("PASS: tenant required, scoped PG SET LOCAL, rollback and MySQL catalog reset");
     }
 }
