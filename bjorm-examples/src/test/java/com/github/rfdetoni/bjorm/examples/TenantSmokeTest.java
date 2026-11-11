@@ -26,6 +26,8 @@ public final class TenantSmokeTest {
         String catalog="root_catalog";
         boolean autoCommit=true;
         boolean failWrite;
+        int transientFailures;
+        String transientSqlState="40001";
         int connections;
         DataSource source() {
             return proxy(DataSource.class,(obj,method,args)->switch(method.getName()) {
@@ -62,6 +64,10 @@ public final class TenantSmokeTest {
             return proxy(PreparedStatement.class,(obj,method,args)->switch(method.getName()) {
                 case "executeUpdate" -> {
                     events.add("write:"+catalog+":"+sql);
+                    if(transientFailures>0) {
+                        transientFailures--;
+                        throw new SQLException("simulated transient SQL failure",transientSqlState);
+                    }
                     if(failWrite)throw new SQLException("deliberate failure");
                     yield 1;
                 }
@@ -212,6 +218,49 @@ public final class TenantSmokeTest {
         check(preflight.connections==0 && duplicateRoot.getId()==null &&
             sharedChild.getId()==null && sharedChild.getOrderId()==null,
             "Detached graph validation must reject repeated objects before JDBC or mutation");
-        System.out.println("PASS: tenant required, scoped PG SET LOCAL, rollback and MySQL catalog reset");
+        Spy retrySpy=new Spy();
+        Bjorm retryDb=Bjorm.open(retrySpy.source(),BjormOptions.defaults(),
+            SqlDialects.POSTGRESQL,ItUser_BjormMapper.INSTANCE);
+        java.util.concurrent.atomic.AtomicInteger attempts=new java.util.concurrent.atomic.AtomicInteger();
+        retrySpy.transientFailures=1;
+        String retried=retryDb.txResultRetryable(3,tx->{
+            attempts.incrementAndGet();
+            tx.execute("UPDATE items SET name='retryable'",ps->{});
+            return "committed";
+        });
+        check("committed".equals(retried) && attempts.get()==2 &&
+            retrySpy.events.stream().filter("rollback"::equals).count()==1 &&
+            retrySpy.events.stream().filter("commit"::equals).count()==1,
+            "Serialization retry starts a fresh transaction only after rollback");
+        attempts.set(0);
+        retrySpy.transientFailures=4;
+        try {
+            retryDb.txResultRetryable(3,tx->{
+                attempts.incrementAndGet();
+                tx.execute("UPDATE items SET name='exhausted'",ps->{});
+                return null;
+            });
+            throw new AssertionError("Retry limit was ignored");
+        } catch(com.github.rfdetoni.bjorm.BjormException expected) {}
+        check(attempts.get()==3,"Retry attempts must be strictly bounded");
+        attempts.set(0);
+        retrySpy.transientFailures=1;
+        retrySpy.transientSqlState="23505";
+        try {
+            retryDb.txResultRetryable(3,tx->{
+                attempts.incrementAndGet();
+                tx.execute("UPDATE items SET name='unique'",ps->{});
+                return null;
+            });
+            throw new AssertionError("Non-serialization error was retried");
+        } catch(com.github.rfdetoni.bjorm.BjormException expected) {}
+        check(attempts.get()==1,"Non-retryable SQLSTATE must not replay callback");
+        int borrowedBefore=retrySpy.connections;
+        try {retryDb.txResultRetryable(0,tx->null);
+            throw new AssertionError("Unbounded or zero retry count was accepted");}
+        catch(IllegalArgumentException expected) {}
+        check(retrySpy.connections==borrowedBefore,"Invalid retry budget rejected before JDBC");
+        System.out.println("PASS: tenant scope, isolated pools, bounded serialization retries and rollback");
+
     }
 }
