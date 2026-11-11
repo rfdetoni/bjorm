@@ -530,24 +530,24 @@ public final class PostgresIntegrationTest {
                 "combined graph cascade does not delete referenced customer");
             check(db.find(ItUser.class,invoiceCustomer.id())!=null,
                 "referenced customer is not cascaded by graph delete");
-            ItOrder detachedSource=new ItOrder();
-            detachedSource.setDescription("Detached POJO graph");
+            ItOrder detachedGraphSource=new ItOrder();
+            detachedGraphSource.setDescription("Detached POJO graph");
             ItOrderLine detachedLine=new ItOrderLine();
             detachedLine.setSku("DETACHED-LINE");
-            detachedSource.getLines().add(detachedLine);
+            detachedGraphSource.getLines().add(detachedLine);
             ItOrderNote detachedNote=new ItOrderNote();
             detachedNote.setNote("DETACHED-NOTE");
-            detachedSource.getNotes().add(detachedNote);
-            ItOrder detachedPersisted=db.insertDetached(detachedSource);
-            check(detachedSource.getId()==null && detachedLine.getId()==null &&
+            detachedGraphSource.getNotes().add(detachedNote);
+            ItOrder detachedGraphPersisted=db.insertDetached(detachedGraphSource);
+            check(detachedGraphSource.getId()==null && detachedLine.getId()==null &&
                 detachedLine.getOrderId()==null && detachedNote.getId()==null &&
                 detachedNote.getOrderId()==null &&
-                detachedPersisted!=detachedSource &&
-                detachedPersisted.getLines().getFirst()!=detachedLine &&
-                detachedPersisted.getLines().getFirst().getOrderId().equals(detachedPersisted.getId()) &&
-                db.find(ItOrder.class,detachedPersisted.getId()).getNotes().size()==1,
+                detachedGraphPersisted!=detachedGraphSource &&
+                detachedGraphPersisted.getLines().getFirst()!=detachedLine &&
+                detachedGraphPersisted.getLines().getFirst().getOrderId().equals(detachedGraphPersisted.getId()) &&
+                db.find(ItOrder.class,detachedGraphPersisted.getId()).getNotes().size()==1,
                 "PostgreSQL detached POJO parent+children are copied and inserted atomically");
-            db.delete(detachedPersisted);
+            db.delete(detachedGraphPersisted);
             ItSharedRoot detachedDeepSource=new ItSharedRoot(null,"two-level",
                 List.of(new ItSharedBranch(null,null,null,
                     List.of(new ItSharedLeaf(null,null,"primary")))),
