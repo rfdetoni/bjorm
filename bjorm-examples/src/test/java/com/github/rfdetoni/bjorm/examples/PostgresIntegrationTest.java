@@ -564,6 +564,26 @@ public final class PostgresIntegrationTest {
                 db.find(ItSharedRoot.class,detachedDeepSaved.id()).backup().getFirst().leaves().size()==1,
                 "PostgreSQL nested two-level detached record graph must not mutate source nodes");
             db.delete(detachedDeepSaved);
+            ItOrder rollbackSource=new ItOrder();
+            rollbackSource.setDescription("detached-rollback");
+            ItOrderLine rollbackChild=new ItOrderLine();
+            rollbackChild.setSku("ROLLBACK");
+            rollbackSource.getLines().add(rollbackChild);
+            java.util.concurrent.atomic.AtomicReference<UUID> rollbackGraphId=
+                new java.util.concurrent.atomic.AtomicReference<>();
+            try {
+                db.tx(tx->{
+                    rollbackGraphId.set(tx.insertDetached(rollbackSource).getId());
+                    throw new IllegalStateException("force detached graph rollback");
+                });
+                throw new AssertionError("Detached rollback was not triggered");
+            } catch(IllegalStateException expected) {}
+            check(rollbackGraphId.get()!=null &&
+                db.find(ItOrder.class,rollbackGraphId.get())==null &&
+                rollbackSource.getId()==null && rollbackChild.getId()==null &&
+                rollbackChild.getOrderId()==null,
+                "Detached child graph rollback must not modify caller or commit any child");
+
             ItOrder order = new ItOrder();
             order.setDescription("First order");
             ItOrderLine line = new ItOrderLine();
