@@ -3,16 +3,19 @@ import java.util.*;
 /** Generated type-safe SQL field; column identifiers are validated, values always bound. */
 public final class Field<T> {
     private final String column;
-    public Field(String column) {
+    private final java.util.function.Function<? super T, ?> converter;
+    public Field(String column) { this(column, null); }
+    public Field(String column, java.util.function.Function<? super T, ?> converter) {
         if (column == null || !column.matches("[A-Za-z_][A-Za-z_0-9]*(\\.[A-Za-z_][A-Za-z_0-9]*)?"))
             throw new IllegalArgumentException("Invalid SQL identifier: " + column);
         this.column = column;
+        this.converter = converter;
     }
     public String column() { return column; }
     public Field<T> as(String alias) {
         if(!alias.matches("[A-Za-z_][A-Za-z_0-9]*") || column.contains("."))
             throw new IllegalArgumentException("Invalid alias or already-qualified column");
-        return new Field<>(alias+"."+column);
+        return new Field<>(alias+"."+column, converter);
     }
     /** Typed join equality comparing two column paths, not a bound value. */
     public SqlPredicate sameAs(Field<T> other) {
@@ -24,17 +27,20 @@ public final class Field<T> {
     public SqlPredicate gte(T value) { return bind(">=", value); }
     public SqlPredicate lt(T value) { return bind("<", value); }
     public SqlPredicate lte(T value) { return bind("<=", value); }
-    public SqlPredicate like(String pattern) { return bind("LIKE", pattern); }
-    public SqlPredicate between(T low, T high) { return new SqlPredicate(column + " BETWEEN ? AND ?", Arrays.asList(Objects.requireNonNull(low),Objects.requireNonNull(high))); }
+    public SqlPredicate like(String pattern) { return new SqlPredicate(column + " LIKE ?", Collections.singletonList(Objects.requireNonNull(pattern))); }
+    public SqlPredicate between(T low, T high) { return new SqlPredicate(column + " BETWEEN ? AND ?", Arrays.asList(convert(Objects.requireNonNull(low)),convert(Objects.requireNonNull(high)))); }
     public SqlPredicate isNull() { return new SqlPredicate(column + " IS NULL", List.of()); }
     public SqlPredicate isNotNull() { return new SqlPredicate(column + " IS NOT NULL", List.of()); }
     public SqlPredicate in(Collection<? extends T> values) {
         Objects.requireNonNull(values);
         if (values.isEmpty()) return new SqlPredicate("1 = 0", List.of());
         if (values.stream().anyMatch(Objects::isNull)) throw new IllegalArgumentException("IN does not accept null values; use isNull() explicitly");
-        return new SqlPredicate(column + " IN (" + String.join(", ", Collections.nCopies(values.size(), "?")) + ")", new ArrayList<>(values));
+        ArrayList<Object> bound = new ArrayList<>(values.size());
+        for (T value : values) bound.add(convert(value));
+        return new SqlPredicate(column + " IN (" + String.join(", ", Collections.nCopies(values.size(), "?")) + ")", bound);
     }
     public SqlOrder asc() { return new SqlOrder(column, false); }
     public SqlOrder desc() { return new SqlOrder(column, true); }
-    private SqlPredicate bind(String op,Object value) { return new SqlPredicate(column + " " + op + " ?", Collections.singletonList(Objects.requireNonNull(value))); }
+    private Object convert(T value) { return converter == null ? value : converter.apply(value); }
+    private SqlPredicate bind(String op,T value) { return new SqlPredicate(column + " " + op + " ?", Collections.singletonList(convert(Objects.requireNonNull(value)))); }
 }
