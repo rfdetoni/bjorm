@@ -181,6 +181,16 @@ public final class MySqlRoleIsolationTest {
             verifyCredential(urlA, userA, passwordA, a);
             verifyCredential(urlB, userB, passwordB, b);
             verifyTenant(source(urlA, userA, passwordA), a, b, id);
+            Bjorm isolatedRegistry=Bjorm.tenantRequired(
+                java.util.Map.of(a,source(urlA,userA,passwordA),
+                                 b,source(urlB,userB,passwordB)),
+                BjormOptions.defaults(),SqlDialects.MYSQL,ItUser_BjormMapper.INSTANCE);
+            check(isolatedRegistry.forTenant(a).find(ItUser.class,id).age()==20 &&
+                  isolatedRegistry.forTenant(b).find(ItUser.class,id).age()==30,
+                "Distinct MySQL tenant pools borrow the correct restricted LOGIN credentials");
+            try {isolatedRegistry.forTenant("other_tenant");
+                throw new AssertionError("Unregistered MySQL tenant pool was selected");}
+            catch(SecurityException expected) {}
             verifyTenant(source(urlB, userB, passwordB), b, a, id);
             try (Connection conn = admin.getConnection();
                  Statement statement = conn.createStatement()) {
