@@ -26,7 +26,7 @@ Root graph pagination currently uses a single CTE/UNION ALL plan; select joins t
 ## Still pending (issue #11)
 
 1. External Spring rollback/commit consumer guarantees and integration of production IAM, pool lifecycle, provisioning and credential revocation. The core now supports deep detached snapshots and an opt-in restricted per-tenant DataSource registry; broader orchestration remains external.
-2. Recursive to-one, referenced targets with nested graphs, composite-key FKs and full arbitrary-depth relationship planner.
+2. Remaining graph planner limits: self-referential type cycles, to-one targets with nested to-many collections, composite-key @Children and multi-hop to-one inside @Children; benchmark wide/deep JOIN plans before changing defaults.
 3. Controlled JMH/pgJDBC runs, allocation and tail-latency measurements, two-phase graph pagination comparison and real workload tuning.
 4. Complete soft-delete, automatic filters, advanced JSONB, typed subqueries, formula projections, safe retries/extended RETURNING, Oracle/SQL Server dialect integration, and explicitly scoped lazy loading.
 
