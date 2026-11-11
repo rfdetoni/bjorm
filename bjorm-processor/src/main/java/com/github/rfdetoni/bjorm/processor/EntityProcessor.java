@@ -300,8 +300,8 @@ public final class EntityProcessor extends AbstractProcessor {
                 Col fk=cols.stream().filter(c->c.property().equals(fkProperty)).findFirst().orElse(null);
                 if(fk==null || fk.id() || fk.json() || fk.converter()!=null ||
                    !types.isSameType(keyTypes.get(i),fk.typeMirror())) {
-                    error(entity,"@ManyToOne FK "+fkProperty+
-                        " must be a scalar property matching target @Id component "+(i+1));return;
+                    error(entity,"@ManyToOne foreign key must match target @Id type: "+fkProperty+
+                        " (component "+(i+1)+", scalar FK required)");return;
                 }
             }
         }
