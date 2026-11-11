@@ -36,6 +36,7 @@ public final class PostgresIntegrationTest {
             st.execute("CREATE TABLE bjorm_it_composite (tenantId uuid NOT NULL,sku text NOT NULL,label text,version integer NOT NULL DEFAULT 0,PRIMARY KEY(tenantId,sku))");
             st.execute("CREATE TABLE bjorm_it_composite_pojo (tenantId uuid NOT NULL,sku text NOT NULL,label text,PRIMARY KEY(tenantId,sku))");
             st.execute("CREATE TABLE bjorm_it_composite_refs (id uuid PRIMARY KEY,tenantId uuid,sku text,label text,FOREIGN KEY(tenantId,sku) REFERENCES bjorm_it_composite(tenantId,sku))");
+            st.execute("CREATE TABLE bjorm_it_composite_children (id uuid PRIMARY KEY,tenantId uuid NOT NULL,sku text NOT NULL,label text,FOREIGN KEY(tenantId,sku) REFERENCES bjorm_it_composite(tenantId,sku))");
             st.execute("CREATE TABLE bjorm_it_embedded_records (id uuid PRIMARY KEY, label text, shipping_street text, shipping_postal text)");
             st.execute("CREATE TABLE bjorm_it_embedded_pojos (id uuid PRIMARY KEY, label text, billing_street text, billing_postal text)");
             st.execute("CREATE TABLE bjorm_it_converted (id uuid PRIMARY KEY, amount numeric(18,2), label text)");
@@ -80,7 +81,7 @@ public final class PostgresIntegrationTest {
             ItInvoice_BjormMapper.INSTANCE,ItInvoiceLink_BjormMapper.INSTANCE,ItInvoiceInner_BjormMapper.INSTANCE,
             ItInvoicePojo_BjormMapper.INSTANCE,
             ItEmbeddedRecord_BjormMapper.INSTANCE,ItEmbeddedPojo_BjormMapper.INSTANCE,
-            ItCompositeRecord_BjormMapper.INSTANCE,ItCompositePojo_BjormMapper.INSTANCE,ItConvertedRecord_BjormMapper.INSTANCE,ItCompositeReference_BjormMapper.INSTANCE,
+            ItCompositeRecord_BjormMapper.INSTANCE,ItCompositePojo_BjormMapper.INSTANCE,ItConvertedRecord_BjormMapper.INSTANCE,ItCompositeReference_BjormMapper.INSTANCE,ItCompositeParentWithChildren_BjormMapper.INSTANCE,ItCompositeChild_BjormMapper.INSTANCE,
             ItSharedRoot_BjormMapper.INSTANCE,ItSharedBranch_BjormMapper.INSTANCE,ItSharedLeaf_BjormMapper.INSTANCE);
         UUID id=UUID.randomUUID();ItUser alice=new ItUser(id,"BJORM",34);
         try {
@@ -203,6 +204,39 @@ public final class PostgresIntegrationTest {
                 ItConvertedRecord_.id.eq(converted.id()))==1 &&
                 db.find(ItConvertedRecord.class,converted.id()).amount().amount().compareTo(new BigDecimal("31.75"))==0,
                 "PostgreSQL generated converter supports bulk mapped update");
+            UUID compositeGraphTenant=UUID.randomUUID();
+            ItCompositeParentWithChildren firstGraphSource=new ItCompositeParentWithChildren(
+                compositeGraphTenant,"graph-a","first",List.of(
+                    new ItCompositeChild(null,null,null,"A1"),
+                    new ItCompositeChild(null,null,null,"A2")));
+            ItCompositeParentWithChildren firstGraph=db.insertDetached(firstGraphSource);
+            ItCompositeParentWithChildren secondGraph=db.insertDetached(
+                new ItCompositeParentWithChildren(compositeGraphTenant,"graph-b","second",
+                    List.of(new ItCompositeChild(null,null,null,"B1"))));
+            check(firstGraphSource.children().getFirst().id()==null &&
+                firstGraphSource.children().getFirst().tenantId()==null &&
+                firstGraph.children().size()==2 &&
+                firstGraph.children().getFirst().tenantId().equals(compositeGraphTenant) &&
+                firstGraph.children().getFirst().sku().equals("graph-a"),
+                "PostgreSQL composite child FK attached on a detached immutable copy");
+            List<ItCompositeParentWithChildren> groupedGraphs=db.list(
+                ItCompositeParentWithChildren.class,
+                ItCompositeParentWithChildren_.tenantId.eq(compositeGraphTenant));
+            check(groupedGraphs.size()==2 &&
+                groupedGraphs.stream().filter(g->g.sku().equals("graph-a")).findFirst()
+                    .orElseThrow().children().size()==2 &&
+                groupedGraphs.stream().filter(g->g.sku().equals("graph-b")).findFirst()
+                    .orElseThrow().children().size()==1 &&
+                db.find(ItCompositeParentWithChildren.class,
+                    CompositeId.of(compositeGraphTenant,"graph-a")).children().size()==2,
+                "PostgreSQL graph grouping and find include every composite ID part");
+            db.delete(firstGraph);
+            check(db.find(ItCompositeParentWithChildren.class,
+                    CompositeId.of(compositeGraphTenant,"graph-a"))==null &&
+                db.find(ItCompositeParentWithChildren.class,
+                    CompositeId.of(compositeGraphTenant,"graph-b")).children().size()==1,
+                "PostgreSQL composite cascade deletion preserves sibling key tuple");
+            db.delete(secondGraph);
             UUID compositeTenant=UUID.randomUUID();
             CompositeId compoundId=CompositeId.of(compositeTenant,"ABC");
             ItCompositeRecord createdComposite=db.insertReturning(new ItCompositeRecord(compositeTenant,"ABC","first",0));
@@ -792,6 +826,7 @@ public final class PostgresIntegrationTest {
                 st.execute("DROP SCHEMA IF EXISTS bjorm_test CASCADE");
                 st.execute("DROP SCHEMA IF EXISTS bjorm_tenant_a CASCADE");
                 st.execute("DROP SCHEMA IF EXISTS bjorm_tenant_b CASCADE");
+                st.execute("DROP TABLE IF EXISTS bjorm_it_composite_children");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_composite_refs");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_composite");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_composite_pojo");
