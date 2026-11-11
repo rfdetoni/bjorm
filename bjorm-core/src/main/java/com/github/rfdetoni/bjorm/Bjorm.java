@@ -770,16 +770,28 @@ public final class Bjorm implements Operations {
         if(!visited.add(new DeleteKey(m.type(),id)))throw new IllegalArgumentException("Cycle in persisted entity graph");
         for(ChildRelation<T> relation:m.children()) {
             EntityMapper<Object> childMapper=mapper(relation.childType());
-            String fk=childMapper.columnFor(relation.mappedBy());
+            List<String> foreignKeys=relation.mappedByParts();
+            List<Object> parts=id instanceof CompositeId tuple
+                ?tuple.parts():Collections.singletonList(id);
+            if(foreignKeys.size()!=parts.size())
+                throw new IllegalStateException("Child FK count does not match parent key parts");
+            StringJoiner where=new StringJoiner(" AND ");
+            for(int i=0;i<foreignKeys.size();i++)
+                where.add(childMapper.columnFor(foreignKeys.get(i))+" = ?");
             if(childMapper.children().isEmpty() && !childMapper.optimisticLocking()) {
-                try(PreparedStatement ps=prepare(c,"DELETE FROM "+childMapper.table()+" WHERE "+fk+" = ?")) {
-                    childMapper.bindId(ps,1,id,dialect);
+                try(PreparedStatement ps=prepare(c,"DELETE FROM "+childMapper.table()+" WHERE "+where)) {
+                    for(int i=0;i<parts.size();i++)dialect.bindValue(ps,i+1,parts.get(i));
                     executeUpdateObserved(ps);
                 }
             } else {
                 // Descendants must be removed before the child: do not depend on loaded collections.
-                try(PreparedStatement ps=prepareRead(c,"SELECT "+childMapper.qualifiedColumns("c")+" FROM "+childMapper.table()+" c WHERE c."+fk+" = ?")) {
-                    childMapper.bindId(ps,1,id,dialect);
+                StringJoiner aliasedWhere=new StringJoiner(" AND ");
+                for(String foreignKey:foreignKeys)
+                    aliasedWhere.add("c."+childMapper.columnFor(foreignKey)+" = ?");
+                try(PreparedStatement ps=prepareRead(c,
+                    "SELECT "+childMapper.qualifiedColumns("c")+" FROM "+
+                    childMapper.table()+" c WHERE "+aliasedWhere)) {
+                    for(int i=0;i<parts.size();i++)dialect.bindValue(ps,i+1,parts.get(i));
                     try(ResultSet rs=executeQueryObserved(ps)) {
                         while(rs.next())removeGraph(c,childMapper.read(rs),visited);
                     }
@@ -857,9 +869,18 @@ public final class Bjorm implements Operations {
     private <T> T find(Connection c,Class<T> type,Object id) throws SQLException {
         EntityMapper<T> m=mapper(type);
         if (!m.children().isEmpty() || !m.parents().isEmpty()) {
-            List<T> values = list(c,new Select<>(this,type).where(new SqlPredicate(
-                m.columnFor(m.idProperty())+" = ?",Collections.singletonList(id))).limit(1));
-            return values.isEmpty() ? null : values.getFirst();
+            List<String> keys=m.idProperties();
+            List<Object> parts;
+            if(m.compositeId()) {
+                if(!(id instanceof CompositeId tuple) || tuple.parts().size()!=keys.size())
+                    throw new IllegalArgumentException("Expected ordered CompositeId for graph lookup");
+                parts=tuple.parts();
+            } else parts=Collections.singletonList(id);
+            StringJoiner where=new StringJoiner(" AND ");
+            for(String key:keys)where.add(m.columnFor(key)+" = ?");
+            List<T> values=list(c,new Select<>(this,type).where(
+                new SqlPredicate(where.toString(),parts)).limit(1));
+            return values.isEmpty()?null:values.getFirst();
         }
         try(PreparedStatement ps=prepareRead(c,m.selectSql(dialect))) {
             m.bindId(ps,1,id,dialect);
@@ -887,6 +908,31 @@ public final class Bjorm implements Operations {
             }
         }
     }
+    /** Read an entire ordered primary key from a positional JOIN row. */
+    private static Object joinedKey(ResultSet rs,EntityMapper<?> mapper,int start) throws SQLException {
+        if(!mapper.compositeId())
+            return rs.getObject(start+mapper.idColumnIndex()-1);
+        ArrayList<Object> parts=new ArrayList<>();
+        for(String key:mapper.idProperties()) {
+            Object value=rs.getObject(start+mapper.columnIndex(mapper.columnFor(key))-1);
+            if(value==null)return null;
+            parts.add(value);
+        }
+        return new CompositeId(parts);
+    }
+    private static String childJoin(EntityMapper<?> child,String childAlias,
+                                     EntityMapper<?> parent,String parentAlias,
+                                     ChildRelation<?> relation) {
+        List<String> fks=relation.mappedByParts();
+        List<String> keys=parent.idProperties();
+        if(fks.size()!=keys.size())throw new IllegalArgumentException("Child FK count does not match parent key");
+        StringJoiner on=new StringJoiner(" AND ");
+        for(int i=0;i<fks.size();i++)
+            on.add(childAlias+"."+child.columnFor(fks.get(i))+
+                " = "+parentAlias+"."+parent.columnFor(keys.get(i)));
+        return on.toString();
+    }
+
     /** Composite to-one JOINs use the exact ordered target key, not the first @Id. */
     private static String parentJoin(EntityMapper<?> source,String sourceAlias,
                                      EntityMapper<?> target,String targetAlias,
