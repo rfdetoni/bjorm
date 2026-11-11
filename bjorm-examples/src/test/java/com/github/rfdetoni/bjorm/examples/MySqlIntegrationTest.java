@@ -451,14 +451,14 @@ public final class MySqlIntegrationTest {
             db.delete(combined);
             check(db.find(ItUser.class,invoiceCustomer.id())!=null,
                 "MySQL graph deletion preserves referenced customer");
-            ItOrder detachedSource=new ItOrder();
-            detachedSource.setDescription("Detached MySQL graph");
+            ItOrder detachedGraphSource=new ItOrder();
+            detachedGraphSource.setDescription("Detached MySQL graph");
             ItOrderLine detachedLine=new ItOrderLine();
             detachedLine.setSku("DETACHED-MYSQL");
-            detachedSource.getLines().add(detachedLine);
-            ItOrder detachedSaved=db.insertDetached(detachedSource);
-            check(detachedSource.getId()==null && detachedLine.getId()==null &&
-                detachedLine.getOrderId()==null && detachedSaved!=detachedSource &&
+            detachedGraphSource.getLines().add(detachedLine);
+            ItOrder detachedSaved=db.insertDetached(detachedGraphSource);
+            check(detachedGraphSource.getId()==null && detachedLine.getId()==null &&
+                detachedLine.getOrderId()==null && detachedSaved!=detachedGraphSource &&
                 detachedSaved.getLines().getFirst()!=detachedLine &&
                 detachedSaved.getLines().getFirst().getOrderId().equals(detachedSaved.getId()) &&
                 db.find(ItOrder.class,detachedSaved.getId()).getLines().size()==1,
