@@ -150,6 +150,7 @@ if ! grep -q 'Composite @Id components require explicit strategy=ASSIGNED' "$OUT
 fi
 # Reject mismatched value-object converter generics at Java compilation time.
 cat > "$OUT/InvalidConverted.java" <<'JAVA'
+package com.github.rfdetoni.bjorm.examples;
 import com.github.rfdetoni.bjorm.*;
 import com.github.rfdetoni.bjorm.examples.MoneyValueConverter;
 import java.util.UUID;
