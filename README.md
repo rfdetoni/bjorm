@@ -835,10 +835,19 @@ reconstructed at compile time; POJOs require a public getter and setter.
 
 The generated JOIN runs over a CTE containing the root query so root
 `WHERE`, `LIMIT` and `OFFSET` apply before eager hydration.
-This implementation supports **one direct to-one level**. A root entity
-may now declare both `@Children` and `@ManyToOne`: BJORM appends the
-parent's columns and JOIN to each `UNION ALL` branch for the sibling child
-collections, and hydrates both associations **in the same SQL statement**.
+Standalone root entities without `@Children` support multiple eager
+`@ManyToOne` hops, including chains such as invoice link → invoice →
+customer, in **one SELECT**. A recursive join tree is built only from
+compiler-generated metadata, bounded to eight distinct entity types and
+64 relation slots; cycles and referenced targets with to-many graphs fail
+explicitly. Nested references currently require `LEFT` joins because
+an INNER after a nullable ancestor would incorrectly filter away the root.
+Root `WHERE`, `LIMIT` and `OFFSET` still apply before the JOINs.
+
+A root entity may also declare both `@Children` and `@ManyToOne`:
+BJORM appends the parent's columns and JOIN to each `UNION ALL`
+branch for sibling child collections and hydrates those direct associations
+**in the same SQL statement**.
 The referenced parent is not inserted, updated or deleted transitively.
 A child inside an `@Children` graph may also declare a **direct**
 `@ManyToOne` to a flat single-key target. Each `UNION ALL` branch joins
