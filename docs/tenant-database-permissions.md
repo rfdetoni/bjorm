@@ -124,7 +124,9 @@ real JDBC privilege denial for qualified `SELECT`, `INSERT`, `UPDATE` and
 Both accounts and databases are removed in a `finally` block. To run locally,
 use an **expendable MySQL instance**, set `BJORM_MYSQL_ROLE_TEST_ADMIN=true`,
 `BJORM_MYSQL_JDBC_URL`, `BJORM_MYSQL_ADMIN_USER`,
-`BJORM_MYSQL_ADMIN_PASSWORD`, and configure the MySQL JDBC driver JAR in
+`BJORM_MYSQL_ADMIN_PASSWORD`, optionally
+`BJORM_MYSQL_ROLE_TEST_JDBC_URL` (TLS-enabled URL; CI uses
+`sslMode=REQUIRED` for its disposable server), and configure the MySQL JDBC driver JAR in
 `BJORM_MYSQL_DRIVER_JAR`. This does not validate application-level IAM,
 rotation, production pool eviction, or a managed-cloud provisioning workflow;
 those integrations must be verified for each deployment.
