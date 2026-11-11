@@ -11,6 +11,8 @@ import java.util.stream.StreamSupport;
 /** Explicit, immutable instance-owned mapper registry, no globally scoped context. */
 public final class Bjorm implements Operations {
     private final DataSource dataSource;
+    /** Immutable opt-in registry; absent in legacy single-DataSource routing. */
+    private final Map<String,DataSource> tenantPools;
     private final BjormOptions options;
     private final SqlDialect dialect;
     private final Map<Class<?>, EntityMapper<?>> mappers;
@@ -23,7 +25,10 @@ public final class Bjorm implements Operations {
 
     /** Immutable tenant-bound view. Never share an unscoped connection in tenant-required mode. */
     private Bjorm(Bjorm source, String tenantSchema) {
-        this.dataSource=source.dataSource;
+        this.dataSource=source.tenantPools!=null && tenantSchema!=null
+            ?Objects.requireNonNull(source.tenantPools.get(tenantSchema),"Unregistered tenant DataSource")
+            :source.dataSource;
+        this.tenantPools=source.tenantPools;
         this.options=source.options;
         this.dialect=source.dialect;
         this.mappers=source.mappers;
@@ -34,6 +39,7 @@ public final class Bjorm implements Operations {
     }
     private Bjorm(Bjorm source,boolean allowNativeSql) {
         this.dataSource=source.dataSource;
+        this.tenantPools=source.tenantPools;
         this.options=source.options;
         this.dialect=source.dialect;
         this.mappers=source.mappers;
@@ -44,6 +50,7 @@ public final class Bjorm implements Operations {
     }
     private Bjorm(Bjorm source,SqlObserver observer) {
         this.dataSource=source.dataSource;
+        this.tenantPools=source.tenantPools;
         this.options=source.options;
         this.dialect=source.dialect;
         this.mappers=source.mappers;
@@ -53,7 +60,12 @@ public final class Bjorm implements Operations {
         this.reviewedTenantNativeSql=source.reviewedTenantNativeSql;
     }
     private Bjorm(DataSource dataSource,BjormOptions options,SqlDialect dialect,EntityMapper<?>... registered) {
-        this.dataSource = Objects.requireNonNull(dataSource, "dataSource");
+        this(dataSource,null,options,dialect,registered);
+    }
+    private Bjorm(DataSource dataSource,Map<String,DataSource> tenantPools,
+                  BjormOptions options,SqlDialect dialect,EntityMapper<?>... registered) {
+        this.dataSource = tenantPools==null?Objects.requireNonNull(dataSource,"dataSource"):null;
+        this.tenantPools=tenantPools;
         this.options = Objects.requireNonNull(options, "options");
         this.dialect = Objects.requireNonNull(dialect, "dialect");
         Map<Class<?>, EntityMapper<?>> byType = new HashMap<>();
@@ -97,15 +109,47 @@ public final class Bjorm implements Operations {
     public static Bjorm tenantRequired(DataSource source) {
         return new Bjorm(open(source),(String)null);
     }
+    /**
+     * Stronger tenant isolation: each authorized schema uses a dedicated, already
+     * provisioned DataSource and database role. The unscoped root has NO
+     * fallback connection; unknown tenants are rejected before JDBC checkout.
+     *
+     * Supply only tenants authorized for this root. The immutable registry is
+     * a snapshot: construct a new root to rotate or revoke a pool.
+     */
+    public static Bjorm tenantRequired(Map<String,DataSource> isolatedPools,
+                                       BjormOptions options,SqlDialect dialect,
+                                       EntityMapper<?>... registered) {
+        Objects.requireNonNull(isolatedPools,"isolatedPools");
+        if(isolatedPools.isEmpty())throw new IllegalArgumentException("At least one tenant DataSource is required");
+        Map<String,DataSource> verified=new HashMap<>();
+        for(Map.Entry<String,DataSource> entry:isolatedPools.entrySet()) {
+            validateTenantIdentifier(entry.getKey());
+            verified.put(entry.getKey(),Objects.requireNonNull(entry.getValue(),"tenant DataSource"));
+        }
+        EntityMapper<?>[] mappers=registered;
+        if(mappers.length==0) {
+            ArrayList<EntityMapper<?>> discovered=new ArrayList<>();
+            for(EntityMapper<?> mapper:ServiceLoader.load(EntityMapper.class))discovered.add(mapper);
+            mappers=discovered.toArray(EntityMapper<?>[]::new);
+        }
+        Bjorm unscoped=new Bjorm(null,Map.copyOf(verified),options,dialect,mappers);
+        return new Bjorm(unscoped,(String)null);
+    }
+    private static void validateTenantIdentifier(String schema) {
+        Objects.requireNonNull(schema,"schema");
+        if(!TENANT_IDENTIFIER.matcher(schema).matches() ||
+           schema.toLowerCase(Locale.ROOT).startsWith("pg_") || Set.of("public","information_schema","mysql",
+               "performance_schema","sys","pg_catalog").contains(schema.toLowerCase(Locale.ROOT)))
+            throw new IllegalArgumentException("Unsafe tenant schema identifier");
+    }
     /** Tenant schema must come from an authorized server-side tenant registry, not request input. */
     public Bjorm forTenant(String schema) {
         if (!tenantRequired) throw new IllegalStateException("forTenant requires a tenantRequired BJORM root");
-        Objects.requireNonNull(schema,"schema");
-        if (!TENANT_IDENTIFIER.matcher(schema).matches() ||
-            schema.toLowerCase(Locale.ROOT).startsWith("pg_") || Set.of("public","information_schema","mysql",
-                "performance_schema","sys","pg_catalog").contains(schema.toLowerCase(Locale.ROOT)))
-            throw new IllegalArgumentException("Unsafe tenant schema identifier");
+        validateTenantIdentifier(schema);
         if(tenantSchema!=null)throw new IllegalStateException("Cannot rebind an already-scoped BJORM instance");
+        if(tenantPools!=null && !tenantPools.containsKey(schema))
+            throw new SecurityException("Tenant is not registered in this isolated DataSource root");
         // Static schema SQL bypasses search_path and could cross tenant boundaries.
         // Refuse the entire mapper registry, not just an individual operation.
         for(EntityMapper<?> mapper:mappers.values()) {
