@@ -436,14 +436,27 @@ public final class Bjorm implements Operations {
     /** Explicit transaction. Use TransactionAwareDataSourceProxy for framework-managed calls, not nested db.tx. */
     public void tx(Consumer<Transaction> work) {txResult(tx->{work.accept(tx);return null;});}
     public <R> R txResult(Function<Transaction,R> work) {
-        return transactionResult(work,false);
+        return transactionResult(work,false,null);
+    }
+    /**
+     * Start a BJORM-owned transaction at an explicitly requested JDBC isolation level.
+     * Isolation cannot be changed inside an externally managed Spring transaction.
+     * No implicit retries are performed: caller code may have side effects.
+     */
+    public void tx(TransactionIsolation isolation, Consumer<Transaction> work) {
+        Objects.requireNonNull(work,"work");
+        txResult(isolation,tx->{work.accept(tx);return null;});
+    }
+    public <R> R txResult(TransactionIsolation isolation,Function<Transaction,R> work) {
+        return transactionResult(work,false,Objects.requireNonNull(isolation,"isolation"));
     }
     /** Internal multi-statement operations may join a framework-owned transaction.
      * Explicit db.tx/txResult still refuse nesting. */
     private <R> R operationTxResult(Function<Transaction,R> work) {
-        return transactionResult(work,true);
+        return transactionResult(work,true,null);
     }
-    private <R> R transactionResult(Function<Transaction,R> work,boolean joinExisting) {
+    private <R> R transactionResult(Function<Transaction,R> work,boolean joinExisting,
+                                     TransactionIsolation isolation) {
         Objects.requireNonNull(work);
         requireTenant();
         try(Connection c=dataSource.getConnection()) {
@@ -461,6 +474,12 @@ public final class Bjorm implements Operations {
             boolean previous=c.getAutoCommit();
             if(!previous && !joinExisting)
                 throw new IllegalStateException("Connection already transactional; do not nest Bjorm.tx in another transaction");
+            if(isolation!=null && !previous)
+                throw new IllegalStateException("Cannot override isolation in an existing transaction");
+            int previousIsolation=isolation==null?-1:c.getTransactionIsolation();
+            boolean isolationChanged=isolation!=null && previousIsolation!=isolation.jdbcLevel();
+            try {
+            if(isolationChanged)c.setTransactionIsolation(isolation.jdbcLevel());
             if(previous)c.setAutoCommit(false);
             Transaction tx=new Transaction(c);
             Throwable failure=null;
@@ -484,6 +503,9 @@ public final class Bjorm implements Operations {
                     if(failure!=null)failure.addSuppressed(restore);
                     else throw new BjormException("Could not restore connection state",restore);
                 }
+            }
+            } finally {
+                if(isolationChanged)c.setTransactionIsolation(previousIsolation);
             }
             } finally {
                 if(mysqlTenant())c.setCatalog(previousCatalog);

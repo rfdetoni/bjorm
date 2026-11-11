@@ -350,6 +350,13 @@ public final class MySqlIntegrationTest {
                 check(tx.lockOne(ItUser.class, ItUser_.id.eq(original.id()), LockMode.SHARE),
                     "MySQL FOR SHARE works inside transaction");
             });
+            String explicitIsolation=db.txResult(TransactionIsolation.READ_COMMITTED,
+                tx->tx.one("SELECT @@transaction_isolation",rs->rs.getString(1)));
+            check("READ-COMMITTED".equalsIgnoreCase(explicitIsolation),
+                "MySQL honors explicit READ COMMITTED isolation within BJORM transaction");
+            db.tx(TransactionIsolation.SERIALIZABLE,tx->
+                check(tx.count(ItUser.class,ItUser_.id.eq(original.id()))==1L,
+                    "MySQL SERIALIZABLE transaction accepts mapped SQL"));
             ItDocument json=db.insertReturning(new ItDocument(null,"{\"count\":2}"));
             check(db.find(ItDocument.class,json.id()).payload().contains("count"),"MySQL native JSON");
             AutoLongRecord serial=db.insertReturning(new AutoLongRecord(null,"serial"));

@@ -6,6 +6,7 @@ import com.github.rfdetoni.bjorm.EntityMapper;
 import com.github.rfdetoni.bjorm.JdbcValues;
 import com.github.rfdetoni.bjorm.SqlDialect;
 import com.github.rfdetoni.bjorm.SqlDialects;
+import com.github.rfdetoni.bjorm.TransactionIsolation;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.jdbc.datasource.TransactionAwareDataSourceProxy;
@@ -119,6 +120,8 @@ class BjormSpringRealDatabaseTest {
                 assertEquals(1,updated.version(),"internal UPDATE joined the Spring transaction");
                 // Explicit db.tx must still reject nesting in Spring transactions.
                 assertThrows(IllegalStateException.class,()->tenant.tx(inner->{}));
+                assertThrows(IllegalStateException.class,
+                    ()->tenant.tx(TransactionIsolation.SERIALIZABLE, inner->{}));
                 return updated;
             });
             assertEquals(1,current.version());

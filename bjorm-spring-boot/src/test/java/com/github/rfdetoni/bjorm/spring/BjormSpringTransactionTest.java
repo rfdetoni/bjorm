@@ -3,6 +3,7 @@ package com.github.rfdetoni.bjorm.spring;
 import com.github.rfdetoni.bjorm.Bjorm;
 import com.github.rfdetoni.bjorm.BjormOptions;
 import com.github.rfdetoni.bjorm.SqlDialects;
+import com.github.rfdetoni.bjorm.TransactionIsolation;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.datasource.AbstractDataSource;
 import org.springframework.jdbc.datasource.TransactionAwareDataSourceProxy;
@@ -106,6 +107,9 @@ class BjormSpringTransactionTest {
             assertEquals(0,spy.commits.get(),"BJORM must not commit Spring transaction");
             assertThrows(IllegalStateException.class,()->tenant.tx(tx->{}),
                 "Explicit BJORM transaction inside Spring must fail rather than nest");
+            assertThrows(IllegalStateException.class,
+                ()->tenant.tx(TransactionIsolation.SERIALIZABLE, inner->{}),
+                "Explicit isolation must not override Spring-managed transaction");
             return null;
         });
         assertEquals(1,spy.commits.get(),"Spring manager commits exactly once");

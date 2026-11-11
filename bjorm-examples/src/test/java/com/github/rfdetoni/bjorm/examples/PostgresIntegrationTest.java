@@ -411,6 +411,13 @@ public final class PostgresIntegrationTest {
                     "PostgreSQL lock absent row");
             });
 
+            String explicitIsolation=db.txResult(TransactionIsolation.SERIALIZABLE,
+                tx->tx.one("SHOW transaction_isolation",rs->rs.getString(1)));
+            check("serializable".equalsIgnoreCase(explicitIsolation),
+                "PostgreSQL honors explicit SERIALIZABLE isolation within BJORM transaction");
+            db.tx(TransactionIsolation.READ_COMMITTED,tx->
+                check(tx.count(ItUser.class,ItUser_.name.eq("BJORM"))==1L,
+                    "PostgreSQL READ COMMITTED transaction accepts mapped SQL"));
             try{db.tx(tx->{tx.insert(new ItUser(UUID.randomUUID(),"SHOULD_ROLLBACK",11));throw new IllegalStateException("rollback");});}catch(IllegalStateException expected){}
             check(db.list(ItUser.class,ItUser_.name.eq("SHOULD_ROLLBACK")).isEmpty(),"real transaction rollback");
             ItProduct product=new ItProduct(id,"Pencil",new BigDecimal("4.50"),Status.ACTIVE,0);

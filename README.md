@@ -471,6 +471,16 @@ For an externally owned connection, the framework owns commit/rollback;
 do not catch a persistence exception and then assume the transaction can
 safely commit without marking it rollback-only.
 
+For standalone BJORM transactions, explicit JDBC isolation is opt-in:
+`db.tx(TransactionIsolation.READ_COMMITTED, tx -> { ... })` or
+`db.txResult(TransactionIsolation.SERIALIZABLE, tx -> ...)`. Supported
+levels are `READ_COMMITTED`, `REPEATABLE_READ`, and `SERIALIZABLE`.
+The setting is applied only to newly owned connections **before** starting
+the transaction, then the previous setting is restored. It is rejected in
+Spring-owned/existing transactions to avoid changing an outer boundary.
+BJORM performs **no automatic retry**: serialization failures must be
+handled by a caller with verified idempotency and a new transaction.
+
 A real-driver JUnit integration test exercises this contract through
 `DataSourceTransactionManager` and `TransactionAwareDataSourceProxy` on
 PostgreSQL 17 and MySQL 8.4, including successful version updates and
