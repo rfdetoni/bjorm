@@ -480,14 +480,14 @@ public final class EntityProcessor extends AbstractProcessor {
                 String changes=String.join(", ",cols.stream().filter(c->!c.id()&&c.updatable()&&!c.createdAt()).map(c->"\""+c.column()+"\"").toList());
                 w.write("public String upsertSql(com.github.rfdetoni.bjorm.SqlDialect dialect){return dialect.upsertSql(insertSql(dialect),\""+conflictTarget+"\",\""+cols.get(id).column()+"\",java.util.List.of("+changes+"),"+(version>=0?"\""+cols.get(version).column()+"\"":"null")+");}\n");
             }
-            // Detached mutation-free writes use a compile-time generated POJO copy.
-            // Copy properties through validated getters/setters only; no runtime reflection.
-            // Child graphs are intentionally excluded because their mutable descendants could
-            // otherwise be modified by cascading FK/ID assignment.
+            // Detached writes cannot retain a mutable JSON domain object as shared state:
+            // an arbitrary codec may modify it during encoding. Fail before JDBC instead.
+            // @Embedded values are immutable scalar records, but still get a distinct copy.
             if(!record) {
+                boolean mutableJson=cols.stream().anyMatch(c->c.json()&&!c.type().equals("java.lang.String"));
                 w.write("public "+clazz+" copyForWrite("+clazz+" value){");
-                if(!relations.isEmpty()) {
-                    w.write("throw new UnsupportedOperationException(\"Detached writes do not support mutable child graphs\");}\n");
+                if(!relations.isEmpty() || mutableJson) {
+                    w.write("throw new UnsupportedOperationException(\"Detached writes require an explicit deep-copy contract for child graphs and typed JSON values\");}\n");
                 } else {
                     w.write(clazz+" copy=new "+clazz+"();");
                     for(Element member:pojoFields(entity)) {
@@ -496,8 +496,18 @@ public final class EntityProcessor extends AbstractProcessor {
                         String suffix=Character.toUpperCase(property.charAt(0))+property.substring(1);
                         String type=member.asType().toString();
                         String getter=findGetter(entity,suffix,type);
-                        if(getter!=null && hasSetter(entity,"set"+suffix,type))
+                        if(getter==null || !hasSetter(entity,"set"+suffix,type))continue;
+                        if(member.getAnnotation(Embedded.class)!=null) {
+                            EmbeddedSpec embedded=embeddeds.stream()
+                                .filter(spec->spec.property().equals(property)).findFirst().orElseThrow();
+                            String source="value."+getter+"()";
+                            String args=cols.stream()
+                                .filter(col->col.property().startsWith(property+"."))
+                                .map(Col::read).collect(java.util.stream.Collectors.joining(", "));
+                            w.write("copy.set"+suffix+"("+source+"==null?null:new "+embedded.type()+"("+args+"));");
+                        } else {
                             w.write("copy.set"+suffix+"(value."+getter+"());");
+                        }
                     }
                     w.write("return copy;}\n");
                 }
