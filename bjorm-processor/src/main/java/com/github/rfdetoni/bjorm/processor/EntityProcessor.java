@@ -528,8 +528,8 @@ public final class EntityProcessor extends AbstractProcessor {
             if(!record) {
                 boolean mutableJson=unsafeDetachedValue;
                 w.write("public "+clazz+" copyForWrite("+clazz+" value){");
-                if(!relations.isEmpty() || mutableJson) {
-                    w.write("throw new UnsupportedOperationException(\"Detached writes require an explicit deep-copy contract for child graphs, converted values and typed JSON values\");}\n");
+                if(mutableJson) {
+                    w.write("throw new UnsupportedOperationException(\"Detached writes require a deep-copy contract for converted values and typed JSON values\");}\n");
                 } else {
                     w.write(clazz+" copy=new "+clazz+"();");
                     for(Element member:pojoFields(entity)) {
@@ -637,6 +637,12 @@ public final class EntityProcessor extends AbstractProcessor {
                 w.write("default -> throw new IllegalArgumentException(\"Unknown @ManyToOne relation: \"+property);};}\n");
             }
             if(!relations.isEmpty()) {
+                boolean replaceable=record || relations.stream().allMatch(rr->{
+                    String suffix=Character.toUpperCase(rr.property().charAt(0))+rr.property().substring(1);
+                    return hasSetter(entity,"set"+suffix,"java.util.List<"+rr.childType()+">")
+                        || hasSetter(entity,"set"+suffix,"java.util.Collection<"+rr.childType()+">");
+                });
+                w.write("public boolean detachedChildrenSupported(){return "+replaceable+";}\n");
                 w.write("public java.util.List<com.github.rfdetoni.bjorm.ChildRelation<"+clazz+">> children(){return RELATIONS;}\n");
                 w.write("public "+clazz+" withChildren("+clazz+" value,String relation,java.util.List<?> children){switch(relation){\n");
                 for(Relation rr:relations){
