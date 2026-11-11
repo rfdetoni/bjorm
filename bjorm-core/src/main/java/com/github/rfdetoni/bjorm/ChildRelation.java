@@ -4,6 +4,8 @@ package com.github.rfdetoni.bjorm;
 public interface ChildRelation<P> {
     Class<?> childType();
     String mappedBy();
+    /** Ordered FK property paths generated from @Children. */
+    default java.util.List<String> mappedByParts(){return java.util.List.of(mappedBy());}
     /** Compile-time join type chosen for this collection. */
     default JoinType joinType() {return JoinType.LEFT;}
     Iterable<?> children(P parent);
