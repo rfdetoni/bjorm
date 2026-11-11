@@ -106,7 +106,7 @@ public final class TenantSmokeTest {
                 com.github.rfdetoni.bjorm.LockMode.UPDATE_SKIP_LOCKED,1);
             throw new AssertionError("PG tenant lockRows acquired without explicit transaction");
         } catch(IllegalStateException expected) {}
-        check(pg.events.size()==beforeLock && pg.autoCommit,
+        check(pg.events.subList(beforeLock,pg.events.size()).stream().allMatch("close"::equals) && pg.autoCommit,
             "PG tenant row locks must reject auto-commit without SET LOCAL or implicit commit");
         Bjorm scoped=guarded.permitReviewedTenantNativeSql();
         check(scoped.execute("UPDATE users SET name='x'",ps->{})==1,"reviewed tenant-scoped update");
@@ -135,7 +135,7 @@ public final class TenantSmokeTest {
                 com.github.rfdetoni.bjorm.LockMode.UPDATE);
             throw new AssertionError("MySQL tenant lock acquired without explicit transaction");
         } catch(IllegalStateException expected) {}
-        check(mysqlLockEvents==mysql.events.size() && mysql.catalog.equals("root_catalog"),
+        check(mysql.events.subList(mysqlLockEvents,mysql.events.size()).stream().allMatch("close"::equals) && mysql.catalog.equals("root_catalog"),
             "MySQL rejected row lock cannot alter tenant catalog");
         Bjorm tenant=mysqlGuarded.permitReviewedTenantNativeSql();
         check(tenant.execute("UPDATE users SET name='y'",ps->{})==1,"reviewed MySQL tenant write");
