@@ -797,6 +797,9 @@ public final class Bjorm implements Operations {
      */
     private record GraphSlot(EntityMapper<Object> mapper,ChildRelation<Object> relation,
                              int parent,int offset,String alias) {}
+    /** Additional to-one lookup attached to a child slot along the active UNION path. */
+    private record GraphParentSlot(int childSlot,ParentRelation<Object> relation,
+                                   EntityMapper<Object> target,int offset,String alias) {}
     private static final class GraphNode {
         final EntityMapper<Object> mapper;
         Object value;
@@ -842,6 +845,22 @@ public final class Bjorm implements Operations {
             parentOffsets.add(parentOffset);
             parentOffset+=target.columnCount();
         }
+        // A child may itself have @ManyToOne references. Append their joined
+        // columns after root references; every UNION branch must keep exactly
+        // the same projected column layout, even if it does not traverse the child.
+        ArrayList<GraphParentSlot> nestedParents=new ArrayList<>();
+        for(int childIndex=0;childIndex<slots.size();childIndex++) {
+            EntityMapper<Object> child=slots.get(childIndex).mapper();
+            for(ParentRelation<Object> relation:child.parents()) {
+                EntityMapper<Object> target=mapper(relation.targetType());
+                if(!target.children().isEmpty() || !target.parents().isEmpty() || target.compositeId())
+                    throw new UnsupportedOperationException(
+                        "Nested child @ManyToOne target must be a flat entity with one primary key");
+                nestedParents.add(new GraphParentSlot(childIndex,relation,target,parentOffset,
+                    "cp"+nestedParents.size()));
+                parentOffset+=target.columnCount();
+            }
+        }
         StringBuilder sql=new StringBuilder("WITH roots AS (").append(rootSql).append(") ");
         for(int branch=0;branch<paths.size();branch++) {
             if(branch>0)sql.append(" UNION ALL ");
@@ -854,6 +873,12 @@ public final class Bjorm implements Operations {
             }
             for(int i=0;i<parentTargets.size();i++)
                 sql.append(", ").append(parentTargets.get(i).qualifiedColumns("p"+i));
+            for(GraphParentSlot nested:nestedParents) {
+                if(path.contains(nested.childSlot()))
+                    sql.append(", ").append(nested.target().qualifiedColumns(nested.alias()));
+                else for(int col=0;col<nested.target().columnCount();col++)
+                    sql.append(", NULL");
+            }
             sql.append(" FROM roots r");
             for(int i:path) {
                 GraphSlot slot=slots.get(i);
@@ -870,6 +895,16 @@ public final class Bjorm implements Operations {
                    .append(target.table()).append(" p").append(i)
                    .append(" ON r.").append(root.columnFor(relation.mappedBy()))
                    .append(" = p").append(i).append('.').append(target.columnFor(target.idProperty()));
+            }
+            for(GraphParentSlot nested:nestedParents) {
+                if(!path.contains(nested.childSlot()))continue;
+                GraphSlot child=slots.get(nested.childSlot());
+                sql.append(' ').append(dialect.join(nested.relation().joinType())).append(' ')
+                   .append(nested.target().table()).append(' ').append(nested.alias())
+                   .append(" ON ").append(child.alias()).append('.')
+                   .append(child.mapper().columnFor(nested.relation().mappedBy()))
+                   .append(" = ").append(nested.alias()).append('.')
+                   .append(nested.target().columnFor(nested.target().idProperty()));
             }
         }
         // Keep all rows belonging to a root contiguous so one root at a time can be emitted.
@@ -919,7 +954,17 @@ public final class Bjorm implements Operations {
                         LinkedHashMap<Object,GraphNode> byId=cursor.children.computeIfAbsent(slotIndex,k->new LinkedHashMap<>());
                         GraphNode child=byId.get(childId);
                         if(child==null) {
-                            child=new GraphNode(slot.mapper,slot.mapper.readAt(rs,slot.offset));
+                            Object childValue=slot.mapper.readAt(rs,slot.offset);
+                            for(GraphParentSlot nested:nestedParents) {
+                                if(nested.childSlot()!=slotIndex)continue;
+                                Object joinedId=rs.getObject(nested.offset()+
+                                    nested.target().idColumnIndex()-1);
+                                Object referenced=joinedId==null?null:
+                                    nested.target().readAt(rs,nested.offset());
+                                childValue=slot.mapper.withParent(childValue,
+                                    nested.relation().property(),referenced);
+                            }
+                            child=new GraphNode(slot.mapper,childValue);
                             byId.put(childId,child);
                         }
                         cursor=child;
@@ -948,8 +993,6 @@ public final class Bjorm implements Operations {
                                    Set<Class<?>> ancestors,List<GraphSlot> slots,List<List<Integer>> paths) {
         if(!ancestors.add(parent.type()))throw new IllegalArgumentException(
             "Recursive @Children type cycle not supported for one-query graph loading: "+parent.type());
-        if(parentSlot!=0 && !parent.parents().isEmpty())
-            throw new UnsupportedOperationException("Nested child @ManyToOne needs an explicit projection");
         if(parent.children().isEmpty())paths.add(List.copyOf(path));
         for(ChildRelation<Object> relation:parent.children()) {
             EntityMapper<Object> child=(EntityMapper<Object>)mapper(relation.childType());
