@@ -49,6 +49,7 @@ public final class MySqlIntegrationTest {
             st.execute("CREATE TABLE bjorm_it_explicit_uuid(id CHAR(36) PRIMARY KEY,label VARCHAR(255))");
             st.execute("CREATE TABLE bjorm_it_orders(id CHAR(36) PRIMARY KEY,description VARCHAR(255),customerId CHAR(36),FOREIGN KEY(customerId) REFERENCES bjorm_it_users(id))");
             st.execute("CREATE TABLE bjorm_it_order_lines(id CHAR(36) PRIMARY KEY,orderId CHAR(36),sku VARCHAR(255),FOREIGN KEY(orderId) REFERENCES bjorm_it_orders(id))");
+            st.execute("CREATE TABLE bjorm_it_order_lines_to_one(id CHAR(36) PRIMARY KEY,orderId CHAR(36) NOT NULL,userId CHAR(36),sku VARCHAR(255),FOREIGN KEY(orderId) REFERENCES bjorm_it_orders(id),FOREIGN KEY(userId) REFERENCES bjorm_it_users(id))");
             st.execute("CREATE TABLE bjorm_it_order_notes(id CHAR(36) PRIMARY KEY,orderId CHAR(36),note VARCHAR(255),version INT NOT NULL DEFAULT 0,FOREIGN KEY(orderId) REFERENCES bjorm_it_orders(id))");
         }
         try{
@@ -56,7 +57,7 @@ public final class MySqlIntegrationTest {
                 ItUser_BjormMapper.INSTANCE,ItDocument_BjormMapper.INSTANCE,
                 AutoLongRecord_BjormMapper.INSTANCE,ItOrder_BjormMapper.INSTANCE,
                 ItOrderWithCustomer_BjormMapper.INSTANCE,
-                ItOrderLine_BjormMapper.INSTANCE,ItOrderNote_BjormMapper.INSTANCE,
+                ItOrderLine_BjormMapper.INSTANCE,ItLineWithUser_BjormMapper.INSTANCE,ItOrderWithNestedReference_BjormMapper.INSTANCE,ItOrderNote_BjormMapper.INSTANCE,
                 ItInstant_BjormMapper.INSTANCE,MappedColumns_BjormMapper.INSTANCE,OrdinalEvent_BjormMapper.INSTANCE,
                 ItAuditRecord_BjormMapper.INSTANCE,ItAuditPojo_BjormMapper.INSTANCE,
                 ExplicitAssignedRecord_BjormMapper.INSTANCE,ExplicitIdentityRecord_BjormMapper.INSTANCE,
@@ -369,10 +370,32 @@ public final class MySqlIntegrationTest {
             check(loaded!=null&&loaded.getLines().size()==1,"MySQL automatic relation JOIN");
             db.delete(parent);
             check(db.find(ItOrder.class,parent.getId())==null,"MySQL cascade delete");
+            ItUser nestedUser=db.insertReturning(new ItUser(null,"Nested child customer MySQL",29));
+            ItOrderWithNestedReference nestedOrder=db.insertReturning(
+                new ItOrderWithNestedReference(UUID.randomUUID(),"nested to-one MySQL",null,
+                    List.of(new ItLineWithUser(null,null,nestedUser.id(),"REF",null),
+                            new ItLineWithUser(null,null,null,"OPTIONAL",null))));
+            java.util.concurrent.atomic.AtomicInteger nestedQueries=new java.util.concurrent.atomic.AtomicInteger();
+            Bjorm observedNested=db.observeSql((operation,nanos,ok)->{
+                if(operation==SqlOperation.QUERY)nestedQueries.incrementAndGet();
+            });
+            ItOrderWithNestedReference nestedLoaded=observedNested
+                .select(ItOrderWithNestedReference.class)
+                .where(ItOrderWithNestedReference_.id.eq(nestedOrder.id()))
+                .limit(1).fetch().getFirst();
+            check(nestedLoaded.lines().size()==2 &&
+                nestedLoaded.lines().stream().anyMatch(item->
+                    "REF".equals(item.sku()) && item.customer()!=null &&
+                    item.customer().id().equals(nestedUser.id())) &&
+                nestedLoaded.lines().stream().anyMatch(item->
+                    "OPTIONAL".equals(item.sku()) && item.customer()==null),
+                "MySQL nested child @ManyToOne hydration with nullable FK");
+            check(nestedQueries.get()==1,
+                "MySQL nested child @ManyToOne graph must use one JDBC query");
             System.out.println("PASS: MySQL 8.4 CRUD, native upsert, JSON, UUID v7, AUTO_INCREMENT and eager JOIN graph");
         }finally {
             try(Connection c=source.getConnection();Statement st=c.createStatement()){
-                for(String name:List.of("bjorm_it_composite","bjorm_it_composite_pojo","bjorm_it_embedded_records","bjorm_it_embedded_pojos","bjorm_it_invoices","bjorm_it_order_notes","bjorm_it_order_lines","bjorm_it_orders",
+                for(String name:List.of("bjorm_it_composite","bjorm_it_composite_pojo","bjorm_it_embedded_records","bjorm_it_embedded_pojos","bjorm_it_invoices","bjorm_it_order_notes","bjorm_it_order_lines_to_one","bjorm_it_order_lines","bjorm_it_orders",
                     "bjorm_it_columns","bjorm_it_ordinal","bjorm_it_audit","bjorm_it_audit_pojo",
                     "bjorm_it_explicit_assigned","bjorm_it_explicit_identity","bjorm_it_explicit_uuid",
                     "bjorm_it_static",

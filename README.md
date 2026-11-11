@@ -750,8 +750,14 @@ may now declare both `@Children` and `@ManyToOne`: BJORM appends the
 parent's columns and JOIN to each `UNION ALL` branch for the sibling child
 collections, and hydrates both associations **in the same SQL statement**.
 The referenced parent is not inserted, updated or deleted transitively.
-Nested `@ManyToOne` references inside child collection types and referenced
-entities with their own graphs are still unsupported and fail explicitly.
+A child inside an `@Children` graph may also declare a **direct**
+`@ManyToOne` to a flat single-key target. Each `UNION ALL` branch joins
+only the referenced targets belonging to its active child path, while all
+branches project the same positional columns. The parent and nested child
+references are hydrated in **one JDBC query**, including nullable LEFT JOINs.
+Root pagination still executes before child expansion. Recursive references,
+association targets with their own graphs, and composite-key to-one targets
+remain unsupported and fail explicitly.
 For standalone ManyToOne loading, explicit user-written JOINs cannot be
 mixed with the implicit reference JOIN. Use a dedicated projection for
 nested or customized association shapes.
