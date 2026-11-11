@@ -1,44 +1,37 @@
 # BJORM implementation status — 0.3.19-SNAPSHOT
 
-Experimental Java 25 compile-time JDBC mapper. Not production-ready. Current repository `rfdetoni/bjorm` on `main`. This file describes code capability, not a claim of full production certification.
+> Java 25 compile-time JDBC mapper. This document records implemented code and known limitations, **not production certification**. The canonical remaining roadmap is [issue #11](https://github.com/rfdetoni/bjorm/issues/11). A successful GitHub Actions job validates a specific commit, not all possible deployments.
 
-## Implemented
+## Verified capabilities
 
-- Dependency-free JDBC core, generated CRUD/binders/readers for POJOs and records, compile-time entity paths and `@Query` repositories.
-- Primary-key UUID v7, database identity returns, explicit transactions, bulk writes, versioned optimistic updates/deletes and native dialect-specific UPSERT.
-- Typed DSL, property projections, `findOne`, `count`, `exists`, transaction-guarded `lockOne` (`FOR UPDATE`/`FOR SHARE`), scalar mapping and seek/offset paging in the optional Spring adapter.
-- Eager `@Children` graph loading and atomic cascades. Nested/reused mapper relationships are resolved by their graph-parent slot.
-- Mapped superclass columns including `@Children(mappedBy=...)` child foreign keys inherited by POJOs.
-- PostgreSQL 17 and MySQL 8.4 dialects; compiled `@Query` UUID bindings and scalar UUID reads use the active dialect.
-- MySQL UPSERT guards against updating a different primary-key row due to secondary UNIQUE collision when using UUID/String keys; numeric-key and versioned MySQL UPSERT remain unsupported.
-- Typed JSON codecs (application-provided), with SQL NULL preserved and vendor JSON casts.
-- `bjorm-spring-boot` targets Spring Boot 4.1.1; core remains Spring-independent.
+- No JPA, Hibernate, or runtime entity reflection. Generated record/POJO mappers, typed fields, projections, compiled `@Query` methods and optional ServiceLoader mapper registration.
+- PostgreSQL 17 and MySQL 8.4 dialects, typed JSON codecs, `@Converted` generated JDBC value converters, `@Embedded` scalar value records, `@EnumOrdinal`, `@Transient`, audit timestamps and compile-validated `@Id` strategies.
+- UUIDv7, database identity columns, assigned composite primary keys, optimistic versioned writes, versioned MySQL single-statement compare-and-swap UPSERT, PostgreSQL UPSERT, mapped `updateBy/deleteBy`, bounded batches, count/exists and projections.
+- Root `@Children`, direct `@ManyToOne`, child direct `@ManyToOne`, and eager one-query UNION ALL graph hydration. Cyclic relationships, multi-hop referenced graphs and composite FKs are **not** fully supported.
+- Transaction-only identity reuse, JDBC cursor streaming with transaction lifetime, explicit transaction isolation (`READ_COMMITTED`, `REPEATABLE_READ`, `SERIALIZABLE`), and optional SQL execution timing **without SQL text or parameters**.
+- Opt-in `insertDetached/upsertDetached` for safe supported shapes, retaining mutable legacy writes for source compatibility. Detached graphs with children and values requiring unknown deep-copy contracts are rejected, including mutable typed JSON/converted records.
+- `lockOne` and bounded `lockRows` (flat entities) with UPDATE/SHARE, NOWAIT and SKIP LOCKED. Row locks must belong to an existing caller-owned transaction.
+- Spring Boot 4.1 integration using `TransactionAwareDataSourceProxy`; internally multi-statement operations join Spring transactions, but explicit `db.tx()` cannot nest.
+- Tenant-required schema/catalog scoping, rejection of unreviewed native SQL, PostgreSQL restricted LOGIN isolation tests and MySQL per-tenant restricted-account tests. **Application routing is not a substitute for per-tenant database permissions.**
+- CI tests Java 25 + PostgreSQL 17 + MySQL 8.4. The default Java-only verifier correctly emits SKIP for absent real databases; database jobs run against real drivers.
 
-## Core safety work in 0.3.19
+## Compatibility and security notes
 
-- Primitive `Class<T>` scalar requests (e.g. `int.class`) are boxed before casting.
-- `batchInsert` fails fast for `@Children` graphs, avoiding silent loss of child rows.
-- UPSERT prepares each entity once, including graph persistence; `ActiveRecord.upsert` returns generated record copies.
-- `find(type, null)` is rejected before obtaining a connection; `@Children(INNER)` root-filter semantics are documented.
-- Mapped FK/ID types are checked with `Types.isSameType`, and SELECT paths apply a `fetchSize` hint.
-- The Spring pagination adapter rejects page sizes above its configured `maxPageSize` (default: 500).
+The `0.x` API still mutates POJOs in legacy INSERT/UPSERT paths for compatibility. Prefer detached writes on supported shapes and discard returned proposed persisted state if an external transaction rolls back. Never mistake a successful JDBC statement for an external Spring commit.
 
-## Validation
+Pass only a server-authorized tenant identifier to `forTenant` and enforce per-tenant credentials outside BJORM. `setCatalog` and PostgreSQL `search_path` are routing/scoping primitives, not authorization.
 
-- `.github/workflows/build.yml` has Java 25 full-reactor checks and disposable PostgreSQL 17/MySQL 8.4 jobs; snapshot publication requires all three successful.
-- `scripts/verify.sh` runs compile-time negative tests, Java smoke tests, inherited field/FK checks and shared-relation graph regression, plus real JDBC integration when environment variables and drivers are available.
-- Each new commit requires its own build evidence. Successful historical workflows do not validate the 0.3.19 changes.
+Root graph pagination currently uses a single CTE/UNION ALL plan; select joins that multiply roots are refused for pagination. Buffered reads have explicit row limits; PostgreSQL streaming needs a transaction, not just a positive fetch-size hint.
 
-## Known limits and pending validation
+## Still pending (issue #11)
 
-- No complete tenant routing, soft-delete policy, audit author/time, lazy loading, identity map or L2 cache. These features need explicit contracts and security review before adoption.
-- Explicit JOIN pagination that multiplies roots is rejected; eager graph sorting is restricted to root columns.
-- Real-world Spring consumer transaction compatibility, concurrency/load testing and reproducible PostgreSQL/MySQL performance numbers require further verification. PostgreSQL streaming still needs transactions; ordinary auto-commit SELECTs may ignore a positive fetch-size hint.
-- In-memory `@Version` values remain stale after update/upsert; re-fetch before the next optimistic mutation.
-- Native MySQL SQL differs from PostgreSQL: no FULL OUTER JOIN; versioned UPSERT rejected; numeric assigned-ID UPSERT rejected.
-- UPSERT on arbitrary composite unique constraints and configurable NOWAIT/SKIP LOCKED are not yet covered by the typed API; use BJORM native SQL or generated `@Query` with documented transaction boundaries.
-- Snapshot versions are published to GitHub Packages only after the validated GitHub Actions pipeline succeeds.
+1. Deep detached graph persistence and stronger external transaction guarantees; production IAM/provisioning/pool-credential orchestration and isolated credentials.
+2. Recursive to-one, referenced targets with nested graphs, composite-key FKs and full arbitrary-depth relationship planner.
+3. Controlled JMH/pgJDBC runs, allocation and tail-latency measurements, two-phase graph pagination comparison and real workload tuning.
+4. Complete soft-delete, automatic filters, advanced JSONB, typed subqueries, formula projections, safe retries/extended RETURNING, Oracle/SQL Server dialect integration, and explicitly scoped lazy loading.
 
-## History
+Some feature families are deliberately refused until their safety/compatibility contracts are defined; rejected shapes must not be described as implemented.
 
-See `CHANGELOG.md` for version-by-version changes and `ARCHITECTURE.md` for supported behavior and design tradeoffs.
+## Release policy
+
+Stable releases are not created automatically. Snapshot publication is gated on Java, PostgreSQL and MySQL CI on `main`. Check the exact workflow and Maven consumer resolution before claiming artifacts are usable. See `ARCHITECTURE.md`, `CHANGELOG.md`, and `docs/tenant-database-permissions.md`.
