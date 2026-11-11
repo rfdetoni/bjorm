@@ -511,6 +511,35 @@ public final class PostgresIntegrationTest {
                 "PostgreSQL nested child @ManyToOne hydration with nullable FK");
             check(nestedQueries.get()==1,
                 "PostgreSQL nested child @ManyToOne graph must use one JDBC query");
+            // Two distinct real JDBC connections contend for the same row.
+            // SKIP LOCKED must return promptly without observing the locked row;
+            // NOWAIT must raise the database's documented lock-not-available error.
+            try(Connection owner=ds.getConnection()) {
+                owner.setAutoCommit(false);
+                try(PreparedStatement blocker=owner.prepareStatement(
+                    "SELECT id FROM bjorm_it_users WHERE id = ? FOR UPDATE")) {
+                    blocker.setObject(1,invoiceCustomer.id());
+                    try(ResultSet held=blocker.executeQuery()) {
+                        check(held.next(),"PostgreSQL blocker locked expected user row");
+                    }
+                }
+                for(LockMode mode:List.of(LockMode.UPDATE_SKIP_LOCKED,LockMode.SHARE_SKIP_LOCKED)) {
+                    boolean selected=db.txResult(tx->
+                        tx.lockOne(ItUser.class,ItUser_.id.eq(invoiceCustomer.id()),mode));
+                    check(!selected,"PostgreSQL "+mode+" must skip an exclusively locked row");
+                }
+                for(LockMode mode:List.of(LockMode.UPDATE_NOWAIT,LockMode.SHARE_NOWAIT)) {
+                    try {
+                        db.tx(tx->tx.lockOne(ItUser.class,ItUser_.id.eq(invoiceCustomer.id()),mode));
+                        throw new AssertionError("PostgreSQL NOWAIT unexpectedly acquired a blocked row");
+                    } catch(BjormException refused) {
+                        Throwable error=refused.getCause();
+                        check(error instanceof SQLException && "55P03".equals(((SQLException)error).getSQLState()),
+                            "PostgreSQL NOWAIT must report the vendor lock-not-available code");
+                    }
+                }
+                owner.rollback();
+            }
             System.out.println("PASS: PostgreSQL CRUD, DSL, version, rollback, batch, UUID v7, upsert and nested cascade");
         } finally {
             try(Connection c=ds.getConnection();Statement st=c.createStatement()){

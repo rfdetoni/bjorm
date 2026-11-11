@@ -392,6 +392,35 @@ public final class MySqlIntegrationTest {
                 "MySQL nested child @ManyToOne hydration with nullable FK");
             check(nestedQueries.get()==1,
                 "MySQL nested child @ManyToOne graph must use one JDBC query");
+            // Two distinct real JDBC connections contend for the same row.
+            // SKIP LOCKED must return promptly without observing the locked row;
+            // NOWAIT must raise the database's documented lock-not-available error.
+            try(Connection owner=source.getConnection()) {
+                owner.setAutoCommit(false);
+                try(PreparedStatement blocker=owner.prepareStatement(
+                    "SELECT id FROM bjorm_it_users WHERE id = ? FOR UPDATE")) {
+                    blocker.setString(1,invoiceCustomer.id().toString());
+                    try(ResultSet held=blocker.executeQuery()) {
+                        check(held.next(),"MySQL blocker locked expected user row");
+                    }
+                }
+                for(LockMode mode:List.of(LockMode.UPDATE_SKIP_LOCKED,LockMode.SHARE_SKIP_LOCKED)) {
+                    boolean selected=db.txResult(tx->
+                        tx.lockOne(ItUser.class,ItUser_.id.eq(invoiceCustomer.id()),mode));
+                    check(!selected,"MySQL "+mode+" must skip an exclusively locked row");
+                }
+                for(LockMode mode:List.of(LockMode.UPDATE_NOWAIT,LockMode.SHARE_NOWAIT)) {
+                    try {
+                        db.tx(tx->tx.lockOne(ItUser.class,ItUser_.id.eq(invoiceCustomer.id()),mode));
+                        throw new AssertionError("MySQL NOWAIT unexpectedly acquired a blocked row");
+                    } catch(BjormException refused) {
+                        Throwable error=refused.getCause();
+                        check(error instanceof SQLException && ((SQLException)error).getErrorCode()==3572,
+                            "MySQL NOWAIT must report the vendor lock-not-available code");
+                    }
+                }
+                owner.rollback();
+            }
             System.out.println("PASS: MySQL 8.4 CRUD, native upsert, JSON, UUID v7, AUTO_INCREMENT and eager JOIN graph");
         }finally {
             try(Connection c=source.getConnection();Statement st=c.createStatement()){
