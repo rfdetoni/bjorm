@@ -25,6 +25,10 @@ public final class CompositeIdSmokeTest {
             "typed predicate DSL for both key components");
         check(ItCompositeRecord_BjormMapper.INSTANCE.idProperties().equals(
             java.util.List.of("tenantId","sku")),"ordered composite key metadata");
+        check(ItCompositeParentWithChildren_BjormMapper.INSTANCE.compositeId() &&
+            ItCompositeParentWithChildren_BjormMapper.INSTANCE.children().getFirst()
+                .mappedByParts().equals(java.util.List.of("tenantId","sku")),
+            "Generated composite one-to-many relation exposes both FK parts");
         check(ItCompositeReference_BjormMapper.INSTANCE.parents().getFirst().mappedByParts().equals(
             java.util.List.of("tenantId","sku")),"compile-time ordered composite FK metadata");
         check(ItCompositePojo_BjormMapper.INSTANCE.compositeId(),"POJO tuple id generated");
