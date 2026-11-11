@@ -132,6 +132,27 @@ The active `SqlDialect.bindValue(...)` handles UUID and `java.time.Instant`
 portably (the latter as a JDBC `Timestamp`); native `db.query` / `db.execute`
 callers can use it in their `StatementBinder` without custom temporal conversions.
 
+PostgreSQL `INSERT/UPDATE/DELETE ... RETURNING` is available through the
+opt-in native DML API. It binds values through `StatementBinder`, maps rows
+with a typed `RowMapper<T>` and executes in one transaction:
+
+```java
+List<UUID> updatedIds=db.executeReturning(
+    "UPDATE orders SET status=? WHERE status=? RETURNING id",
+    db.params("READY","PENDING"), rs->JdbcValues.uuid(rs,1));
+```
+
+`executeReturning` can also be called on a `Transaction` and then joins
+its existing boundary. It refuses MySQL because equivalent `RETURNING`
+behavior is not available in BJORM's MySQL dialect. The result is bounded
+by `BjormOptions.maxBufferedRows`; exceeding the budget throws and rolls
+back a BJORM-owned transaction instead of silently truncating changed rows.
+A caller-owned Spring transaction must be marked rollback-only on failure.
+For tenant-required instances, native SQL remains forbidden unless an
+already authorized tenant explicitly enables
+`permitReviewedTenantNativeSql()`. A successful returned row indicates
+execution, not proof of commit when an outer transaction owns the connection.
+
 For native SQL, avoid duplicating `StatementBinder` lambdas. `Operations.params(...)`
 captures positional arguments once, binds through the selected dialect and works
 in the top-level `Bjorm` and in transaction-scoped `Operations`:
