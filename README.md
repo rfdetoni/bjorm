@@ -106,9 +106,27 @@ row does not exist. PostgreSQL raises SQLSTATE `55P03` for NOWAIT;
 MySQL 8.4 raises error 3572. These modes are exercised with two actual
 competing JDBC connections in integration tests.
 
-`lockOne` requires a non-null typed predicate and a live transaction. A call with an auto-commit connection
-fails explicitly; doing row locking outside a transaction would silently
-release the lock. A row-missing predicate returns `false`.
+`lockOne` requires a non-null typed predicate and a **caller-owned**
+live transaction. Calls on auto-commit connections fail explicitly **before**
+BJORM may create a short-lived tenant-scoped transaction, so locks are not
+silently released. A row-missing predicate returns `false`.
+
+For competing queue workers, `lockRows` reads and locks up to a caller-supplied
+limit of **flat entities with one primary key**, ordered by that key:
+
+```java
+db.tx(tx -> {
+    List<Product> claimed = tx.lockRows(Product.class,
+        Product_.status.eq(Status.PENDING), LockMode.UPDATE_SKIP_LOCKED, 50);
+    // Process and update the claimed rows in this SAME transaction.
+});
+```
+
+Both `tx.lockRows(...)` and direct `db.lockRows(...)` reject auto-commit,
+null predicates and missing transaction ownership. The bound is limited by
+`BjormOptions.maxBufferedRows`; graphs and composite-ID entities are rejected
+rather than partially hydrated. SKIP LOCKED does **not** imply a stable page
+or guarantee that a missing record does not exist.
 
 The active `SqlDialect.bindValue(...)` handles UUID and `java.time.Instant`
 portably (the latter as a JDBC `Timestamp`); native `db.query` / `db.execute`
