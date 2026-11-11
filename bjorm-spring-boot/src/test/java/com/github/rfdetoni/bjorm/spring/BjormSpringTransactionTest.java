@@ -3,6 +3,7 @@ package com.github.rfdetoni.bjorm.spring;
 import com.github.rfdetoni.bjorm.Bjorm;
 import com.github.rfdetoni.bjorm.BjormOptions;
 import com.github.rfdetoni.bjorm.SqlDialects;
+import com.github.rfdetoni.bjorm.TransactionIsolation;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.datasource.AbstractDataSource;
 import org.springframework.jdbc.datasource.TransactionAwareDataSourceProxy;
