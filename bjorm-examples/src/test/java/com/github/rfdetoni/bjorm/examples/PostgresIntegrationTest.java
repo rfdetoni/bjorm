@@ -36,6 +36,7 @@ public final class PostgresIntegrationTest {
             st.execute("CREATE TABLE bjorm_it_composite_pojo (tenantId uuid NOT NULL,sku text NOT NULL,label text,PRIMARY KEY(tenantId,sku))");
             st.execute("CREATE TABLE bjorm_it_embedded_records (id uuid PRIMARY KEY, label text, shipping_street text, shipping_postal text)");
             st.execute("CREATE TABLE bjorm_it_embedded_pojos (id uuid PRIMARY KEY, label text, billing_street text, billing_postal text)");
+            st.execute("CREATE TABLE bjorm_it_converted (id uuid PRIMARY KEY, amount numeric(18,2), label text)");
             st.execute("CREATE SCHEMA bjorm_test");
             st.execute("CREATE TABLE bjorm_test.bjorm_it_static (id uuid PRIMARY KEY, label text)");
             st.execute("CREATE SCHEMA bjorm_tenant_a");
@@ -74,7 +75,7 @@ public final class PostgresIntegrationTest {
             ItInvoice_BjormMapper.INSTANCE,ItInvoiceInner_BjormMapper.INSTANCE,
             ItInvoicePojo_BjormMapper.INSTANCE,
             ItEmbeddedRecord_BjormMapper.INSTANCE,ItEmbeddedPojo_BjormMapper.INSTANCE,
-            ItCompositeRecord_BjormMapper.INSTANCE,ItCompositePojo_BjormMapper.INSTANCE);
+            ItCompositeRecord_BjormMapper.INSTANCE,ItCompositePojo_BjormMapper.INSTANCE,ItConvertedRecord_BjormMapper.INSTANCE);
         UUID id=UUID.randomUUID();ItUser alice=new ItUser(id,"BJORM",34);
         try {
             StaticSchemaRecord fixed=db.insertReturning(new StaticSchemaRecord(null,"initial-static"));
@@ -139,6 +140,21 @@ public final class PostgresIntegrationTest {
                 db.insertReturning(new ItEmbeddedRecord(null,"missing",null));
                 throw new AssertionError("null @Embedded value accepted");
             } catch(IllegalArgumentException expected) {}
+            ItConvertedRecord converted=db.insertReturning(new ItConvertedRecord(
+                UUID.randomUUID(),new MoneyValue(new BigDecimal("22.50")),"convertible"));
+            check(db.find(ItConvertedRecord.class,converted.id()).amount().equals(converted.amount()),
+                "PostgreSQL generated JDBC converter round-trip");
+            check(db.list(ItConvertedRecord.class,
+                ItConvertedRecord_.amount.eq(new MoneyValue(new BigDecimal("22.50")))).size()==1,
+                "PostgreSQL typed equality converts domain values to JDBC parameters");
+            check(db.list(ItConvertedRecord.class,
+                ItConvertedRecord_.amount.in(List.of(new MoneyValue(new BigDecimal("22.50"))))).size()==1,
+                "PostgreSQL typed IN converts domain values");
+            check(db.updateBy(ItConvertedRecord.class,
+                Map.of("amount",new MoneyValue(new BigDecimal("31.75"))),
+                ItConvertedRecord_.id.eq(converted.id()))==1 &&
+                db.find(ItConvertedRecord.class,converted.id()).amount().amount().compareTo(new BigDecimal("31.75"))==0,
+                "PostgreSQL generated converter supports bulk mapped update");
             UUID compositeTenant=UUID.randomUUID();
             CompositeId compoundId=CompositeId.of(compositeTenant,"ABC");
             ItCompositeRecord createdComposite=db.insertReturning(new ItCompositeRecord(compositeTenant,"ABC","first",0));
@@ -582,6 +598,7 @@ public final class PostgresIntegrationTest {
                 st.execute("DROP TABLE IF EXISTS bjorm_it_invoices");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_embedded_records");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_embedded_pojos");
+                st.execute("DROP TABLE IF EXISTS bjorm_it_converted");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_users");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_columns");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_ordinal");

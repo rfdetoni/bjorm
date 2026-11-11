@@ -897,6 +897,42 @@ change audit fields. With those annotations the generated lifecycle
 rules documented above apply; authenticated-user audit attribution
 remains the responsibility of the domain/service layer.
 
+## Custom JDBC value converters (opt-in)
+
+A `@Converted` property maps one immutable domain value into one JDBC
+column without runtime entity reflection, JPA, Hibernate, or a Jackson
+dependency. Implement a public, thread-safe `JdbcColumnConverter<T>`
+with `write(T)` and `read(ResultSet, int)`, then annotate a record
+component or POJO field:
+
+```java
+public record MoneyValue(BigDecimal amount) {}
+
+public final class MoneyValueConverter implements JdbcColumnConverter<MoneyValue> {
+    public Object write(MoneyValue value) { return value.amount(); }
+    public MoneyValue read(ResultSet rs, int column) throws SQLException {
+        BigDecimal amount = rs.getBigDecimal(column);
+        return amount == null ? null : new MoneyValue(amount);
+    }
+}
+
+@Table("invoice_lines")
+public record InvoiceLine(@Id UUID id,
+    @Converted(MoneyValueConverter.class) MoneyValue unitPrice, String label) {}
+```
+
+The annotation processor generates direct converter calls for INSERT/UPDATE,
+SELECT, projections, `updateBy`, and type-safe predicates (`eq`, `in`,
+`between`, etc.). Java compilation rejects incompatible converter generic
+types and inaccessible constructors. IDs, versions, auditing fields, JSON
+and primitive fields cannot be converted. Use an immutable value object:
+`insertDetached`/`upsertDetached` on mutable POJOs containing custom
+converted fields are deliberately rejected until a safe snapshot contract
+exists. A converter must be stateless/thread-safe because the generated
+mapper retains a shared converter instance. Native `@Query` parameters
+need explicit JDBC values; they are not automatically associated with a
+particular entity converter.
+
 ## Typed JSON (no Jackson dependency in core)
 
 `@Json String` still binds the text directly. For a domain object, list or map, supply a codec whose parameter exactly matches the Java property type:

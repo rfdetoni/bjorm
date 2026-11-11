@@ -48,7 +48,7 @@ public final class EntityProcessor extends AbstractProcessor {
         }
         return true;
     }
-    private record Col(String property,String column,String type,String read,String write,boolean id,boolean version,boolean generated,boolean json,boolean uuidV7,String jsonCodec,TypeMirror typeMirror,boolean insertable,boolean updatable,boolean enumOrdinal,boolean createdAt,boolean updatedAt) {}
+    private record Col(String property,String column,String type,String read,String write,boolean id,boolean version,boolean generated,boolean json,boolean uuidV7,String jsonCodec,String converter,TypeMirror typeMirror,boolean insertable,boolean updatable,boolean enumOrdinal,boolean createdAt,boolean updatedAt) {}
     private static boolean isNumericId(String type) {return Set.of("int","long","java.lang.Integer","java.lang.Long").contains(type);}
     private static boolean autoUuid(Id id,String type) {
         if(id==null)return false;
@@ -79,7 +79,8 @@ public final class EntityProcessor extends AbstractProcessor {
         Embedded annotation=field.getAnnotation(Embedded.class);
         if(field.getAnnotation(Id.class)!=null || field.getAnnotation(Version.class)!=null ||
            field.getAnnotation(Children.class)!=null || field.getAnnotation(ManyToOne.class)!=null ||
-           field.getAnnotation(Transient.class)!=null || field.getAnnotation(Json.class)!=null)
+           field.getAnnotation(Transient.class)!=null || field.getAnnotation(Json.class)!=null ||
+           field.getAnnotation(Converted.class)!=null)
             throw new IllegalArgumentException("@Embedded cannot be an ID, version, transient or graph relation");
         if(!(field.asType() instanceof DeclaredType dt) ||
            !(dt.asElement() instanceof TypeElement valueType) ||
@@ -96,14 +97,14 @@ public final class EntityProcessor extends AbstractProcessor {
                member.getAnnotation(CreatedAt.class)!=null || member.getAnnotation(UpdatedAt.class)!=null)
                 throw new IllegalArgumentException("@Embedded only supports direct scalar record components");
             String name=member.getSimpleName().toString(),type=member.asType().toString();
-            if(!supported(type) && member.getAnnotation(Json.class)==null)
+            if(!supported(type) && member.getAnnotation(Json.class)==null && member.getAnnotation(Converted.class)==null)
                 throw new IllegalArgumentException("Unsupported @Embedded component: "+type);
             String sqlColumn=prefix+colName(member,name);
             if(!identifier(sqlColumn))
                 throw new IllegalArgumentException("Invalid @Embedded SQL column: "+sqlColumn);
             cols.add(new Col(property+"."+name,sqlColumn,type,reader+"."+name+"()","",
                 false,false,false,member.getAnnotation(Json.class)!=null,false,
-                jsonCodec(member),member.asType(),
+                jsonCodec(member),converter(member),member.asType(),
                 member.getAnnotation(Column.class)==null||member.getAnnotation(Column.class).insertable(),
                 member.getAnnotation(Column.class)==null||member.getAnnotation(Column.class).updatable(),
                 member.getAnnotation(EnumOrdinal.class)!=null,false,false));
@@ -156,7 +157,7 @@ public final class EntityProcessor extends AbstractProcessor {
                     embedded(c,"value."+prop+"()",null,cols,embeddeds);continue;
                 }
                 Id idAnn=c.getAnnotation(Id.class);
-                cols.add(new Col(prop,colName(c,prop),c.asType().toString(),"value."+prop+"()","",idAnn!=null,c.getAnnotation(Version.class)!=null,databaseId(idAnn,c.asType().toString()),c.getAnnotation(Json.class)!=null,autoUuid(idAnn,c.asType().toString()),jsonCodec(c),c.asType(),c.getAnnotation(Column.class)==null||c.getAnnotation(Column.class).insertable(),c.getAnnotation(Column.class)==null||c.getAnnotation(Column.class).updatable(),c.getAnnotation(EnumOrdinal.class)!=null,c.getAnnotation(CreatedAt.class)!=null,c.getAnnotation(UpdatedAt.class)!=null));
+                cols.add(new Col(prop,colName(c,prop),c.asType().toString(),"value."+prop+"()","",idAnn!=null,c.getAnnotation(Version.class)!=null,databaseId(idAnn,c.asType().toString()),c.getAnnotation(Json.class)!=null,autoUuid(idAnn,c.asType().toString()),jsonCodec(c),converter(c),c.asType(),c.getAnnotation(Column.class)==null||c.getAnnotation(Column.class).insertable(),c.getAnnotation(Column.class)==null||c.getAnnotation(Column.class).updatable(),c.getAnnotation(EnumOrdinal.class)!=null,c.getAnnotation(CreatedAt.class)!=null,c.getAnnotation(UpdatedAt.class)!=null));
             }
         } else {
             boolean constructor=false;
@@ -186,7 +187,7 @@ public final class EntityProcessor extends AbstractProcessor {
                 String setter="set"+suff;
                 if(getter==null||!hasSetter(entity,setter,type)) {error(el,"POJO needs public getter and setter for "+prop);return;}
                 Id idAnn=el.getAnnotation(Id.class);
-                cols.add(new Col(prop,colName(el,prop),type,"value."+getter+"()","value."+setter,cAnnotated(el,Id.class),cAnnotated(el,Version.class),databaseId(idAnn,type),el.getAnnotation(Json.class)!=null,autoUuid(idAnn,type),jsonCodec(el),el.asType(),el.getAnnotation(Column.class)==null||el.getAnnotation(Column.class).insertable(),el.getAnnotation(Column.class)==null||el.getAnnotation(Column.class).updatable(),el.getAnnotation(EnumOrdinal.class)!=null,el.getAnnotation(CreatedAt.class)!=null,el.getAnnotation(UpdatedAt.class)!=null));
+                cols.add(new Col(prop,colName(el,prop),type,"value."+getter+"()","value."+setter,cAnnotated(el,Id.class),cAnnotated(el,Version.class),databaseId(idAnn,type),el.getAnnotation(Json.class)!=null,autoUuid(idAnn,type),jsonCodec(el),converter(el),el.asType(),el.getAnnotation(Column.class)==null||el.getAnnotation(Column.class).insertable(),el.getAnnotation(Column.class)==null||el.getAnnotation(Column.class).updatable(),el.getAnnotation(EnumOrdinal.class)!=null,el.getAnnotation(CreatedAt.class)!=null,el.getAnnotation(UpdatedAt.class)!=null));
             }
         }
         if(cols.isEmpty()){error(entity,"@Table requires mapped properties");return;}
@@ -213,7 +214,12 @@ public final class EntityProcessor extends AbstractProcessor {
         for(int i=0;i<cols.size();i++){
             Col c=cols.get(i);
             if(!identifier(c.column())||!seen.add(c.column())){error(entity,"Invalid/duplicate column: "+c.column());return;}
-            if(!c.json() && !supported(c.type())) {error(entity,"Unsupported JDBC property: "+c.type());return;}
+            if(!c.json() && c.converter()==null && !supported(c.type())) {error(entity,"Unsupported JDBC property: "+c.type());return;}
+            if(c.converter()!=null && (c.id()||c.version()||c.generated()||c.uuidV7()||
+                c.json()||c.enumOrdinal()||c.createdAt()||c.updatedAt()||
+                c.typeMirror().getKind().isPrimitive())) {
+                error(entity,"@Converted requires a nullable non-ID, non-audit, non-JSON column");return;
+            }
             if(c.createdAt() || c.updatedAt()) {
                 if(c.createdAt()&&c.updatedAt() || c.id() || c.version() || c.json() || c.enumOrdinal() ||
                    !Set.of("java.time.Instant","java.time.LocalDateTime").contains(c.type()) ||
@@ -379,18 +385,28 @@ public final class EntityProcessor extends AbstractProcessor {
         try{return annotation.codec().getCanonicalName();}
         catch(MirroredTypeException e){return e.getTypeMirror().toString();}
     }
+    private String converter(Element element) {
+        Converted annotation=element.getAnnotation(Converted.class);
+        if(annotation==null)return null;
+        try {return annotation.value().getCanonicalName();}
+        catch(MirroredTypeException e) {return e.getTypeMirror().toString();}
+    }
     private boolean typedJson(Col col) {
         return col.json()&&!col.jsonCodec().equals("com.github.rfdetoni.bjorm.JsonStringCodec");
     }
     private String readColumn(Col col,String index,int ordinal) {
-        return typedJson(col)
+        return col.converter()!=null
+            ?"CONVERTER_"+ordinal+".read(rs,"+index+")"
+            :typedJson(col)
             ?"com.github.rfdetoni.bjorm.JsonValues.read(rs,"+index+",JSON_"+ordinal+")"
             :col.enumOrdinal()
                 ?"com.github.rfdetoni.bjorm.EnumValues.read(rs,"+index+","+col.type()+".class)"
                 :reader(123456789,col.type()).replace("123456789",index);
     }
     private String writeColumn(Col col,int param,int ordinal,String dialect) {
-        return typedJson(col)
+        return col.converter()!=null
+            ?dialect+".bindValue(ps,"+param+","+col.read()+"==null?null:CONVERTER_"+ordinal+".write("+col.read()+"));"
+            :typedJson(col)
             ?"ps.setString("+param+",com.github.rfdetoni.bjorm.JsonValues.write("+col.read()+",JSON_"+ordinal+"));"
             :col.enumOrdinal()
                 ?"ps.setObject("+param+","+col.read()+"==null?null:"+col.read()+".ordinal());"
@@ -426,6 +442,9 @@ public final class EntityProcessor extends AbstractProcessor {
             w.write("public Class<"+clazz+"> type(){return "+clazz+".class;}\n");
             for(int i=0;i<cols.size();i++) {
                 Col col=cols.get(i);
+                if(col.converter()!=null)
+                    w.write("private static final com.github.rfdetoni.bjorm.JdbcColumnConverter<"+col.type()+"> CONVERTER_"+i+
+                        " = new "+col.converter()+"();\n");
                 if(typedJson(col))
                     w.write("private static final com.github.rfdetoni.bjorm.JsonCodec<"+col.type()+"> JSON_"+i+
                         " = new "+col.jsonCodec()+"();\n");
@@ -449,7 +468,8 @@ public final class EntityProcessor extends AbstractProcessor {
             w.write("public Object bulkParameterValue(String property,Object value){return switch(property){\n");
             for(int ci=0;ci<cols.size();ci++) {
                 Col c=cols.get(ci);
-                if(typedJson(c))w.write("case \""+c.property()+"\" -> com.github.rfdetoni.bjorm.JsonValues.write(("+c.type()+")value,JSON_"+ci+");\n");
+                if(c.converter()!=null)w.write("case \""+c.property()+"\" -> value==null?null:CONVERTER_"+ci+".write(("+c.type()+")value);\n");
+                else if(typedJson(c))w.write("case \""+c.property()+"\" -> com.github.rfdetoni.bjorm.JsonValues.write(("+c.type()+")value,JSON_"+ci+");\n");
                 else if(c.enumOrdinal())w.write("case \""+c.property()+"\" -> value==null?null:(("+c.type()+")value).ordinal();\n");
             }
             w.write("default -> {columnFor(property);yield value;}};}\n");
@@ -484,10 +504,10 @@ public final class EntityProcessor extends AbstractProcessor {
             // an arbitrary codec may modify it during encoding. Fail before JDBC instead.
             // @Embedded values are immutable scalar records, but still get a distinct copy.
             if(!record) {
-                boolean mutableJson=cols.stream().anyMatch(c->c.json()&&!c.type().equals("java.lang.String"));
+                boolean mutableJson=cols.stream().anyMatch(c->(c.json()&&!c.type().equals("java.lang.String"))||c.converter()!=null);
                 w.write("public "+clazz+" copyForWrite("+clazz+" value){");
                 if(!relations.isEmpty() || mutableJson) {
-                    w.write("throw new UnsupportedOperationException(\"Detached writes require an explicit deep-copy contract for child graphs and typed JSON values\");}\n");
+                    w.write("throw new UnsupportedOperationException(\"Detached writes require an explicit deep-copy contract for child graphs, converted values and typed JSON values\");}\n");
                 } else {
                     w.write(clazz+" copy=new "+clazz+"();");
                     for(Element member:pojoFields(entity)) {
@@ -768,7 +788,7 @@ public final class EntityProcessor extends AbstractProcessor {
         String clazz=entity.getSimpleName().toString();
         try(Writer w=file(packageOf(entity),clazz+"_",entity)) {
             w.write("package "+packageOf(entity)+";\npublic final class "+clazz+"_ {private "+clazz+"_(){}\n");
-            for(Col c:cols)w.write("public static final com.github.rfdetoni.bjorm.Field<"+boxed(c.type())+"> "+c.property().replace('.','_')+" = new com.github.rfdetoni.bjorm.Field<>(\""+c.column()+"\");\n");
+            for(Col c:cols)w.write("public static final com.github.rfdetoni.bjorm.Field<"+boxed(c.type())+"> "+c.property().replace('.','_')+" = new com.github.rfdetoni.bjorm.Field<>(\""+c.column()+"\""+(c.converter()==null?"":", new "+c.converter()+"()::write")+");\n");
             w.write("}\n");
         }
     }

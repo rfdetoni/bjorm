@@ -36,6 +36,7 @@ public final class MySqlIntegrationTest {
             st.execute("CREATE TABLE bjorm_it_composite_pojo(tenantId CHAR(36) NOT NULL,sku VARCHAR(255) NOT NULL,label VARCHAR(255),PRIMARY KEY(tenantId,sku))");
             st.execute("CREATE TABLE bjorm_it_embedded_records(id CHAR(36) PRIMARY KEY,label VARCHAR(255),shipping_street VARCHAR(255),shipping_postal VARCHAR(255))");
             st.execute("CREATE TABLE bjorm_it_embedded_pojos(id CHAR(36) PRIMARY KEY,label VARCHAR(255),billing_street VARCHAR(255),billing_postal VARCHAR(255))");
+            st.execute("CREATE TABLE bjorm_it_converted(id CHAR(36) PRIMARY KEY,amount DECIMAL(18,2),label VARCHAR(255))");
             st.execute("CREATE TABLE bjorm_it_ordinal(id CHAR(36) PRIMARY KEY,status INT,label VARCHAR(255))");
             st.execute("CREATE TABLE bjorm_it_audit(id CHAR(36) PRIMARY KEY,label VARCHAR(255),createdAt TIMESTAMP(6) NULL,updatedAt TIMESTAMP(6) NULL)");
             st.execute("CREATE TABLE bjorm_it_audit_pojo(id CHAR(36) PRIMARY KEY,label VARCHAR(255),createdAt TIMESTAMP(6) NULL,updatedAt TIMESTAMP(6) NULL)");
@@ -65,7 +66,7 @@ public final class MySqlIntegrationTest {
                 ItInvoice_BjormMapper.INSTANCE,ItInvoiceInner_BjormMapper.INSTANCE,
                 ItInvoicePojo_BjormMapper.INSTANCE,
                 ItEmbeddedRecord_BjormMapper.INSTANCE,ItEmbeddedPojo_BjormMapper.INSTANCE,
-                ItCompositeRecord_BjormMapper.INSTANCE,ItCompositePojo_BjormMapper.INSTANCE);
+                ItCompositeRecord_BjormMapper.INSTANCE,ItCompositePojo_BjormMapper.INSTANCE,ItConvertedRecord_BjormMapper.INSTANCE);
             ItUser invoiceCustomer=db.insertReturning(new ItUser(null,"MySQL Invoice Customer",27));
             ItInvoice invoice=db.insertReturning(new ItInvoice(null,invoiceCustomer.id(),"MYSQL-INV",null));
             java.util.concurrent.atomic.AtomicInteger queryCount=new java.util.concurrent.atomic.AtomicInteger();
@@ -114,6 +115,18 @@ public final class MySqlIntegrationTest {
                 detachedEmbeddedSource.getBilling()==embeddedAddress &&
                 detachedEmbeddedSaved.getId()!=null,
                 "MySQL detached write creates a separate embedded value snapshot");
+            ItConvertedRecord converted=db.insertReturning(new ItConvertedRecord(
+                UUID.randomUUID(),new MoneyValue(new java.math.BigDecimal("22.50")),"convertible"));
+            check(db.find(ItConvertedRecord.class,converted.id()).amount().equals(converted.amount()),
+                "MySQL generated JDBC converter round-trip");
+            check(db.list(ItConvertedRecord.class,
+                ItConvertedRecord_.amount.eq(new MoneyValue(new java.math.BigDecimal("22.50")))).size()==1,
+                "MySQL typed equality converts domain values");
+            check(db.updateBy(ItConvertedRecord.class,
+                Map.of("amount",new MoneyValue(new java.math.BigDecimal("31.75"))),
+                ItConvertedRecord_.id.eq(converted.id()))==1 &&
+                db.find(ItConvertedRecord.class,converted.id()).amount().amount().compareTo(new java.math.BigDecimal("31.75"))==0,
+                "MySQL generated converter supports mapped bulk update");
             UUID compositeTenant=UUID.randomUUID();
             CompositeId compoundKey=CompositeId.of(compositeTenant,"SKU-MY");
             ItCompositeRecord record=db.insertReturning(new ItCompositeRecord(compositeTenant,"SKU-MY","first",0));
@@ -442,7 +455,7 @@ public final class MySqlIntegrationTest {
             System.out.println("PASS: MySQL 8.4 CRUD, native upsert, JSON, UUID v7, AUTO_INCREMENT and eager JOIN graph");
         }finally {
             try(Connection c=source.getConnection();Statement st=c.createStatement()){
-                for(String name:List.of("bjorm_it_composite","bjorm_it_composite_pojo","bjorm_it_embedded_records","bjorm_it_embedded_pojos","bjorm_it_invoices","bjorm_it_order_notes","bjorm_it_order_lines_to_one","bjorm_it_order_lines","bjorm_it_orders",
+                for(String name:List.of("bjorm_it_converted","bjorm_it_composite","bjorm_it_composite_pojo","bjorm_it_embedded_records","bjorm_it_embedded_pojos","bjorm_it_invoices","bjorm_it_order_notes","bjorm_it_order_lines_to_one","bjorm_it_order_lines","bjorm_it_orders",
                     "bjorm_it_columns","bjorm_it_ordinal","bjorm_it_audit","bjorm_it_audit_pojo",
                     "bjorm_it_explicit_assigned","bjorm_it_explicit_identity","bjorm_it_explicit_uuid",
                     "bjorm_it_static",
