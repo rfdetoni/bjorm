@@ -97,6 +97,7 @@ jobs:
       BJORM_MYSQL_USER: bjorm
       BJORM_MYSQL_PASSWORD: bjorm_test
       BJORM_MYSQL_ROLE_TEST_ADMIN: 'true'
+      BJORM_MYSQL_ROLE_TEST_JDBC_URL: jdbc:mysql://localhost:3306/bjorm_test?sslMode=REQUIRED
       BJORM_MYSQL_ADMIN_USER: root
       BJORM_MYSQL_ADMIN_PASSWORD: root_test
       BJORM_MYSQL_DRIVER_JAR: bjorm-examples/target/mysql-connector-j-9.4.0.jar
