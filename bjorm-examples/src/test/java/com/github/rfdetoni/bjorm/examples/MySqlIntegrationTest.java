@@ -80,17 +80,17 @@ public final class MySqlIntegrationTest {
                 .and(ItInvoice_.reference.as("i").eq("MYSQL-INV"));
             check(db.select(ItUser.class).as("u")
                 .where(SqlSubqueries.exists(ItInvoice_BjormMapper.INSTANCE,"i",correlated))
-                .fetch().stream().anyMatch(user->invoiceCustomer.id().equals(user.id())),
+                .fetch().stream().anyMatch(entry->invoiceCustomer.id().equals(entry.id())),
                 "MySQL typed correlated EXISTS with UUID FK");
             check(db.select(ItUser.class).as("u")
                 .where(SqlSubqueries.notExists(ItInvoice_BjormMapper.INSTANCE,"i",correlated))
-                .fetch().stream().noneMatch(user->invoiceCustomer.id().equals(user.id())),
+                .fetch().stream().noneMatch(entry->invoiceCustomer.id().equals(entry.id())),
                 "MySQL typed correlated NOT EXISTS");
             check(db.select(ItUser.class).as("u")
                 .where(SqlSubqueries.in(ItUser_.id.as("u"),
                     ItInvoice_BjormMapper.INSTANCE,"i",ItInvoice_.customerId.as("i"),
                     ItInvoice_.reference.as("i").eq("MYSQL-INV")))
-                .fetch().stream().anyMatch(user->invoiceCustomer.id().equals(user.id())),
+                .fetch().stream().anyMatch(entry->invoiceCustomer.id().equals(entry.id())),
                 "MySQL typed IN subquery with prepared bound filter");
 
             check(db.select(ItInvoice.class).where(ItInvoice_.customerId.eq(invoiceCustomer.id()))
