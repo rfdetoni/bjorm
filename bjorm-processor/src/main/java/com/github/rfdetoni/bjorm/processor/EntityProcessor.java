@@ -67,7 +67,8 @@ public final class EntityProcessor extends AbstractProcessor {
             case INFERRED -> !id.assigned() && (id.generated() || isNumericId(type));
         };
     }
-    private record Relation(String property,String mappedBy,String childType,String getter,String childGetter,String childSetter,boolean childRecord,JoinType joinType,TypeMirror foreignKeyType) {}
+    private record Relation(String property,String mappedBy,String childType,String getter,String childGetter,String childSetter,boolean childRecord,JoinType joinType,TypeMirror foreignKeyType,
+                            List<String> foreignKeys,List<String> fkTypes,List<String> fkSetters,List<TypeMirror> fkMirrors) {}
     private record ToOne(String property,List<String> foreignKeys,String targetType,JoinType joinType) {
         String mappedBy(){return foreignKeys.getFirst();}
     }
@@ -268,8 +269,8 @@ public final class EntityProcessor extends AbstractProcessor {
                     error(entity,"Composite @Id components require explicit strategy=ASSIGNED");return;
                 }
             }
-            if(!relations.isEmpty() || !toOnes.isEmpty()) {
-                error(entity,"Composite @Id cannot use @Children or @ManyToOne graph relationships");return;
+            if(!toOnes.isEmpty()) {
+                error(entity,"Composite @Id cannot own @ManyToOne references yet");return;
             }
         }
         if(cols.size()==1){error(entity,"Entity needs a non-id property");return;}
@@ -279,7 +280,15 @@ public final class EntityProcessor extends AbstractProcessor {
         for(Relation r:relations) {
             TypeElement child=elements.getTypeElement(r.childType());
             if(child==null||!mappedTable(child)) {error(entity,"@Children target must be a @Table entity: "+r.childType());return;}
-            if(!types.isSameType(r.foreignKeyType(),cols.get(id).typeMirror())) {error(entity,"@Children mappedBy property must have the same type as parent ID: "+r.mappedBy());return;}
+            if(r.foreignKeys().size()!=keyColumns.size()) {
+                error(entity,"@Children requires exactly "+keyColumns.size()+" FK properties matching the ordered parent @Id");return;
+            }
+            for(int i=0;i<keyColumns.size();i++) {
+                if(!types.isSameType(r.fkMirrors().get(i),cols.get(keyColumns.get(i)).typeMirror())) {
+                    error(entity,"@Children mappedBy property must have the same type as parent ID: "+
+                        r.foreignKeys().get(i)+" (part "+(i+1)+")");return;
+                }
+            }
         }
         for(ToOne toOne:toOnes) {
             TypeElement target=elements.getTypeElement(toOne.targetType());
@@ -316,33 +325,50 @@ public final class EntityProcessor extends AbstractProcessor {
     }
     private Relation relation(Element field,String getter) {
         Children ann=field.getAnnotation(Children.class);
-        String mappedBy=ann.mappedBy();
-        if(!identifier(mappedBy))throw new IllegalArgumentException("Invalid @Children mappedBy: "+mappedBy);
+        List<String> foreignKeys=ann.mappedByParts().length==0
+            ?List.of(ann.mappedBy()):List.of(ann.mappedByParts());
+        if(ann.mappedByParts().length>0 && !ann.mappedBy().isEmpty())
+            throw new IllegalArgumentException("@Children requires mappedBy OR mappedByParts, not both");
+        if(foreignKeys.isEmpty() || foreignKeys.stream().anyMatch(k->!identifier(k)) ||
+            new HashSet<>(foreignKeys).size()!=foreignKeys.size())
+            throw new IllegalArgumentException("@Children requires unique valid FK property identifiers");
         if(!(field.asType() instanceof DeclaredType dt) || dt.getTypeArguments().size()!=1)
             throw new IllegalArgumentException("@Children requires java.util.List<Child> or Collection<Child>");
         String raw=((TypeElement)dt.asElement()).getQualifiedName().toString();
         if(!raw.equals("java.util.List") && !raw.equals("java.util.Collection"))
             throw new IllegalArgumentException("@Children requires List or Collection, not "+raw);
         TypeMirror elemType=dt.getTypeArguments().getFirst();
-        if(!(elemType instanceof DeclaredType childType))throw new IllegalArgumentException("@Children type must be a concrete entity");
+        if(!(elemType instanceof DeclaredType childType))
+            throw new IllegalArgumentException("@Children type must be a concrete entity");
         TypeElement child=(TypeElement)childType.asElement();
-        String childPropertyType=null, childGetter=null, childSetter=null;
-        TypeMirror childPropertyMirror=null;
         boolean record=child.getKind()==ElementKind.RECORD;
-        for(Element property:record ? child.getRecordComponents():pojoFields(child)) {
-            if(property.getSimpleName().contentEquals(mappedBy) && (record||property.getKind()==ElementKind.FIELD)) {
-                childPropertyType=property.asType().toString();
-                childPropertyMirror=property.asType();
-                String cap=Character.toUpperCase(mappedBy.charAt(0))+mappedBy.substring(1);
-                childGetter=record?mappedBy:findGetter(child,cap,childPropertyType);
-                childSetter=record?null:"set"+cap;
-                if(childGetter==null||(!record&&!hasSetter(child,childSetter,childPropertyType)))
-                    throw new IllegalArgumentException("@Children child FK needs public getter and setter: "+mappedBy);
-                break;
-            }
+        ArrayList<String> types=new ArrayList<>();
+        ArrayList<String> setters=new ArrayList<>();
+        ArrayList<TypeMirror> mirrors=new ArrayList<>();
+        for(String fk:foreignKeys) {
+            Element found=null;
+            for(Element property:record ? child.getRecordComponents():pojoFields(child))
+                if(property.getSimpleName().contentEquals(fk) &&
+                   (record || property.getKind()==ElementKind.FIELD)){found=property;break;}
+            if(found==null || found.getAnnotation(Transient.class)!=null ||
+                found.getAnnotation(Children.class)!=null || found.getAnnotation(ManyToOne.class)!=null ||
+                found.getAnnotation(Embedded.class)!=null || found.getAnnotation(Json.class)!=null ||
+                found.getAnnotation(Converted.class)!=null)
+                throw new IllegalArgumentException("@Children unmapped scalar child FK property: "+fk);
+            String type=found.asType().toString();
+            String cap=Character.toUpperCase(fk.charAt(0))+fk.substring(1);
+            String read=record?fk:findGetter(child,cap,type);
+            String setter=record?null:"set"+cap;
+            if(read==null || (!record && !hasSetter(child,setter,type)))
+                throw new IllegalArgumentException("@Children child FK needs public getter and setter: "+fk);
+            types.add(type);
+            setters.add(setter==null?"":setter);
+            mirrors.add(found.asType());
         }
-        if(childPropertyType==null)throw new IllegalArgumentException("@Children unmapped child property: "+mappedBy);
-        return new Relation(field.getSimpleName().toString(),mappedBy,child.getQualifiedName().toString(),getter,childPropertyType,childSetter,record,ann.type(),childPropertyMirror);
+        return new Relation(field.getSimpleName().toString(),foreignKeys.getFirst(),
+            child.getQualifiedName().toString(),getter,types.getFirst(),
+            record?null:setters.getFirst(),record,ann.type(),mirrors.getFirst(),
+            List.copyOf(foreignKeys),List.copyOf(types),List.copyOf(setters),List.copyOf(mirrors));
     }
     /** Compile inheritance once; no superclass reflection is used at runtime. */
     private List<Element> pojoFields(TypeElement entity) {
