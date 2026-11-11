@@ -127,7 +127,8 @@ public final class MySqlRoleIsolationTest {
     }
 
     public static void main(String[] args) throws Exception {
-        String url = System.getenv("BJORM_MYSQL_JDBC_URL");
+        String url = System.getenv("BJORM_MYSQL_ROLE_TEST_JDBC_URL");
+        if (url == null || url.isBlank()) url = System.getenv("BJORM_MYSQL_JDBC_URL");
         if (url == null || url.isBlank() ||
             !"true".equalsIgnoreCase(System.getenv("BJORM_MYSQL_ROLE_TEST_ADMIN"))) {
             System.out.println("SKIP: MySQL account isolation requires BJORM_MYSQL_ROLE_TEST_ADMIN=true");
