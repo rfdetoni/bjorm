@@ -103,6 +103,17 @@ public final class MySqlIntegrationTest {
             db.insert(embeddedPojo);
             check(db.find(ItEmbeddedPojo.class,embeddedPojo.getId()).getBilling().equals(embeddedAddress),
                 "MySQL POJO embedded value roundtrip");
+            ItEmbeddedPojo detachedEmbeddedSource=new ItEmbeddedPojo();
+            detachedEmbeddedSource.setLabel("mysql-detached-embedded");
+            detachedEmbeddedSource.setBilling(embeddedAddress);
+            ItEmbeddedPojo detachedEmbeddedSaved=db.insertDetached(detachedEmbeddedSource);
+            check(detachedEmbeddedSaved!=detachedEmbeddedSource &&
+                detachedEmbeddedSaved.getBilling()!=embeddedAddress &&
+                detachedEmbeddedSaved.getBilling().equals(embeddedAddress) &&
+                detachedEmbeddedSource.getId()==null &&
+                detachedEmbeddedSource.getBilling()==embeddedAddress &&
+                detachedEmbeddedSaved.getId()!=null,
+                "MySQL detached write creates a separate embedded value snapshot");
             UUID compositeTenant=UUID.randomUUID();
             CompositeId compoundKey=CompositeId.of(compositeTenant,"SKU-MY");
             ItCompositeRecord record=db.insertReturning(new ItCompositeRecord(compositeTenant,"SKU-MY","first",0));
