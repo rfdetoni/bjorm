@@ -453,6 +453,19 @@ public final class PostgresIntegrationTest {
             check(new ItQueries_Bjorm(db).productsByUserName("BJORM").size()==1,"compiled join against real database");
             db.insert(new ItDocument(UUID.randomUUID(),"{\"valid\":true}"));
             check(db.list(ItDocument.class).getFirst().payload().contains("valid"),"PostgreSQL jsonb serialization");
+            ItDocument searchableJson=db.insertReturning(new ItDocument(null,
+                "{\"meta\":{\"status\":\"ready\"},\"flags\":{\"published\":true}}"));
+            check(db.count(ItDocument.class,
+                SqlJsonPredicates.contains(ItDocument_.payload,db.dialect(),
+                    "{\"flags\":{\"published\":true}}")
+                    .and(ItDocument_.id.eq(searchableJson.id())))==1L,
+                "PostgreSQL JSONB containment uses a bound JSON value");
+            check(db.count(ItDocument.class,
+                SqlJsonPredicates.textEquals(ItDocument_.payload,db.dialect(),
+                    List.of("meta","status"),"ready")
+                    .and(ItDocument_.id.eq(searchableJson.id())))==1L,
+                "PostgreSQL JSONB path extraction binds each path segment");
+
             check(db.update(product)==1,"version update");
             try{db.update(product);throw new AssertionError("stale update not detected");}catch(OptimisticLockException expected){}
             db.tx(tx->tx.batchInsert(List.of(new ItUser(UUID.randomUUID(),"Batch1",1),new ItUser(UUID.randomUUID(),"Batch2",2))));
