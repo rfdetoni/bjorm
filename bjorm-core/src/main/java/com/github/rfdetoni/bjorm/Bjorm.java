@@ -557,6 +557,41 @@ public final class Bjorm implements Operations {
     public <R> R txResult(TransactionIsolation isolation,Function<Transaction,R> work) {
         return transactionResult(work,false,Objects.requireNonNull(isolation,"isolation"));
     }
+    /**
+     * Explicitly retry the ENTIRE BJORM-owned transaction on serialization
+     * conflict (SQLSTATE 40001) or PostgreSQL deadlock (40P01).
+     * Only call with idempotent DB work: callbacks are replayed and any
+     * external effects (messages, HTTP, files) cannot be rolled back by JDBC.
+     * Unlike internal transaction helpers this NEVER joins a Spring transaction.
+     */
+    public <R> R txResultRetryable(int maxAttempts,Function<Transaction,R> work) {
+        return retryTransaction(null,maxAttempts,work);
+    }
+    public <R> R txResultRetryable(TransactionIsolation isolation,int maxAttempts,
+                                   Function<Transaction,R> work) {
+        return retryTransaction(Objects.requireNonNull(isolation,"isolation"),maxAttempts,work);
+    }
+    private <R> R retryTransaction(TransactionIsolation isolation,int maxAttempts,
+                                    Function<Transaction,R> work) {
+        Objects.requireNonNull(work,"work");
+        if(maxAttempts<1 || maxAttempts>8)
+            throw new IllegalArgumentException("maxAttempts must be between 1 and 8");
+        for(int attempt=1;;attempt++) {
+            try {return transactionResult(work,false,isolation);}
+            catch(BjormException failure) {
+                if(attempt>=maxAttempts || !retryableSqlFailure(failure))throw failure;
+                // transactionResult has already rolled back and closed this attempt.
+            }
+        }
+    }
+    private static boolean retryableSqlFailure(Throwable failure) {
+        for(Throwable cause=failure;cause!=null;cause=cause.getCause())
+            if(cause instanceof SQLException sql) {
+                String state=sql.getSQLState();
+                return "40001".equals(state) || "40P01".equals(state);
+            }
+        return false;
+    }
     /** Internal multi-statement operations may join a framework-owned transaction.
      * Explicit db.tx/txResult still refuse nesting. */
     private <R> R operationTxResult(Function<Transaction,R> work) {
