@@ -774,6 +774,20 @@ public final class Bjorm implements Operations {
             }
         }
     }
+    /** Composite to-one JOINs use the exact ordered target key, not the first @Id. */
+    private static String parentJoin(EntityMapper<?> source,String sourceAlias,
+                                     EntityMapper<?> target,String targetAlias,
+                                     ParentRelation<?> relation) {
+        List<String> foreignKeys=relation.mappedByParts();
+        List<String> targetKeys=target.idProperties();
+        if(foreignKeys.isEmpty() || foreignKeys.size()!=targetKeys.size())
+            throw new IllegalArgumentException("Foreign-key parts do not match target composite key");
+        StringJoiner predicates=new StringJoiner(" AND ");
+        for(int i=0;i<foreignKeys.size();i++)
+            predicates.add(sourceAlias+"."+source.columnFor(foreignKeys.get(i))+
+                " = "+targetAlias+"."+target.columnFor(targetKeys.get(i)));
+        return predicates.toString();
+    }
     /**
      * Eager to-one relations use a single SQL statement and positional
      * compile-time mappers. The CTE applies paging to root records BEFORE
@@ -814,9 +828,7 @@ public final class Bjorm implements Operations {
             EntityMapper<Object> target=targets.get(index);
             sql.append(' ').append(dialect.join(parent.joinType())).append(' ')
                .append(target.table()).append(" p").append(index)
-               .append(" ON r.").append(root.columnFor(parent.mappedBy()))
-               .append(" = p").append(index).append('.')
-               .append(target.columnFor(target.idProperty()));
+               .append(" ON ").append(parentJoin(root,"r",target,"p"+index,parent));
         }
         boolean firstOrder=true;
         for(SqlOrder order:query.sorting()) {
@@ -914,9 +926,9 @@ public final class Bjorm implements Operations {
             EntityMapper<Object> child=slots.get(childIndex).mapper();
             for(ParentRelation<Object> relation:child.parents()) {
                 EntityMapper<Object> target=mapper(relation.targetType());
-                if(!target.children().isEmpty() || !target.parents().isEmpty() || target.compositeId())
+                if(!target.children().isEmpty() || !target.parents().isEmpty())
                     throw new UnsupportedOperationException(
-                        "Nested child @ManyToOne target must be a flat entity with one primary key");
+                        "Nested child @ManyToOne target must be a flat entity");
                 nestedParents.add(new GraphParentSlot(childIndex,relation,target,parentOffset,
                     "cp"+nestedParents.size()));
                 parentOffset+=target.columnCount();
@@ -954,18 +966,15 @@ public final class Bjorm implements Operations {
                 EntityMapper<Object> target=parentTargets.get(i);
                 sql.append(' ').append(dialect.join(relation.joinType())).append(' ')
                    .append(target.table()).append(" p").append(i)
-                   .append(" ON r.").append(root.columnFor(relation.mappedBy()))
-                   .append(" = p").append(i).append('.').append(target.columnFor(target.idProperty()));
+                   .append(" ON ").append(parentJoin(root,"r",target,"p"+i,relation));
             }
             for(GraphParentSlot nested:nestedParents) {
                 if(!path.contains(nested.childSlot()))continue;
                 GraphSlot child=slots.get(nested.childSlot());
                 sql.append(' ').append(dialect.join(nested.relation().joinType())).append(' ')
                    .append(nested.target().table()).append(' ').append(nested.alias())
-                   .append(" ON ").append(child.alias()).append('.')
-                   .append(child.mapper().columnFor(nested.relation().mappedBy()))
-                   .append(" = ").append(nested.alias()).append('.')
-                   .append(nested.target().columnFor(nested.target().idProperty()));
+                   .append(" ON ").append(parentJoin(child.mapper(),child.alias(),
+                       nested.target(),nested.alias(),nested.relation()));
             }
         }
         // Keep all rows belonging to a root contiguous so one root at a time can be emitted.
