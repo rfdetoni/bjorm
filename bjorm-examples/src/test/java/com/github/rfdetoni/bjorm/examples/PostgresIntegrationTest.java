@@ -567,6 +567,11 @@ public final class PostgresIntegrationTest {
                     }
                 }
                 for(LockMode mode:List.of(LockMode.UPDATE_SKIP_LOCKED,LockMode.SHARE_SKIP_LOCKED)) {
+                    List<ItUser> rows=db.txResult(tx->tx.lockRows(ItUser.class,
+                        ItUser_.id.eq(invoiceCustomer.id()),mode,1));
+                    check(rows.isEmpty(),"PostgreSQL "+mode+" lockRows must skip a row held by another transaction");
+                }
+                for(LockMode mode:List.of(LockMode.UPDATE_SKIP_LOCKED,LockMode.SHARE_SKIP_LOCKED)) {
                     boolean selected=db.txResult(tx->
                         tx.lockOne(ItUser.class,ItUser_.id.eq(invoiceCustomer.id()),mode));
                     check(!selected,"PostgreSQL "+mode+" must skip an exclusively locked row");
@@ -583,6 +588,16 @@ public final class PostgresIntegrationTest {
                 }
                 owner.rollback();
             }
+            db.tx(tx->{
+                List<ItUser> rows=tx.lockRows(ItUser.class,
+                    ItUser_.id.eq(invoiceCustomer.id()),LockMode.UPDATE_SKIP_LOCKED,1);
+                check(rows.size()==1 && invoiceCustomer.id().equals(rows.getFirst().id()),
+                    "PostgreSQL lockRows must return bounded, primary-key-ordered mapped rows");
+                try {
+                    tx.lockRows(ItUser.class,ItUser_.id.eq(invoiceCustomer.id()),LockMode.UPDATE,0);
+                    throw new AssertionError("lockRows accepted zero row limit");
+                } catch(IllegalArgumentException expected) {}
+            });
             System.out.println("PASS: PostgreSQL CRUD, DSL, version, rollback, batch, UUID v7, upsert and nested cascade");
         } finally {
             try(Connection c=ds.getConnection();Statement st=c.createStatement()){

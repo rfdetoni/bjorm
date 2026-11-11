@@ -444,6 +444,11 @@ public final class MySqlIntegrationTest {
                     }
                 }
                 for(LockMode mode:List.of(LockMode.UPDATE_SKIP_LOCKED,LockMode.SHARE_SKIP_LOCKED)) {
+                    List<ItUser> rows=db.txResult(tx->tx.lockRows(ItUser.class,
+                        ItUser_.id.eq(invoiceCustomer.id()),mode,1));
+                    check(rows.isEmpty(),"MySQL "+mode+" lockRows must skip a row held by another transaction");
+                }
+                for(LockMode mode:List.of(LockMode.UPDATE_SKIP_LOCKED,LockMode.SHARE_SKIP_LOCKED)) {
                     boolean selected=db.txResult(tx->
                         tx.lockOne(ItUser.class,ItUser_.id.eq(invoiceCustomer.id()),mode));
                     check(!selected,"MySQL "+mode+" must skip an exclusively locked row");
@@ -460,6 +465,16 @@ public final class MySqlIntegrationTest {
                 }
                 owner.rollback();
             }
+            db.tx(tx->{
+                List<ItUser> rows=tx.lockRows(ItUser.class,
+                    ItUser_.id.eq(invoiceCustomer.id()),LockMode.UPDATE_SKIP_LOCKED,1);
+                check(rows.size()==1 && invoiceCustomer.id().equals(rows.getFirst().id()),
+                    "MySQL lockRows must return bounded, primary-key-ordered mapped rows");
+                try {
+                    tx.lockRows(ItUser.class,ItUser_.id.eq(invoiceCustomer.id()),LockMode.UPDATE,0);
+                    throw new AssertionError("lockRows accepted zero row limit");
+                } catch(IllegalArgumentException expected) {}
+            });
             System.out.println("PASS: MySQL 8.4 CRUD, native upsert, JSON, UUID v7, AUTO_INCREMENT and eager JOIN graph");
         }finally {
             try(Connection c=source.getConnection();Statement st=c.createStatement()){

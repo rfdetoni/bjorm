@@ -214,8 +214,14 @@ public final class Bjorm implements Operations {
         }
     }
     private <R> R withConnection(JdbcWork<R> work) {
+        return withConnection(work,false);
+    }
+    /** A row lock must never create its own short-lived implicit tenant transaction. */
+    private <R> R withConnection(JdbcWork<R> work,boolean requireExistingTransaction) {
         requireTenant();
         try(Connection c=dataSource.getConnection()) {
+            if(requireExistingTransaction && c.getAutoCommit())
+                throw new IllegalStateException("BJORM row locking requires a caller-owned active transaction");
             if(!tenantRequired)return work.run(c);
             if(postgresTenant()) {
                 boolean ownTransaction=c.getAutoCommit();
@@ -335,7 +341,40 @@ public final class Bjorm implements Operations {
     }
     /** Only meaningful on a live transaction. SELECT ... LIMIT 1 FOR UPDATE/SHARE. */
     public <T> boolean lockOne(Class<T> type, SqlPredicate where, LockMode mode) {
-        return withConnection(c -> lockOne(c,type,where,mode));
+        return withConnection(c -> lockOne(c,type,where,mode),true);
+    }
+    public <T> List<T> lockRows(Class<T> type,SqlPredicate where,LockMode mode,int limit) {
+        return withConnection(c -> lockRows(c,type,where,mode,limit),true);
+    }
+    /**
+     * Lock and return a bounded, primary-key-ordered set of flat entities.
+     * The locks remain valid only while the caller's JDBC transaction is open.
+     * SKIP LOCKED is for queues, not a consistent snapshot or absence check.
+     */
+    private <T> List<T> lockRows(Connection c,Class<T> type,SqlPredicate where,
+                                 LockMode mode,int limit) throws SQLException {
+        Objects.requireNonNull(where,"Row locking requires a predicate");
+        Objects.requireNonNull(mode,"mode");
+        if(limit<1 || limit>options.maxBufferedRows())
+            throw new IllegalArgumentException("lockRows limit must be 1..maxBufferedRows");
+        if(c.getAutoCommit())
+            throw new IllegalStateException("BJORM row locking requires an active transaction");
+        EntityMapper<T> mapper=mapper(type);
+        if(mapper.compositeId() || !mapper.children().isEmpty() || !mapper.parents().isEmpty())
+            throw new UnsupportedOperationException(
+                "lockRows requires a flat mapped entity with a single primary key");
+        String sql=mapper.selectAllSql()+" WHERE "+where.sql()+
+            " ORDER BY "+mapper.columnFor(mapper.idProperty())+" LIMIT ? "+mode.sql();
+        try(PreparedStatement ps=prepareRead(c,sql)) {
+            bindPredicate(ps,where);
+            ps.setInt(where.params().size()+1,limit);
+            ps.setMaxRows(limit);
+            ArrayList<T> rows=new ArrayList<>(Math.min(limit,256));
+            try(ResultSet rs=executeQueryObserved(ps)) {
+                while(rs.next())rows.add(mapper.read(rs));
+            }
+            return List.copyOf(rows);
+        }
     }
     private <T> boolean lockOne(Connection c, Class<T> type, SqlPredicate where,
                                 LockMode mode) throws SQLException {
@@ -1283,6 +1322,9 @@ public final class Bjorm implements Operations {
         public <T> boolean exists(Class<T> type,SqlPredicate where) {return use(c->Bjorm.this.exists(c,type,where));}
         public <T> boolean lockOne(Class<T> type,SqlPredicate where,LockMode mode) {
             return useWrite(c->Bjorm.this.lockOne(c,type,where,mode));
+        }
+        public <T> List<T> lockRows(Class<T> type,SqlPredicate where,LockMode mode,int limit) {
+            return useWrite(c->Bjorm.this.lockRows(c,type,where,mode,limit));
         }
         public <T> List<T> list(Select<T> query) {return use(c->Bjorm.this.list(c,query));}
         public <T> Optional<T> first(Select<T> query) {query.limit(1);return use(c->{if(!mapper(query.type()).children().isEmpty() || !mapper(query.type()).parents().isEmpty()){List<T> values=Bjorm.this.list(c,query);return values.stream().findFirst();}return Bjorm.this.first(c,query,null,mapper(query.type()));});}

@@ -42,6 +42,9 @@ public interface Operations {
     <T> boolean exists(Class<T> type, SqlPredicate predicate);
     /** Lock at most one matched row in an existing transaction. Returns false if absent. */
     <T> boolean lockOne(Class<T> type, SqlPredicate predicate, LockMode mode);
+    /** Lock up to limit flat rows in primary-key order inside the caller-owned transaction.
+     * SKIP_LOCKED results are suitable for concurrent queues, not a consistent snapshot. */
+    <T> List<T> lockRows(Class<T> type, SqlPredicate predicate, LockMode mode, int limit);
     default <T> long count(Class<T> type) { return count(type, null); }
     default <T> boolean exists(Class<T> type) { return exists(type, null); }
     <T> List<T> list(Select<T> query);
