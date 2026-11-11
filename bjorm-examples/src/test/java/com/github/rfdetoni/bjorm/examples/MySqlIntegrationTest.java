@@ -36,6 +36,7 @@ public final class MySqlIntegrationTest {
             st.execute("CREATE TABLE bjorm_it_composite(tenantId CHAR(36) NOT NULL,sku VARCHAR(255) NOT NULL,label VARCHAR(255),version INT NOT NULL DEFAULT 0,PRIMARY KEY(tenantId,sku))");
             st.execute("CREATE TABLE bjorm_it_composite_pojo(tenantId CHAR(36) NOT NULL,sku VARCHAR(255) NOT NULL,label VARCHAR(255),PRIMARY KEY(tenantId,sku))");
             st.execute("CREATE TABLE bjorm_it_composite_refs(id CHAR(36) PRIMARY KEY,tenantId CHAR(36),sku VARCHAR(255),label VARCHAR(255),FOREIGN KEY(tenantId,sku) REFERENCES bjorm_it_composite(tenantId,sku))");
+            st.execute("CREATE TABLE bjorm_it_composite_children(id CHAR(36) PRIMARY KEY,tenantId CHAR(36) NOT NULL,sku VARCHAR(255) NOT NULL,label VARCHAR(255),FOREIGN KEY(tenantId,sku) REFERENCES bjorm_it_composite(tenantId,sku))");
             st.execute("CREATE TABLE bjorm_it_embedded_records(id CHAR(36) PRIMARY KEY,label VARCHAR(255),shipping_street VARCHAR(255),shipping_postal VARCHAR(255))");
             st.execute("CREATE TABLE bjorm_it_embedded_pojos(id CHAR(36) PRIMARY KEY,label VARCHAR(255),billing_street VARCHAR(255),billing_postal VARCHAR(255))");
             st.execute("CREATE TABLE bjorm_it_converted(id CHAR(36) PRIMARY KEY,amount DECIMAL(18,2),label VARCHAR(255))");
@@ -71,7 +72,7 @@ public final class MySqlIntegrationTest {
                 ItInvoice_BjormMapper.INSTANCE,ItInvoiceLink_BjormMapper.INSTANCE,ItInvoiceInner_BjormMapper.INSTANCE,
                 ItInvoicePojo_BjormMapper.INSTANCE,
                 ItEmbeddedRecord_BjormMapper.INSTANCE,ItEmbeddedPojo_BjormMapper.INSTANCE,
-                ItCompositeRecord_BjormMapper.INSTANCE,ItCompositePojo_BjormMapper.INSTANCE,ItConvertedRecord_BjormMapper.INSTANCE,ItCompositeReference_BjormMapper.INSTANCE,
+                ItCompositeRecord_BjormMapper.INSTANCE,ItCompositePojo_BjormMapper.INSTANCE,ItConvertedRecord_BjormMapper.INSTANCE,ItCompositeReference_BjormMapper.INSTANCE,ItCompositeParentWithChildren_BjormMapper.INSTANCE,ItCompositeChild_BjormMapper.INSTANCE,
                 ItSharedRoot_BjormMapper.INSTANCE,ItSharedBranch_BjormMapper.INSTANCE,ItSharedLeaf_BjormMapper.INSTANCE);
             ItUser invoiceCustomer=db.insertReturning(new ItUser(null,"MySQL Invoice Customer",27));
             ItInvoice invoice=db.insertReturning(new ItInvoice(null,invoiceCustomer.id(),"MYSQL-INV",null));
@@ -174,6 +175,37 @@ public final class MySqlIntegrationTest {
                 ItConvertedRecord_.id.eq(converted.id()))==1 &&
                 db.find(ItConvertedRecord.class,converted.id()).amount().amount().compareTo(new java.math.BigDecimal("31.75"))==0,
                 "MySQL generated converter supports mapped bulk update");
+            UUID compositeGraphTenant=UUID.randomUUID();
+            ItCompositeParentWithChildren firstGraphSource=new ItCompositeParentWithChildren(
+                compositeGraphTenant,"graph-a","first",List.of(
+                    new ItCompositeChild(null,null,null,"A1"),
+                    new ItCompositeChild(null,null,null,"A2")));
+            ItCompositeParentWithChildren firstGraph=db.insertDetached(firstGraphSource);
+            ItCompositeParentWithChildren secondGraph=db.insertDetached(
+                new ItCompositeParentWithChildren(compositeGraphTenant,"graph-b","second",
+                    List.of(new ItCompositeChild(null,null,null,"B1"))));
+            check(firstGraphSource.children().getFirst().id()==null &&
+                firstGraph.children().getFirst().tenantId().equals(compositeGraphTenant) &&
+                firstGraph.children().getFirst().sku().equals("graph-a"),
+                "MySQL composite child FK preserves detached caller");
+            List<ItCompositeParentWithChildren> groupedGraphs=db.list(
+                ItCompositeParentWithChildren.class,
+                ItCompositeParentWithChildren_.tenantId.eq(compositeGraphTenant));
+            check(groupedGraphs.size()==2 &&
+                groupedGraphs.stream().filter(g->g.sku().equals("graph-a")).findFirst()
+                    .orElseThrow().children().size()==2 &&
+                groupedGraphs.stream().filter(g->g.sku().equals("graph-b")).findFirst()
+                    .orElseThrow().children().size()==1 &&
+                db.find(ItCompositeParentWithChildren.class,
+                    CompositeId.of(compositeGraphTenant,"graph-a")).children().size()==2,
+                "MySQL eager child graph hydrates full composite key without N+1");
+            db.delete(firstGraph);
+            check(db.find(ItCompositeParentWithChildren.class,
+                    CompositeId.of(compositeGraphTenant,"graph-a"))==null &&
+                db.find(ItCompositeParentWithChildren.class,
+                    CompositeId.of(compositeGraphTenant,"graph-b")).children().size()==1,
+                "MySQL composite cascade deletes only matching tuple");
+            db.delete(secondGraph);
             UUID compositeTenant=UUID.randomUUID();
             CompositeId compoundKey=CompositeId.of(compositeTenant,"SKU-MY");
             ItCompositeRecord record=db.insertReturning(new ItCompositeRecord(compositeTenant,"SKU-MY","first",0));
@@ -616,7 +648,7 @@ public final class MySqlIntegrationTest {
             System.out.println("PASS: MySQL 8.4 CRUD, native upsert, JSON, UUID v7, AUTO_INCREMENT and eager JOIN graph");
         }finally {
             try(Connection c=source.getConnection();Statement st=c.createStatement()){
-                for(String name:List.of("bjorm_it_shared_leaves","bjorm_it_shared_branches","bjorm_it_shared_roots","bjorm_it_converted","bjorm_it_composite_refs","bjorm_it_composite","bjorm_it_composite_pojo","bjorm_it_embedded_records","bjorm_it_embedded_pojos","bjorm_it_invoice_links","bjorm_it_invoices","bjorm_it_order_notes","bjorm_it_order_lines_to_one","bjorm_it_order_lines","bjorm_it_orders",
+                for(String name:List.of("bjorm_it_shared_leaves","bjorm_it_shared_branches","bjorm_it_shared_roots","bjorm_it_converted","bjorm_it_composite_children","bjorm_it_composite_refs","bjorm_it_composite","bjorm_it_composite_pojo","bjorm_it_embedded_records","bjorm_it_embedded_pojos","bjorm_it_invoice_links","bjorm_it_invoices","bjorm_it_order_notes","bjorm_it_order_lines_to_one","bjorm_it_order_lines","bjorm_it_orders",
                     "bjorm_it_columns","bjorm_it_ordinal","bjorm_it_audit","bjorm_it_audit_pojo",
                     "bjorm_it_explicit_assigned","bjorm_it_explicit_identity","bjorm_it_explicit_uuid",
                     "bjorm_it_static",
