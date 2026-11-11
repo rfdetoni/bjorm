@@ -9,7 +9,7 @@
 - UUIDv7, database identity columns, assigned composite primary keys, optimistic versioned writes, versioned MySQL single-statement compare-and-swap UPSERT, PostgreSQL UPSERT, mapped `updateBy/deleteBy`, bounded batches, count/exists and projections.
 - Root `@Children`, direct `@ManyToOne`, child direct `@ManyToOne`, and eager one-query UNION ALL graph hydration. Cyclic relationships, multi-hop referenced graphs and composite FKs are **not** fully supported.
 - Transaction-only identity reuse, JDBC cursor streaming with transaction lifetime, explicit transaction isolation (`READ_COMMITTED`, `REPEATABLE_READ`, `SERIALIZABLE`), and optional SQL execution timing **without SQL text or parameters**.
-- Opt-in `insertDetached/upsertDetached` for safe supported shapes, retaining mutable legacy writes for source compatibility. Detached graphs with children and values requiring unknown deep-copy contracts are rejected, including mutable typed JSON/converted records.
+- Opt-in `insertDetached/upsertDetached` for safe supported shapes, retaining mutable legacy writes for source compatibility. Generated `@Children` graphs are recursively snapshotted before JDBC, including deep POJO/record children; repeated shared nodes/cycles and values without a deep-copy contract (mutable JSON/converted records) are rejected.
 - `lockOne` and bounded `lockRows` (flat entities) with UPDATE/SHARE, NOWAIT and SKIP LOCKED. Row locks must belong to an existing caller-owned transaction.
 - Spring Boot 4.1 integration using `TransactionAwareDataSourceProxy`; internally multi-statement operations join Spring transactions, but explicit `db.tx()` cannot nest.
 - Tenant-required schema/catalog scoping, rejection of unreviewed native SQL, PostgreSQL restricted LOGIN isolation tests and MySQL per-tenant restricted-account tests. **Application routing is not a substitute for per-tenant database permissions.**
@@ -25,7 +25,7 @@ Root graph pagination currently uses a single CTE/UNION ALL plan; select joins t
 
 ## Still pending (issue #11)
 
-1. Deep detached graph persistence and stronger external transaction guarantees; production IAM/provisioning/pool-credential orchestration and isolated credentials.
+1. External Spring rollback/commit consumer guarantees and integration of production IAM, pool lifecycle, provisioning and credential revocation. The core now supports deep detached snapshots and an opt-in restricted per-tenant DataSource registry; broader orchestration remains external.
 2. Recursive to-one, referenced targets with nested graphs, composite-key FKs and full arbitrary-depth relationship planner.
 3. Controlled JMH/pgJDBC runs, allocation and tail-latency measurements, two-phase graph pagination comparison and real workload tuning.
 4. Complete soft-delete, automatic filters, advanced JSONB, typed subqueries, formula projections, safe retries/extended RETURNING, Oracle/SQL Server dialect integration, and explicitly scoped lazy loading.
