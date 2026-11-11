@@ -42,6 +42,21 @@ public final class TypedJsonSmokeTest {
         if(mutableSource.getValues()!=mutableValues ||
             !mutableValues.equals(List.of(1,2,3)) || mutableSource.getId()!=null)
             throw new AssertionError("Unsafe detached copy changed the caller's JSON value");
-        System.out.println("PASS: dialect-aware typed JSON binding, decoding and detached safety");
+        // A record is only shallow-immutable: a typed JSON List remains mutable.
+        List<Integer> mutableRecordValue=new ArrayList<>(List.of(1,2,3));
+        ItTypedJson typedRecord=new ItTypedJson(UUID.randomUUID(),mutableRecordValue);
+        try {
+            mapper.copyForWrite(typedRecord);
+            throw new AssertionError("Detached record must reject mutable JSON without a deep-copy contract");
+        } catch(UnsupportedOperationException expected) {}
+        if(typedRecord.values()!=mutableRecordValue || !mutableRecordValue.equals(List.of(1,2,3)))
+            throw new AssertionError("Detached rejection must not change caller-owned record payload");
+        try {
+            ItConvertedRecord_BjormMapper.INSTANCE.copyForWrite(
+                new ItConvertedRecord(UUID.randomUUID(),
+                    new MoneyValue(new java.math.BigDecimal("42.00")),"immutable"));
+            throw new AssertionError("Detached record must reject conversion without a verified deep-copy contract");
+        } catch(UnsupportedOperationException expected) {}
+        System.out.println("PASS: dialect-aware JSON binding, decoding and detached record/POJO safety");
     }
 }
