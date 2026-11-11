@@ -34,6 +34,7 @@ public final class PostgresIntegrationTest {
             st.execute("CREATE TABLE bjorm_it_invoices (id uuid PRIMARY KEY, customerId uuid REFERENCES bjorm_it_users(id), reference text)");
             st.execute("CREATE TABLE bjorm_it_composite (tenantId uuid NOT NULL,sku text NOT NULL,label text,version integer NOT NULL DEFAULT 0,PRIMARY KEY(tenantId,sku))");
             st.execute("CREATE TABLE bjorm_it_composite_pojo (tenantId uuid NOT NULL,sku text NOT NULL,label text,PRIMARY KEY(tenantId,sku))");
+            st.execute("CREATE TABLE bjorm_it_composite_refs (id uuid PRIMARY KEY,tenantId uuid,sku text,label text,FOREIGN KEY(tenantId,sku) REFERENCES bjorm_it_composite(tenantId,sku))");
             st.execute("CREATE TABLE bjorm_it_embedded_records (id uuid PRIMARY KEY, label text, shipping_street text, shipping_postal text)");
             st.execute("CREATE TABLE bjorm_it_embedded_pojos (id uuid PRIMARY KEY, label text, billing_street text, billing_postal text)");
             st.execute("CREATE TABLE bjorm_it_converted (id uuid PRIMARY KEY, amount numeric(18,2), label text)");
@@ -75,7 +76,7 @@ public final class PostgresIntegrationTest {
             ItInvoice_BjormMapper.INSTANCE,ItInvoiceInner_BjormMapper.INSTANCE,
             ItInvoicePojo_BjormMapper.INSTANCE,
             ItEmbeddedRecord_BjormMapper.INSTANCE,ItEmbeddedPojo_BjormMapper.INSTANCE,
-            ItCompositeRecord_BjormMapper.INSTANCE,ItCompositePojo_BjormMapper.INSTANCE,ItConvertedRecord_BjormMapper.INSTANCE);
+            ItCompositeRecord_BjormMapper.INSTANCE,ItCompositePojo_BjormMapper.INSTANCE,ItConvertedRecord_BjormMapper.INSTANCE,ItCompositeReference_BjormMapper.INSTANCE);
         UUID id=UUID.randomUUID();ItUser alice=new ItUser(id,"BJORM",34);
         try {
             StaticSchemaRecord fixed=db.insertReturning(new StaticSchemaRecord(null,"initial-static"));
@@ -196,6 +197,21 @@ public final class PostgresIntegrationTest {
                 ItCompositeRecord_.sku.eq("ABC"));
                 throw new AssertionError("composite key part changed via updateBy");}
             catch(IllegalArgumentException expected) {}
+            ItCompositeRecord anotherComposite=db.insertReturning(
+                new ItCompositeRecord(compositeTenant,"XYZ","other key part",0));
+            ItCompositeReference linkedComposite=db.insertReturning(new ItCompositeReference(
+                null,compositeTenant,"ABC","linked",null));
+            ItCompositeReference hydratedComposite=db.find(ItCompositeReference.class,linkedComposite.id());
+            check(hydratedComposite.product()!=null && hydratedComposite.product().equals(revisedComposite),
+                "PostgreSQL composite FK eager JOIN must match both ID parts");
+            check(db.select(ItCompositeReference.class).where(
+                ItCompositeReference_.id.eq(linkedComposite.id())).limit(1).fetch().getFirst()
+                .product().sku().equals("ABC"),"PostgreSQL composite FK root paging");
+            ItCompositeReference optionalComposite=db.insertReturning(new ItCompositeReference(
+                null,null,null,"nullable",null));
+            check(db.find(ItCompositeReference.class,optionalComposite.id()).product()==null,
+                "PostgreSQL nullable composite FK LEFT JOIN");
+            db.delete(linkedComposite);db.delete(optionalComposite);db.delete(anotherComposite);
             check(db.delete(revisedComposite)==1 &&
                 db.find(ItCompositeRecord.class,compoundId)==null,
                 "PostgreSQL tuple key conditional DELETE");
@@ -647,6 +663,7 @@ public final class PostgresIntegrationTest {
                 st.execute("DROP SCHEMA IF EXISTS bjorm_test CASCADE");
                 st.execute("DROP SCHEMA IF EXISTS bjorm_tenant_a CASCADE");
                 st.execute("DROP SCHEMA IF EXISTS bjorm_tenant_b CASCADE");
+                st.execute("DROP TABLE IF EXISTS bjorm_it_composite_refs");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_composite");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_composite_pojo");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_invoices");

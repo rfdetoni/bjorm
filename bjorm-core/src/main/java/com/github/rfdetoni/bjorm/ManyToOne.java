@@ -13,6 +13,9 @@ import java.lang.annotation.Target;
 @Retention(RetentionPolicy.CLASS)
 @Target({ElementType.FIELD,ElementType.RECORD_COMPONENT})
 public @interface ManyToOne {
-    String mappedBy();
+    /** Single-FK Java property; use mappedByParts for composite target IDs. */
+    String mappedBy() default "";
+    /** FK Java properties in exactly the same order as target @Id declarations. */
+    String[] mappedByParts() default {};
     JoinType type() default JoinType.LEFT;
 }

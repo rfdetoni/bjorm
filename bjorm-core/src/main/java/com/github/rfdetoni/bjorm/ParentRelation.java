@@ -4,6 +4,8 @@ package com.github.rfdetoni.bjorm;
 public interface ParentRelation<T> {
     Class<?> targetType();
     String mappedBy();
+    /** Ordered FK Java properties; legacy single-column relations use mappedBy(). */
+    default java.util.List<String> mappedByParts(){return java.util.List.of(mappedBy());}
     String property();
     default JoinType joinType(){return JoinType.LEFT;}
 }

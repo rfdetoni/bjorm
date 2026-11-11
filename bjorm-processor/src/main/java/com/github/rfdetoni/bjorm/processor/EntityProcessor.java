@@ -68,7 +68,9 @@ public final class EntityProcessor extends AbstractProcessor {
         };
     }
     private record Relation(String property,String mappedBy,String childType,String getter,String childGetter,String childSetter,boolean childRecord,JoinType joinType,TypeMirror foreignKeyType) {}
-    private record ToOne(String property,String mappedBy,String targetType,JoinType joinType) {}
+    private record ToOne(String property,List<String> foreignKeys,String targetType,JoinType joinType) {
+        String mappedBy(){return foreignKeys.getFirst();}
+    }
     private record EmbeddedSpec(String property,String type,String read,String setter,int columnCount) {}
     /**
      * Flatten a public record's scalar components directly into the parent
@@ -116,15 +118,20 @@ public final class EntityProcessor extends AbstractProcessor {
     }
     private ToOne toOne(Element field) {
         ManyToOne annotation=field.getAnnotation(ManyToOne.class);
-        if(!identifier(annotation.mappedBy()))
-            throw new IllegalArgumentException("Invalid @ManyToOne mappedBy: "+annotation.mappedBy());
+        List<String> foreignKeys=annotation.mappedByParts().length==0
+            ?List.of(annotation.mappedBy()):List.of(annotation.mappedByParts());
+        if(annotation.mappedByParts().length>0 && !annotation.mappedBy().isEmpty())
+            throw new IllegalArgumentException("@ManyToOne requires mappedBy OR mappedByParts, not both");
+        if(foreignKeys.isEmpty() || foreignKeys.stream().anyMatch(k->!identifier(k)) ||
+           new HashSet<>(foreignKeys).size()!=foreignKeys.size())
+            throw new IllegalArgumentException("@ManyToOne requires unique, valid FK property identifiers");
         if(annotation.type()!=JoinType.LEFT && annotation.type()!=JoinType.INNER)
             throw new IllegalArgumentException("@ManyToOne supports LEFT and INNER only");
         if(!(field.asType() instanceof DeclaredType dt) ||
            !(dt.asElement() instanceof TypeElement target) ||
            !mappedTable(target))
             throw new IllegalArgumentException("@ManyToOne must reference a @Table entity");
-        return new ToOne(field.getSimpleName().toString(),annotation.mappedBy(),
+        return new ToOne(field.getSimpleName().toString(),foreignKeys,
             target.getQualifiedName().toString(),annotation.type());
     }
     private void entity(TypeElement entity) throws IOException {
@@ -275,20 +282,27 @@ public final class EntityProcessor extends AbstractProcessor {
             if(!types.isSameType(r.foreignKeyType(),cols.get(id).typeMirror())) {error(entity,"@Children mappedBy property must have the same type as parent ID: "+r.mappedBy());return;}
         }
         for(ToOne toOne:toOnes) {
-            Col fk=cols.stream().filter(c->c.property().equals(toOne.mappedBy())).findFirst().orElse(null);
-            if(fk==null){error(entity,"@ManyToOne mappedBy requires a scalar FK property: "+toOne.mappedBy());return;}
             TypeElement target=elements.getTypeElement(toOne.targetType());
             if(target==null || !mappedTable(target)){
                 error(entity,"@ManyToOne target must be @Table: "+toOne.targetType());return;
             }
             List<? extends Element> properties=target.getKind()==ElementKind.RECORD
                 ?target.getRecordComponents():pojoFields(target);
-            TypeMirror keyType=null;
-            int keyCount=0;
+            List<TypeMirror> keyTypes=new ArrayList<>();
             for(Element property:properties)
-                if(cAnnotated(property,Id.class)){keyType=property.asType();keyCount++;}
-            if(keyCount!=1 || keyType==null || !types.isSameType(keyType,fk.typeMirror())) {
-                error(entity,"@ManyToOne foreign key must match target @Id type: "+toOne.mappedBy());return;
+                if(cAnnotated(property,Id.class))keyTypes.add(property.asType());
+            if(keyTypes.isEmpty() || keyTypes.size()!=toOne.foreignKeys().size()) {
+                error(entity,"@ManyToOne requires exactly "+keyTypes.size()+
+                    " FK properties in target @Id declaration order");return;
+            }
+            for(int i=0;i<keyTypes.size();i++) {
+                String fkProperty=toOne.foreignKeys().get(i);
+                Col fk=cols.stream().filter(c->c.property().equals(fkProperty)).findFirst().orElse(null);
+                if(fk==null || fk.id() || fk.json() || fk.converter()!=null ||
+                   !types.isSameType(keyTypes.get(i),fk.typeMirror())) {
+                    error(entity,"@ManyToOne foreign key must match target @Id type: "+fkProperty+
+                        " (component "+(i+1)+", scalar FK required)");return;
+                }
             }
         }
         Set<String> paths=new HashSet<>();
@@ -601,6 +615,8 @@ public final class EntityProcessor extends AbstractProcessor {
                     w.write((ri>0?",\n":"")+"new com.github.rfdetoni.bjorm.ParentRelation<"+clazz+">(){\n");
                     w.write("public Class<?> targetType(){return "+relation.targetType()+".class;}\n");
                     w.write("public String mappedBy(){return \""+relation.mappedBy()+"\";}\n");
+                    w.write("public java.util.List<String> mappedByParts(){return java.util.List.of("+
+                        String.join(", ",relation.foreignKeys().stream().map(name->"\""+name+"\"").toList())+");}\n");
                     w.write("public String property(){return \""+relation.property()+"\";}\n");
                     w.write("public com.github.rfdetoni.bjorm.JoinType joinType(){return com.github.rfdetoni.bjorm.JoinType."+relation.joinType().name()+";}\n");
                     w.write("}");
@@ -705,6 +721,9 @@ public final class EntityProcessor extends AbstractProcessor {
                 w.write("public Object id("+clazz+" value){return "+cols.get(id).read()+";}\n");
             }
             w.write("public String idProperty(){return \""+cols.get(id).property()+"\";}\n");
+            if(keyColumns.size()>1)
+                w.write("public java.util.List<String> idProperties(){return java.util.List.of("+
+                    String.join(", ",keyColumns.stream().map(i->"\""+cols.get(i).property()+"\"").toList())+");}\n");
             w.write("public "+clazz+" read(java.sql.ResultSet rs) throws java.sql.SQLException {return readAt(rs,1); }\n");
             w.write("public "+clazz+" readAt(java.sql.ResultSet rs,int offset) throws java.sql.SQLException {\n");
             if(record){
