@@ -313,12 +313,36 @@ public final class Bjorm implements Operations {
         if(mapper(entity.getClass()).children().isEmpty()) return withConnection(c->insert(c,entity));
         return operationTxResult(tx->tx.insertReturning(entity));
     }
+    /** Build the entire detached graph before acquiring a JDBC connection. */
     private <T> T detachedWriteCopy(T entity) {
-        Objects.requireNonNull(entity,"entity");
+        return detachedWriteCopy(Objects.requireNonNull(entity,"entity"),
+            new IdentityHashMap<>());
+    }
+    private <T> T detachedWriteCopy(T entity,IdentityHashMap<Object,Boolean> seen) {
+        if(seen.put(entity,Boolean.TRUE)!=null)
+            throw new IllegalArgumentException("Cycle or repeated entity in detached persistence graph");
         EntityMapper<T> mapper=mapper(entity.getClass());
-        if(!mapper.children().isEmpty())
-            throw new UnsupportedOperationException("Detached writes do not support child graphs; immutable/copy-on-write graph persistence is required");
-        return mapper.copyForWrite(entity);
+        if(!mapper.detachedChildrenSupported())
+            throw new UnsupportedOperationException(
+                "Detached write requires generated child collection replacement for "+mapper.type().getName());
+        T copy=mapper.copyForWrite(entity);
+        for(ChildRelation<T> relation:mapper.children()) {
+            Iterable<?> sourceChildren=relation.children(entity);
+            ArrayList<Object> copies=new ArrayList<>();
+            if(sourceChildren!=null)for(Object child:sourceChildren) {
+                Objects.requireNonNull(child,"Detached child cannot be null");
+                if(!relation.childType().isInstance(child))
+                    throw new IllegalArgumentException("Unexpected detached child type: "+child.getClass());
+                copies.add(detachedChildCopy(child,seen));
+            }
+            copy=Objects.requireNonNull(mapper.withChildren(copy,relation.property(),copies),
+                "Generated detached child replacement returned null");
+        }
+        return copy;
+    }
+    @SuppressWarnings("unchecked")
+    private Object detachedChildCopy(Object child,IdentityHashMap<Object,Boolean> seen) {
+        return detachedWriteCopy(child,seen);
     }
     public <T> T insertDetached(T entity) {
         return insertReturning(detachedWriteCopy(entity));

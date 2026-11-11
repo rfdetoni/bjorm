@@ -53,6 +53,9 @@ public final class MySqlIntegrationTest {
             st.execute("CREATE TABLE bjorm_it_order_lines(id CHAR(36) PRIMARY KEY,orderId CHAR(36),sku VARCHAR(255),FOREIGN KEY(orderId) REFERENCES bjorm_it_orders(id))");
             st.execute("CREATE TABLE bjorm_it_order_lines_to_one(id CHAR(36) PRIMARY KEY,orderId CHAR(36) NOT NULL,userId CHAR(36),sku VARCHAR(255),FOREIGN KEY(orderId) REFERENCES bjorm_it_orders(id),FOREIGN KEY(userId) REFERENCES bjorm_it_users(id))");
             st.execute("CREATE TABLE bjorm_it_order_notes(id CHAR(36) PRIMARY KEY,orderId CHAR(36),note VARCHAR(255),version INT NOT NULL DEFAULT 0,FOREIGN KEY(orderId) REFERENCES bjorm_it_orders(id))");
+            st.execute("CREATE TABLE bjorm_it_shared_roots(id CHAR(36) PRIMARY KEY,title VARCHAR(255))");
+            st.execute("CREATE TABLE bjorm_it_shared_branches(id CHAR(36) PRIMARY KEY,primaryRootId CHAR(36),backupRootId CHAR(36),FOREIGN KEY(primaryRootId) REFERENCES bjorm_it_shared_roots(id),FOREIGN KEY(backupRootId) REFERENCES bjorm_it_shared_roots(id))");
+            st.execute("CREATE TABLE bjorm_it_shared_leaves(id CHAR(36) PRIMARY KEY,branchId CHAR(36) NOT NULL,label VARCHAR(255),FOREIGN KEY(branchId) REFERENCES bjorm_it_shared_branches(id))");
         }
         try{
             Bjorm db=Bjorm.open(source,BjormOptions.defaults(),SqlDialects.MYSQL,
@@ -67,7 +70,8 @@ public final class MySqlIntegrationTest {
                 ItInvoice_BjormMapper.INSTANCE,ItInvoiceInner_BjormMapper.INSTANCE,
                 ItInvoicePojo_BjormMapper.INSTANCE,
                 ItEmbeddedRecord_BjormMapper.INSTANCE,ItEmbeddedPojo_BjormMapper.INSTANCE,
-                ItCompositeRecord_BjormMapper.INSTANCE,ItCompositePojo_BjormMapper.INSTANCE,ItConvertedRecord_BjormMapper.INSTANCE,ItCompositeReference_BjormMapper.INSTANCE);
+                ItCompositeRecord_BjormMapper.INSTANCE,ItCompositePojo_BjormMapper.INSTANCE,ItConvertedRecord_BjormMapper.INSTANCE,ItCompositeReference_BjormMapper.INSTANCE,
+                ItSharedRoot_BjormMapper.INSTANCE,ItSharedBranch_BjormMapper.INSTANCE,ItSharedLeaf_BjormMapper.INSTANCE);
             ItUser invoiceCustomer=db.insertReturning(new ItUser(null,"MySQL Invoice Customer",27));
             ItInvoice invoice=db.insertReturning(new ItInvoice(null,invoiceCustomer.id(),"MYSQL-INV",null));
             java.util.concurrent.atomic.AtomicInteger queryCount=new java.util.concurrent.atomic.AtomicInteger();
@@ -447,6 +451,54 @@ public final class MySqlIntegrationTest {
             db.delete(combined);
             check(db.find(ItUser.class,invoiceCustomer.id())!=null,
                 "MySQL graph deletion preserves referenced customer");
+            ItOrder detachedGraphSource=new ItOrder();
+            detachedGraphSource.setDescription("Detached MySQL graph");
+            ItOrderLine detachedLine=new ItOrderLine();
+            detachedLine.setSku("DETACHED-MYSQL");
+            detachedGraphSource.getLines().add(detachedLine);
+            ItOrder detachedSaved=db.insertDetached(detachedGraphSource);
+            check(detachedGraphSource.getId()==null && detachedLine.getId()==null &&
+                detachedLine.getOrderId()==null && detachedSaved!=detachedGraphSource &&
+                detachedSaved.getLines().getFirst()!=detachedLine &&
+                detachedSaved.getLines().getFirst().getOrderId().equals(detachedSaved.getId()) &&
+                db.find(ItOrder.class,detachedSaved.getId()).getLines().size()==1,
+                "MySQL detached POJO child graph persisted without caller mutation");
+            db.delete(detachedSaved);
+            ItSharedRoot detachedDeepSource=new ItSharedRoot(null,"two-level",
+                List.of(new ItSharedBranch(null,null,null,
+                    List.of(new ItSharedLeaf(null,null,"primary")))),
+                List.of(new ItSharedBranch(null,null,null,
+                    List.of(new ItSharedLeaf(null,null,"backup")))));
+            ItSharedRoot detachedDeepSaved=db.insertDetached(detachedDeepSource);
+            check(detachedDeepSource.id()==null &&
+                detachedDeepSource.primary().getFirst().id()==null &&
+                detachedDeepSource.primary().getFirst().leaves().getFirst().id()==null &&
+                detachedDeepSaved!=detachedDeepSource &&
+                detachedDeepSaved.primary().getFirst().leaves().getFirst().id()!=null &&
+                db.find(ItSharedRoot.class,detachedDeepSaved.id()).primary().getFirst().leaves().size()==1 &&
+                db.find(ItSharedRoot.class,detachedDeepSaved.id()).backup().getFirst().leaves().size()==1,
+                "MySQL detached two-level immutable graphs copy all child nodes");
+            db.delete(detachedDeepSaved);
+            ItOrder rollbackSource=new ItOrder();
+            rollbackSource.setDescription("detached-rollback");
+            ItOrderLine rollbackChild=new ItOrderLine();
+            rollbackChild.setSku("ROLLBACK");
+            rollbackSource.getLines().add(rollbackChild);
+            java.util.concurrent.atomic.AtomicReference<UUID> rollbackGraphId=
+                new java.util.concurrent.atomic.AtomicReference<>();
+            try {
+                db.tx(tx->{
+                    rollbackGraphId.set(tx.insertDetached(rollbackSource).getId());
+                    throw new IllegalStateException("force detached graph rollback");
+                });
+                throw new AssertionError("Detached rollback was not triggered");
+            } catch(IllegalStateException expected) {}
+            check(rollbackGraphId.get()!=null &&
+                db.find(ItOrder.class,rollbackGraphId.get())==null &&
+                rollbackSource.getId()==null && rollbackChild.getId()==null &&
+                rollbackChild.getOrderId()==null,
+                "Detached child graph rollback must not modify caller or commit any child");
+
             ItOrder parent=new ItOrder();parent.setDescription("mysql graph");
             ItOrderLine child=new ItOrderLine();child.setSku("SKU");parent.getLines().add(child);
             db.insert(parent);
@@ -523,7 +575,7 @@ public final class MySqlIntegrationTest {
             System.out.println("PASS: MySQL 8.4 CRUD, native upsert, JSON, UUID v7, AUTO_INCREMENT and eager JOIN graph");
         }finally {
             try(Connection c=source.getConnection();Statement st=c.createStatement()){
-                for(String name:List.of("bjorm_it_converted","bjorm_it_composite_refs","bjorm_it_composite","bjorm_it_composite_pojo","bjorm_it_embedded_records","bjorm_it_embedded_pojos","bjorm_it_invoices","bjorm_it_order_notes","bjorm_it_order_lines_to_one","bjorm_it_order_lines","bjorm_it_orders",
+                for(String name:List.of("bjorm_it_shared_leaves","bjorm_it_shared_branches","bjorm_it_shared_roots","bjorm_it_converted","bjorm_it_composite_refs","bjorm_it_composite","bjorm_it_composite_pojo","bjorm_it_embedded_records","bjorm_it_embedded_pojos","bjorm_it_invoices","bjorm_it_order_notes","bjorm_it_order_lines_to_one","bjorm_it_order_lines","bjorm_it_orders",
                     "bjorm_it_columns","bjorm_it_ordinal","bjorm_it_audit","bjorm_it_audit_pojo",
                     "bjorm_it_explicit_assigned","bjorm_it_explicit_identity","bjorm_it_explicit_uuid",
                     "bjorm_it_static",

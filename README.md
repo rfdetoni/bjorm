@@ -360,9 +360,12 @@ rollback immutability guarantee. For new code, use the opt-in
 mapped POJO properties via generated accessors before attempting the write.
 The source entity is unchanged on success, failure or rollback. The returned
 copy carries IDs and audit fields, but does not signify commit if the caller
-owns an external transaction. Mutable `@Children` graphs are intentionally
-unsupported by these detached operations; nested entities require deep copy
-semantics. See [database security and detached writes](docs/tenant-database-permissions.md)
+owns an external transaction. Explicit `@Children` graphs now use generated recursive snapshots **before**
+JDBC, including nested record/POJO children and composite sibling collections.
+The processor permits mutable POJO children only when every collection has a
+public replacement setter. Repeated references/cycles, unsupported custom mappers,
+typed mutable JSON and converter values without a deep-copy contract are rejected
+before a write. See [database security and detached writes](docs/tenant-database-permissions.md)
 for limitations and examples. A generated mapper signals when UPSERT
 must reload database-generated properties; otherwise record values can be stale.
 
