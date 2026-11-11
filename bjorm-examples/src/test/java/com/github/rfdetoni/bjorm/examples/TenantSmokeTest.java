@@ -3,6 +3,7 @@ package com.github.rfdetoni.bjorm.examples;
 import com.github.rfdetoni.bjorm.Bjorm;
 import com.github.rfdetoni.bjorm.BjormOptions;
 import com.github.rfdetoni.bjorm.SqlDialects;
+import com.github.rfdetoni.bjorm.SqlSubqueries;
 import javax.sql.DataSource;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Proxy;
@@ -127,6 +128,23 @@ public final class TenantSmokeTest {
         mysql.failWrite=false;
         tenant.tx(tx->check(tx.execute("UPDATE users SET name='tx'",ps->{})==1,"MySQL transactional catalog"));
         check(mysql.catalog.equals("root_catalog"),"MySQL catalog restored after transaction");
+        // An unqualified table and validated alias are mandatory even for a nested
+        // subquery; otherwise generated DSL could bypass tenant-scoped search_path.
+        try {
+            SqlSubqueries.exists(StaticSchemaRecord_BjormMapper.INSTANCE,"s",
+                ItUser_.name.eq("bad"));
+            throw new AssertionError("Static cross-schema subquery was accepted");
+        } catch(IllegalArgumentException expected) {}
+        try {
+            SqlSubqueries.exists(ItInvoice_BjormMapper.INSTANCE,"i;DROP TABLE users",
+                ItUser_.name.eq("bad"));
+            throw new AssertionError("Unsafe subquery alias was accepted");
+        } catch(IllegalArgumentException expected) {}
+        try {
+            SqlSubqueries.in(ItUser_.id,ItInvoice_BjormMapper.INSTANCE,"i",
+                ItInvoice_.customerId.as("other"),ItInvoice_.reference.as("i").eq("bad"));
+            throw new AssertionError("A projection from a foreign subquery alias was accepted");
+        } catch(IllegalArgumentException expected) {}
         System.out.println("PASS: tenant required, scoped PG SET LOCAL, rollback and MySQL catalog reset");
     }
 }
