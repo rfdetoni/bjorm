@@ -77,6 +77,8 @@ public interface EntityMapper<T> extends RowMapper<T> {
     Object id(T entity);
     /** Java name of the generated primary-key property. */
     default String idProperty() { return "id"; }
+    /** Ordered generated key property names used by composite FK JOINs. */
+    default java.util.List<String> idProperties() { return java.util.List.of(idProperty()); }
     /** Multiple assigned @Id properties; generated mapper binds every component. */
     default boolean compositeId() {return false;}
     default boolean isIdProperty(String property) {return idProperty().equals(property);}
