@@ -52,6 +52,7 @@ public final class PostgresIntegrationTest {
             st.execute("CREATE TABLE bjorm_it_orders (id uuid PRIMARY KEY, description text, customerId uuid REFERENCES bjorm_it_users(id))");
             // FK RESTRICT: cascade here is implemented by BJORM, not delegated to PostgreSQL.
             st.execute("CREATE TABLE bjorm_it_order_lines (id uuid PRIMARY KEY, orderId uuid NOT NULL REFERENCES bjorm_it_orders(id), sku text)");
+            st.execute("CREATE TABLE bjorm_it_order_lines_to_one (id uuid PRIMARY KEY, orderId uuid NOT NULL REFERENCES bjorm_it_orders(id), userId uuid REFERENCES bjorm_it_users(id), sku text)");
             st.execute("CREATE TABLE bjorm_it_order_notes (id uuid PRIMARY KEY, orderId uuid NOT NULL REFERENCES bjorm_it_orders(id), note text, version integer NOT NULL DEFAULT 0)");
             st.execute("CREATE TABLE bjorm_it_auto_uuid (id uuid PRIMARY KEY, label text)");
             st.execute("CREATE TABLE bjorm_it_inherited (id uuid PRIMARY KEY, created_at timestamp, name text)");
@@ -65,7 +66,7 @@ public final class PostgresIntegrationTest {
             st.execute("CREATE TABLE bjorm_it_record_parents (id uuid PRIMARY KEY, label text)");
             st.execute("CREATE TABLE bjorm_it_record_children (id uuid PRIMARY KEY, parentId uuid NOT NULL REFERENCES bjorm_it_record_parents(id), label text)");
         }
-        Bjorm db=Bjorm.open(ds,ItUser_BjormMapper.INSTANCE,ItProduct_BjormMapper.INSTANCE,ItDocument_BjormMapper.INSTANCE,ItOrder_BjormMapper.INSTANCE,ItOrderInner_BjormMapper.INSTANCE,ItOrderOuter_BjormMapper.INSTANCE,ItOrderWithCustomer_BjormMapper.INSTANCE,ItOrderLine_BjormMapper.INSTANCE,ItOrderNote_BjormMapper.INSTANCE,AutoUuidRecord_BjormMapper.INSTANCE,AutoStringRecord_BjormMapper.INSTANCE,AutoLongRecord_BjormMapper.INSTANCE,AutoIntRecord_BjormMapper.INSTANCE,AutoUuidPojo_BjormMapper.INSTANCE,AutoParentRecord_BjormMapper.INSTANCE,AutoChildRecord_BjormMapper.INSTANCE,InheritedPatient_BjormMapper.INSTANCE,ItTypedJson_BjormMapper.INSTANCE,ItInstant_BjormMapper.INSTANCE,
+        Bjorm db=Bjorm.open(ds,ItUser_BjormMapper.INSTANCE,ItProduct_BjormMapper.INSTANCE,ItDocument_BjormMapper.INSTANCE,ItOrder_BjormMapper.INSTANCE,ItOrderInner_BjormMapper.INSTANCE,ItOrderOuter_BjormMapper.INSTANCE,ItOrderWithCustomer_BjormMapper.INSTANCE,ItOrderLine_BjormMapper.INSTANCE,ItLineWithUser_BjormMapper.INSTANCE,ItOrderWithNestedReference_BjormMapper.INSTANCE,ItOrderNote_BjormMapper.INSTANCE,AutoUuidRecord_BjormMapper.INSTANCE,AutoStringRecord_BjormMapper.INSTANCE,AutoLongRecord_BjormMapper.INSTANCE,AutoIntRecord_BjormMapper.INSTANCE,AutoUuidPojo_BjormMapper.INSTANCE,AutoParentRecord_BjormMapper.INSTANCE,AutoChildRecord_BjormMapper.INSTANCE,InheritedPatient_BjormMapper.INSTANCE,ItTypedJson_BjormMapper.INSTANCE,ItInstant_BjormMapper.INSTANCE,
             MappedColumns_BjormMapper.INSTANCE,OrdinalEvent_BjormMapper.INSTANCE,
             ItAuditRecord_BjormMapper.INSTANCE,ItAuditPojo_BjormMapper.INSTANCE,
             ExplicitAssignedRecord_BjormMapper.INSTANCE,ExplicitIdentityRecord_BjormMapper.INSTANCE,
@@ -488,6 +489,28 @@ public final class PostgresIntegrationTest {
             try { db.insert(bad); throw new AssertionError("Expected foreign key rejection"); }
             catch(IllegalArgumentException expected) { }
             check(db.list(ItOrder.class, ItOrder_.description.eq("Must roll back")).isEmpty(), "cascade insert failure rolled back root");
+            ItUser nestedUser=db.insertReturning(new ItUser(null,"Nested child customer PostgreSQL",29));
+            ItOrderWithNestedReference nestedOrder=db.insertReturning(
+                new ItOrderWithNestedReference(UUID.randomUUID(),"nested to-one PostgreSQL",null,
+                    List.of(new ItLineWithUser(null,null,nestedUser.id(),"REF",null),
+                            new ItLineWithUser(null,null,null,"OPTIONAL",null))));
+            java.util.concurrent.atomic.AtomicInteger nestedQueries=new java.util.concurrent.atomic.AtomicInteger();
+            Bjorm observedNested=db.observeSql((operation,nanos,ok)->{
+                if(operation==SqlOperation.QUERY)nestedQueries.incrementAndGet();
+            });
+            ItOrderWithNestedReference nestedLoaded=observedNested
+                .select(ItOrderWithNestedReference.class)
+                .where(ItOrderWithNestedReference_.id.eq(nestedOrder.id()))
+                .limit(1).fetch().getFirst();
+            check(nestedLoaded.lines().size()==2 &&
+                nestedLoaded.lines().stream().anyMatch(item->
+                    "REF".equals(item.sku()) && item.customer()!=null &&
+                    item.customer().id().equals(nestedUser.id())) &&
+                nestedLoaded.lines().stream().anyMatch(item->
+                    "OPTIONAL".equals(item.sku()) && item.customer()==null),
+                "PostgreSQL nested child @ManyToOne hydration with nullable FK");
+            check(nestedQueries.get()==1,
+                "PostgreSQL nested child @ManyToOne graph must use one JDBC query");
             System.out.println("PASS: PostgreSQL CRUD, DSL, version, rollback, batch, UUID v7, upsert and nested cascade");
         } finally {
             try(Connection c=ds.getConnection();Statement st=c.createStatement()){
@@ -500,6 +523,7 @@ public final class PostgresIntegrationTest {
                 st.execute("DROP TABLE IF EXISTS bjorm_it_auto_long");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_auto_string");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_auto_uuid");
+                st.execute("DROP TABLE IF EXISTS bjorm_it_order_lines_to_one");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_order_lines");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_order_notes");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_orders");
