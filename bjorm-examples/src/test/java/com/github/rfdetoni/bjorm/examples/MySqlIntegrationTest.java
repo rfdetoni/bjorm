@@ -76,6 +76,23 @@ public final class MySqlIntegrationTest {
             check(observed.find(ItInvoice.class,invoice.id()).customer().name().equals("MySQL Invoice Customer"),
                 "MySQL ManyToOne record hydrated");
             check(queryCount.get()==1,"MySQL eager parent loaded without N+1 SQL");
+            SqlPredicate correlated=ItInvoice_.customerId.as("i").sameAs(ItUser_.id.as("u"))
+                .and(ItInvoice_.reference.as("i").eq("MYSQL-INV"));
+            check(db.select(ItUser.class).as("u")
+                .where(SqlSubqueries.exists(ItInvoice_BjormMapper.INSTANCE,"i",correlated))
+                .fetch().stream().anyMatch(user->invoiceCustomer.id().equals(user.id())),
+                "MySQL typed correlated EXISTS with UUID FK");
+            check(db.select(ItUser.class).as("u")
+                .where(SqlSubqueries.notExists(ItInvoice_BjormMapper.INSTANCE,"i",correlated))
+                .fetch().stream().noneMatch(user->invoiceCustomer.id().equals(user.id())),
+                "MySQL typed correlated NOT EXISTS");
+            check(db.select(ItUser.class).as("u")
+                .where(SqlSubqueries.in(ItUser_.id.as("u"),
+                    ItInvoice_BjormMapper.INSTANCE,"i",ItInvoice_.customerId.as("i"),
+                    ItInvoice_.reference.as("i").eq("MYSQL-INV")))
+                .fetch().stream().anyMatch(user->invoiceCustomer.id().equals(user.id())),
+                "MySQL typed IN subquery with prepared bound filter");
+
             check(db.select(ItInvoice.class).where(ItInvoice_.customerId.eq(invoiceCustomer.id()))
                 .orderBy(ItInvoice_.reference.asc()).limit(1).fetch().getFirst().customer()!=null,
                 "MySQL ManyToOne sorted paging");
