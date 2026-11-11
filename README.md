@@ -850,7 +850,8 @@ branch for sibling child collections and hydrates those direct associations
 **in the same SQL statement**.
 The referenced parent is not inserted, updated or deleted transitively.
 A child inside an `@Children` graph may also declare a **direct**
-`@ManyToOne` to a flat single-key target. Each `UNION ALL` branch joins
+`@ManyToOne` to a flat target, including a composite-key target
+with `mappedByParts`. Each `UNION ALL` branch joins
 only the referenced targets belonging to its active child path, while all
 branches project the same positional columns. The parent and nested child
 references are hydrated in **one JDBC query**, including nullable LEFT JOINs.
