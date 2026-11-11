@@ -855,12 +855,12 @@ with `mappedByParts`. Each `UNION ALL` branch joins
 only the referenced targets belonging to its active child path, while all
 branches project the same positional columns. The parent and nested child
 references are hydrated in **one JDBC query**, including nullable LEFT JOINs.
-Root pagination still executes before child expansion. Recursive references,
-association targets with their own graphs, and composite-key to-one targets
-remain unsupported and fail explicitly.
-For standalone ManyToOne loading, explicit user-written JOINs cannot be
-mixed with the implicit reference JOIN. Use a dedicated projection for
-nested or customized association shapes.
+Root pagination still executes before child expansion. Self-referential
+cycles, to-one targets with their own child collections, and multi-hop
+references **inside an existing @Children graph** remain unsupported
+and fail explicitly. For standalone ManyToOne loading, explicit
+user-written JOINs cannot be mixed with the implicit reference JOIN.
+Use a dedicated projection for unsupported nested association shapes.
 
 ## Spring MVC Pageable, Page and Slice
 
