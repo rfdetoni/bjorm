@@ -140,6 +140,15 @@ public final class PostgresIntegrationTest {
                 db.insertReturning(new ItEmbeddedRecord(null,"missing",null));
                 throw new AssertionError("null @Embedded value accepted");
             } catch(IllegalArgumentException expected) {}
+            // Rejection must happen before SQL and must not write a partial row.
+            UUID rejectedConvertedId=UUID.randomUUID();
+            try {
+                db.insertDetached(new ItConvertedRecord(rejectedConvertedId,
+                    new MoneyValue(new BigDecimal("19.00")),"unsafe detached"));
+                throw new AssertionError("PostgreSQL detached record with converter was accepted");
+            } catch(UnsupportedOperationException expected) {}
+            check(db.find(ItConvertedRecord.class,rejectedConvertedId)==null,
+                "PostgreSQL fail-closed detached copy must not execute INSERT");
             ItConvertedRecord converted=db.insertReturning(new ItConvertedRecord(
                 UUID.randomUUID(),new MoneyValue(new BigDecimal("22.50")),"convertible"));
             check(db.find(ItConvertedRecord.class,converted.id()).amount().equals(converted.amount()),
