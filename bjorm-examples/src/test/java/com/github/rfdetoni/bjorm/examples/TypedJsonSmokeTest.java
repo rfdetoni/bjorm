@@ -32,6 +32,16 @@ public final class TypedJsonSmokeTest {
             throw new AssertionError("Typed JSON record not decoded");
         if(!mapper.readProperty(rs,2,"values").equals(List.of(4,5)))
             throw new AssertionError("Typed JSON property projection not decoded");
-        System.out.println("PASS: dialect-aware typed JSON binding and record decoding");
+        ItTypedJsonPojo mutableSource=new ItTypedJsonPojo();
+        List<Integer> mutableValues=new ArrayList<>(List.of(1,2,3));
+        mutableSource.setValues(mutableValues);
+        try {
+            ItTypedJsonPojo_BjormMapper.INSTANCE.copyForWrite(mutableSource);
+            throw new AssertionError("Detached POJO copy must reject mutable typed JSON");
+        } catch(UnsupportedOperationException expected) {}
+        if(mutableSource.getValues()!=mutableValues ||
+            !mutableValues.equals(List.of(1,2,3)) || mutableSource.getId()!=null)
+            throw new AssertionError("Unsafe detached copy changed the caller's JSON value");
+        System.out.println("PASS: dialect-aware typed JSON binding, decoding and detached safety");
     }
 }
