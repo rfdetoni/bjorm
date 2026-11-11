@@ -500,11 +500,19 @@ public final class EntityProcessor extends AbstractProcessor {
                 String changes=String.join(", ",cols.stream().filter(c->!c.id()&&c.updatable()&&!c.createdAt()).map(c->"\""+c.column()+"\"").toList());
                 w.write("public String upsertSql(com.github.rfdetoni.bjorm.SqlDialect dialect){return dialect.upsertSql(insertSql(dialect),\""+conflictTarget+"\",\""+cols.get(id).column()+"\",java.util.List.of("+changes+"),"+(version>=0?"\""+cols.get(version).column()+"\"":"null")+");}\n");
             }
-            // Detached writes cannot retain a mutable JSON domain object as shared state:
-            // an arbitrary codec may modify it during encoding. Fail before JDBC instead.
-            // @Embedded values are immutable scalar records, but still get a distinct copy.
+            // Record references are immutable, but their nested JSON values and converter
+            // inputs can still be mutable. No deep-copy guarantee exists for arbitrary codecs.
+            // Reject these shapes before JDBC, even for a top-level record.
+            boolean unsafeDetachedValue=cols.stream().anyMatch(c->
+                (c.json()&&!c.type().equals("java.lang.String")) || c.converter()!=null);
+            if(record && unsafeDetachedValue) {
+                w.write("public "+clazz+" copyForWrite("+clazz+" value){"+
+                    "throw new UnsupportedOperationException(\"Detached record contains typed JSON or a converted value without a deep-copy contract\");}\n");
+            }
+            // POJOs additionally need a separate materialized instance. @Embedded
+            // direct scalar value records are copied rather than shared by identity.
             if(!record) {
-                boolean mutableJson=cols.stream().anyMatch(c->(c.json()&&!c.type().equals("java.lang.String"))||c.converter()!=null);
+                boolean mutableJson=unsafeDetachedValue;
                 w.write("public "+clazz+" copyForWrite("+clazz+" value){");
                 if(!relations.isEmpty() || mutableJson) {
                     w.write("throw new UnsupportedOperationException(\"Detached writes require an explicit deep-copy contract for child graphs, converted values and typed JSON values\");}\n");
