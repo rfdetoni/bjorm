@@ -67,6 +67,9 @@ public final class PostgresIntegrationTest {
             st.execute("CREATE TABLE bjorm_it_auto_int (id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY, label text)");
             st.execute("CREATE TABLE bjorm_it_record_parents (id uuid PRIMARY KEY, label text)");
             st.execute("CREATE TABLE bjorm_it_record_children (id uuid PRIMARY KEY, parentId uuid NOT NULL REFERENCES bjorm_it_record_parents(id), label text)");
+            st.execute("CREATE TABLE bjorm_it_shared_roots (id uuid PRIMARY KEY,title text)");
+            st.execute("CREATE TABLE bjorm_it_shared_branches (id uuid PRIMARY KEY,primaryRootId uuid REFERENCES bjorm_it_shared_roots(id),backupRootId uuid REFERENCES bjorm_it_shared_roots(id))");
+            st.execute("CREATE TABLE bjorm_it_shared_leaves (id uuid PRIMARY KEY,branchId uuid NOT NULL REFERENCES bjorm_it_shared_branches(id),label text)");
         }
         Bjorm db=Bjorm.open(ds,ItUser_BjormMapper.INSTANCE,ItProduct_BjormMapper.INSTANCE,ItDocument_BjormMapper.INSTANCE,ItOrder_BjormMapper.INSTANCE,ItOrderInner_BjormMapper.INSTANCE,ItOrderOuter_BjormMapper.INSTANCE,ItOrderWithCustomer_BjormMapper.INSTANCE,ItOrderLine_BjormMapper.INSTANCE,ItLineWithUser_BjormMapper.INSTANCE,ItOrderWithNestedReference_BjormMapper.INSTANCE,ItOrderNote_BjormMapper.INSTANCE,AutoUuidRecord_BjormMapper.INSTANCE,AutoStringRecord_BjormMapper.INSTANCE,AutoLongRecord_BjormMapper.INSTANCE,AutoIntRecord_BjormMapper.INSTANCE,AutoUuidPojo_BjormMapper.INSTANCE,AutoParentRecord_BjormMapper.INSTANCE,AutoChildRecord_BjormMapper.INSTANCE,InheritedPatient_BjormMapper.INSTANCE,ItTypedJson_BjormMapper.INSTANCE,ItInstant_BjormMapper.INSTANCE,
             MappedColumns_BjormMapper.INSTANCE,OrdinalEvent_BjormMapper.INSTANCE,
@@ -76,7 +79,8 @@ public final class PostgresIntegrationTest {
             ItInvoice_BjormMapper.INSTANCE,ItInvoiceInner_BjormMapper.INSTANCE,
             ItInvoicePojo_BjormMapper.INSTANCE,
             ItEmbeddedRecord_BjormMapper.INSTANCE,ItEmbeddedPojo_BjormMapper.INSTANCE,
-            ItCompositeRecord_BjormMapper.INSTANCE,ItCompositePojo_BjormMapper.INSTANCE,ItConvertedRecord_BjormMapper.INSTANCE,ItCompositeReference_BjormMapper.INSTANCE);
+            ItCompositeRecord_BjormMapper.INSTANCE,ItCompositePojo_BjormMapper.INSTANCE,ItConvertedRecord_BjormMapper.INSTANCE,ItCompositeReference_BjormMapper.INSTANCE,
+            ItSharedRoot_BjormMapper.INSTANCE,ItSharedBranch_BjormMapper.INSTANCE,ItSharedLeaf_BjormMapper.INSTANCE);
         UUID id=UUID.randomUUID();ItUser alice=new ItUser(id,"BJORM",34);
         try {
             StaticSchemaRecord fixed=db.insertReturning(new StaticSchemaRecord(null,"initial-static"));
@@ -526,6 +530,40 @@ public final class PostgresIntegrationTest {
                 "combined graph cascade does not delete referenced customer");
             check(db.find(ItUser.class,invoiceCustomer.id())!=null,
                 "referenced customer is not cascaded by graph delete");
+            ItOrder detachedSource=new ItOrder();
+            detachedSource.setDescription("Detached POJO graph");
+            ItOrderLine detachedLine=new ItOrderLine();
+            detachedLine.setSku("DETACHED-LINE");
+            detachedSource.getLines().add(detachedLine);
+            ItOrderNote detachedNote=new ItOrderNote();
+            detachedNote.setNote("DETACHED-NOTE");
+            detachedSource.getNotes().add(detachedNote);
+            ItOrder detachedPersisted=db.insertDetached(detachedSource);
+            check(detachedSource.getId()==null && detachedLine.getId()==null &&
+                detachedLine.getOrderId()==null && detachedNote.getId()==null &&
+                detachedNote.getOrderId()==null &&
+                detachedPersisted!=detachedSource &&
+                detachedPersisted.getLines().getFirst()!=detachedLine &&
+                detachedPersisted.getLines().getFirst().getOrderId().equals(detachedPersisted.getId()) &&
+                db.find(ItOrder.class,detachedPersisted.getId()).getNotes().size()==1,
+                "PostgreSQL detached POJO parent+children are copied and inserted atomically");
+            db.delete(detachedPersisted);
+            ItSharedRoot detachedDeepSource=new ItSharedRoot(null,"two-level",
+                List.of(new ItSharedBranch(null,null,null,
+                    List.of(new ItSharedLeaf(null,null,"primary")))),
+                List.of(new ItSharedBranch(null,null,null,
+                    List.of(new ItSharedLeaf(null,null,"backup")))));
+            ItSharedRoot detachedDeepSaved=db.insertDetached(detachedDeepSource);
+            check(detachedDeepSource.id()==null &&
+                detachedDeepSource.primary().getFirst().id()==null &&
+                detachedDeepSource.primary().getFirst().leaves().getFirst().id()==null &&
+                detachedDeepSaved!=detachedDeepSource &&
+                detachedDeepSaved.primary().getFirst()!=detachedDeepSource.primary().getFirst() &&
+                detachedDeepSaved.primary().getFirst().leaves().getFirst().id()!=null &&
+                db.find(ItSharedRoot.class,detachedDeepSaved.id()).primary().getFirst().leaves().size()==1 &&
+                db.find(ItSharedRoot.class,detachedDeepSaved.id()).backup().getFirst().leaves().size()==1,
+                "PostgreSQL nested two-level detached record graph must not mutate source nodes");
+            db.delete(detachedDeepSaved);
             ItOrder order = new ItOrder();
             order.setDescription("First order");
             ItOrderLine line = new ItOrderLine();
@@ -647,6 +685,9 @@ public final class PostgresIntegrationTest {
             System.out.println("PASS: PostgreSQL CRUD, DSL, version, rollback, batch, UUID v7, upsert and nested cascade");
         } finally {
             try(Connection c=ds.getConnection();Statement st=c.createStatement()){
+                st.execute("DROP TABLE IF EXISTS bjorm_it_shared_leaves");
+                st.execute("DROP TABLE IF EXISTS bjorm_it_shared_branches");
+                st.execute("DROP TABLE IF EXISTS bjorm_it_shared_roots");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_record_children");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_record_parents");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_auto_int");
