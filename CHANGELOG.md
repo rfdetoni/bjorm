@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.19-SNAPSHOT (development, not a stable release)
+
+- Add generated detached POJO snapshots, independently copying supported scalar `@Embedded` records. Reject mutable graph/typed JSON/converted shapes when deep-copy safety cannot be guaranteed; retain legacy mutable INSERT/UPSERT compatibility (#30, #35, #38).
+- Enforce database privileges with real restricted per-tenant LOGIN accounts in PostgreSQL and MySQL 8.4 integration tests; native SQL opt-in does not grant cross-tenant rights (#30, #34).
+- Support direct root/child to-one reads with one eager graph statement for supported shapes, and explicit assigned composite IDs on independent entities; reject unsupported composite FK and referenced deep graph associations (#31, #27).
+- Extend lock modes with UPDATE/SHARE NOWAIT/SKIP LOCKED (#33). Require caller-owned transaction for row locking in tenant-required contexts; add bounded primary-key-ordered `lockRows` for flat entities.
+- Add opt-in isolation modes `READ_COMMITTED`, `REPEATABLE_READ`, and `SERIALIZABLE` to explicitly owned transactions; no implicit retries or Spring-bound isolation overrides (#36).
+- Add compile-time `@Converted` JDBC value converters and typed-field predicate conversion without runtime entity reflection (#37).
+- Introduce JMH source suites for UUID, JDBC mapping and PostgreSQL round-trips; no controlled JMH performance conclusions have been published (#32).
+- Align architecture/status documents to actual 0.3.19 capabilities; keep remaining roadmap open in issue #11.
+
+
 ## 0.3.18-SNAPSHOT
 
 - Expose `Operations.params(Object...)` for reusable, dialect-aware native SQL parameter binding without repeated application-specific `StatementBinder` loops. Snapshot values before execution to avoid mutable-varargs races; available within transactions.
