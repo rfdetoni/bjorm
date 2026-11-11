@@ -23,6 +23,10 @@ public final class CompositeIdSmokeTest {
             !mapper.isIdProperty("label"),"bulk write guards both key parts");
         check(ItCompositeRecord_.tenantId!=null&&ItCompositeRecord_.sku!=null,
             "typed predicate DSL for both key components");
+        check(ItCompositeRecord_BjormMapper.INSTANCE.idProperties().equals(
+            java.util.List.of("tenantId","sku")),"ordered composite key metadata");
+        check(ItCompositeReference_BjormMapper.INSTANCE.parents().getFirst().mappedByParts().equals(
+            java.util.List.of("tenantId","sku")),"compile-time ordered composite FK metadata");
         check(ItCompositePojo_BjormMapper.INSTANCE.compositeId(),"POJO tuple id generated");
         check(CompositeId.of(tenant,"SKU-2").equals(
             ItCompositePojo_BjormMapper.INSTANCE.id(poJo(tenant,"SKU-2"))),
