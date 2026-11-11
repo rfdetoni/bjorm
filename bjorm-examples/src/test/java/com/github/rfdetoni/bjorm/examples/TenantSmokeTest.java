@@ -95,6 +95,19 @@ public final class TenantSmokeTest {
             throw new AssertionError("Native SQL bypassed tenant permissions");}
         catch(SecurityException expected) {}
         check(pg.connections==borrowed,"native SQL denied before connection checkout");
+        int beforeLock=pg.events.size();
+        try {
+            guarded.lockOne(ItUser.class,ItUser_.name.eq("x"),
+                com.github.rfdetoni.bjorm.LockMode.UPDATE);
+            throw new AssertionError("PG tenant lock acquired inside an implicit auto transaction");
+        } catch(IllegalStateException expected) {}
+        try {
+            guarded.lockRows(ItUser.class,ItUser_.name.eq("x"),
+                com.github.rfdetoni.bjorm.LockMode.UPDATE_SKIP_LOCKED,1);
+            throw new AssertionError("PG tenant lockRows acquired without explicit transaction");
+        } catch(IllegalStateException expected) {}
+        check(pg.events.size()==beforeLock && pg.autoCommit,
+            "PG tenant row locks must reject auto-commit without SET LOCAL or implicit commit");
         Bjorm scoped=guarded.permitReviewedTenantNativeSql();
         check(scoped.execute("UPDATE users SET name='x'",ps->{})==1,"reviewed tenant-scoped update");
         check(pg.events.contains("SET LOCAL search_path TO pg_catalog, \"company_a\", pg_temp"),"scoped PostgreSQL search_path");
@@ -116,6 +129,14 @@ public final class TenantSmokeTest {
             throw new AssertionError("MySQL tenant accepted raw SQL");}
         catch(SecurityException expected) {}
         check(mysql.connections==mysqlBorrowed,"MySQL native SQL denied before JDBC checkout");
+        int mysqlLockEvents=mysql.events.size();
+        try {
+            mysqlGuarded.lockOne(ItUser.class,ItUser_.name.eq("x"),
+                com.github.rfdetoni.bjorm.LockMode.UPDATE);
+            throw new AssertionError("MySQL tenant lock acquired without explicit transaction");
+        } catch(IllegalStateException expected) {}
+        check(mysqlLockEvents==mysql.events.size() && mysql.catalog.equals("root_catalog"),
+            "MySQL rejected row lock cannot alter tenant catalog");
         Bjorm tenant=mysqlGuarded.permitReviewedTenantNativeSql();
         check(tenant.execute("UPDATE users SET name='y'",ps->{})==1,"reviewed MySQL tenant write");
         check(mysql.events.contains("write:company_a:UPDATE users SET name='y'"),"MySQL catalog scoped on write");
