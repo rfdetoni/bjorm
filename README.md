@@ -926,9 +926,10 @@ SELECT, projections, `updateBy`, and type-safe predicates (`eq`, `in`,
 `between`, etc.). Java compilation rejects incompatible converter generic
 types and inaccessible constructors. IDs, versions, auditing fields, JSON
 and primitive fields cannot be converted. Use an immutable value object:
-`insertDetached`/`upsertDetached` on mutable POJOs containing custom
+`insertDetached`/`upsertDetached` on POJOs or records containing custom
 converted fields are deliberately rejected until a safe snapshot contract
-exists. A converter must be stateless/thread-safe because the generated
+exists, even when the containing entity is an immutable record. Arbitrary
+converter implementations may mutate nested value objects. A converter must be stateless/thread-safe because the generated
 mapper retains a shared converter instance. Native `@Query` parameters
 need explicit JDBC values; they are not automatically associated with a
 particular entity converter.
