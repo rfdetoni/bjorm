@@ -120,6 +120,8 @@ class BjormSpringRealDatabaseTest {
                 assertEquals(1,updated.version(),"internal UPDATE joined the Spring transaction");
                 // Explicit db.tx must still reject nesting in Spring transactions.
                 assertThrows(IllegalStateException.class,()->tenant.tx(inner->{}));
+                assertThrows(IllegalStateException.class,
+                    ()->tenant.tx(TransactionIsolation.SERIALIZABLE, inner->{}));
                 return updated;
             });
             assertEquals(1,current.version());
