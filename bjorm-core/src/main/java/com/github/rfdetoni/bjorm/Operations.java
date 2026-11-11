@@ -60,6 +60,14 @@ public interface Operations {
     <T> List<T> query(String sql, StatementBinder binder, RowMapper<T> mapper);
     <T> T one(String sql, StatementBinder binder, RowMapper<T> mapper);
     int execute(String sql, StatementBinder binder);
+    /**
+     * PostgreSQL DML ... RETURNING, materialized and bounded by BJORM row limits.
+     * Arbitrary native SQL remains denied by tenantRequired unless explicitly
+     * reviewed. Custom Operations implementations may decline support.
+     */
+    default <T> List<T> executeReturning(String sql, StatementBinder binder, RowMapper<T> mapper) {
+        throw new UnsupportedOperationException("Native DML RETURNING is not supported by this Operations implementation");
+    }
     <T> void forEach(Class<T> type, SqlPredicate predicate, java.util.function.Consumer<T> consumer);
     <T> void forEach(Select<T> query, java.util.function.Consumer<T> consumer);
     /**
