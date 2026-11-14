@@ -51,6 +51,9 @@ class BjormSpringRealDatabaseTest {
         @Override public String selectAllSql(){
             return "SELECT id,label,version FROM "+tableName;
         }
+        @Override public String qualifiedColumns(String alias) {
+            return alias+".id, "+alias+".label, "+alias+".version";
+        }
         @Override public void bindInsert(PreparedStatement ps,Row value)throws SQLException {
             bindInsert(ps,value,SqlDialects.POSTGRESQL);
         }

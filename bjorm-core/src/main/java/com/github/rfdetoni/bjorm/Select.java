@@ -136,7 +136,7 @@ public final class Select<T> {
         for(Join join:joins){
             if(!known.add(join.alias))throw new IllegalArgumentException("Duplicate SQL alias: "+join.alias);
             // OR clauses can make an otherwise linked join degenerate into a Cartesian product.
-            if(Pattern.compile("(?i)\\\\bOR\\\\b").matcher(join.on.sql()).find())
+            if(Pattern.compile("(?i)\\bOR\\b").matcher(join.on.sql()).find())
                 throw new IllegalArgumentException("JOIN ON with OR is not supported; it can multiply rows unpredictably");
             boolean linked=false;
             Matcher matcher=JOIN_KEYS.matcher(join.on.sql());
