@@ -251,6 +251,16 @@ public final class AdvancedSmokeTest {
         } catch(IllegalArgumentException expected) {
             check(expected.getMessage().contains("alias"), "generated aliases validated");
         }
+        try {
+            db.selectFrom(WProduct.product)
+                .join(WUser.user, u -> WProduct.product.id.sameAs(u.id)
+                    .or(WProduct.product.name.eq("ON_VALUE")))
+                .fetch();
+            throw new AssertionError("OR in JOIN ON must be rejected");
+        } catch(IllegalArgumentException expected) {
+            check(expected.getMessage().contains("OR is not supported"),
+                "OR JOIN guard must use regex word boundaries, not escaped literals");
+        }
         db.select(Product.class).as("p")
             .join(User.class,"u",Product_.id.as("p").sameAs(User_.id.as("u"))
                 .and(Product_.name.as("p").eq("ON_VALUE")))
@@ -349,11 +359,22 @@ public final class AdvancedSmokeTest {
         check(spy.last().sql().equals("SELECT t0.id, t0.name, t0.unit_price, t0.status, t0.version FROM products t0 WHERE name = ? LIMIT ?"),"findOne pushes LIMIT 1 to SQL");
         check(spy.last().binds().equals(Map.of(1,"Pencil",2,1)),"findOne binds filter and LIMIT 1");
         check(db.count(Product.class,Product_.name.eq("Pencil"))==3L,"count avoids entity materialization");
-        check(spy.last().sql().equals("SELECT COUNT(*) FROM products WHERE name = ?"),"count uses single SQL aggregate");
+        check(spy.last().sql().equals("SELECT COUNT(*) FROM products t0 WHERE name = ?"),"count uses single SQL aggregate");
         check(spy.last().binds().equals(Map.of(1,"Pencil")),"count predicate bound");
         check(db.exists(Product.class,Product_.name.eq("Pencil")),"exists returns true");
-        check(spy.last().sql().equals("SELECT 1 FROM products WHERE name = ? LIMIT 1"),"exists does not count all rows");
+        check(spy.last().sql().equals("SELECT 1 FROM products t0 WHERE name = ? LIMIT 1"),"exists does not count all rows");
         check(spy.last().binds().equals(Map.of(1,"Pencil")),"exists predicate bound");
+        // Generated W* qualified predicates must work across all read entry points.
+        check(db.count(Product.class,WProduct.product.name.eq("Pencil"))==3L,
+            "typed count uses the generated root alias");
+        check(spy.last().sql().equals("SELECT COUNT(*) FROM products t0 WHERE t0.name = ?"),
+            "count SQL declares t0 rather than referencing an unbound alias");
+        check(db.exists(Product.class,WProduct.product.name.eq("Pencil")),
+            "typed exists uses the generated root alias");
+        check(spy.last().sql().equals("SELECT 1 FROM products t0 WHERE t0.name = ? LIMIT 1"),
+            "exists SQL declares t0");
+        check(spy.last().binds().equals(Map.of(1,"Pencil")),"qualified aggregate binds value");
+
         try {
             db.lockOne(Product.class,Product_.name.eq("Pencil"),LockMode.UPDATE);
             throw new AssertionError("row locks must require active transaction");
@@ -363,9 +384,15 @@ public final class AdvancedSmokeTest {
         db.tx(tx -> {
             check(tx.lockOne(Product.class,Product_.name.eq("Pencil"),LockMode.UPDATE),
                 "transaction FOR UPDATE returns existing row");
-            check(spy.last().sql().equals("SELECT id FROM products WHERE name = ? LIMIT 1 FOR UPDATE"),
+            check(spy.last().sql().equals("SELECT t0.id FROM products t0 WHERE name = ? LIMIT 1 FOR UPDATE"),
                 "mapped row lock SQL");
             check(spy.last().binds().equals(Map.of(1,"Pencil")),"row lock binds typed predicate");
+            check(tx.lockOne(Product.class,WProduct.product.name.eq("Pencil"),LockMode.UPDATE),
+                "qualified W* predicate can lock a row");
+            check(spy.last().sql().equals(
+                "SELECT t0.id FROM products t0 WHERE t0.name = ? LIMIT 1 FOR UPDATE"),
+                "row lock declares and qualifies t0");
+
             check(tx.lockOne(Product.class,Product_.name.eq("Pencil"),LockMode.SHARE),
                 "transaction FOR SHARE returns existing row");
             check(spy.last().sql().endsWith("LIMIT 1 FOR SHARE"),"shared row lock SQL");
