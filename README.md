@@ -23,7 +23,15 @@ mvn -B clean verify
 
 The portable `verify.sh` also compiles and executes the source on Java 21 for smoke testing (it does **not** validate a JDK 25 Maven build).
 
-## Usage: POJO, Active Record, DSL
+## Usage: POJO, Active Record and the preferred W* query DSL
+
+**For new queries use the generated `WEntity` path** (for example `WProduct`) with
+`WProduct.find(db)` or `db.selectFrom(WProduct.product)`. Both use the same
+generated JDBC mapper and explicit connection/tenant context. The previous
+`Product_` metamodel stays generated and fully supported for existing sources;
+there is no migration deadline, global session, or dependency on Hibernate.
+`Product_BjormMapper` remains a generated infrastructure component, not
+a query API that application services should call directly.
 
 ```java
 @Table("products")
@@ -36,7 +44,7 @@ public class Product implements ActiveRecord<Product> {
     // public getters and setters for all fields
 }
 
-// The annotation processor generates Product_BjormMapper, Product_ and a ServiceLoader index.
+// Generated: Product_BjormMapper (JDBC), WProduct (preferred DSL), Product_ (legacy).
 var db = Bjorm.open(dataSource);    // discover generated mappers once at startup
 // Or: Bjorm.open(dataSource, Product_BjormMapper.INSTANCE) for explicit registration.
 Product p = new Product();
@@ -45,9 +53,10 @@ p.setName("Pencil");
 p.insert(db);               // Optional ActiveRecord; explicit database context.
 db.update(p);               // Version-controlled updates validate affected rows.
 var found = db.find(Product.class, p.getId());
-var list = db.select(Product.class)
-        .where(Product_.name.in(List.of("Pencil", "Pen")))
-        .orderBy(Product_.name.asc())
+WProduct product = WProduct.product;
+var list = WProduct.find(db)
+        .where(product.name.in(List.of("Pencil", "Pen")))
+        .orderBy(product.name.asc())
         .limit(20)
         .fetch();
 
@@ -56,6 +65,16 @@ db.tx(tx -> {
     tx.execute("UPDATE audit SET events = events + 1", StatementBinder.NONE);
 });
 ```
+
+
+The `W*` metamodel is generated with the entity and provides compiler-checked
+numeric, text, UUID, boolean and temporal paths, plus automatic `t0`/`t1`
+aliases in typed joins. `find(db)` is a static convenience method on the
+generated **W-class**, not on the entity: `Product.find()` is not generated.
+Use `.eq(...)` for predicates (not `.equals(...)`, which is Java object
+equality). Use `@Query` for fixed, complex SQL and generated projections for
+small result shapes. The legacy `Entity_` paths remain available unchanged.
+See [W* DSL guide](docs/compile-time-w-paths.md).
 
 ## Explicit primary-key generation strategy
 
@@ -86,11 +105,11 @@ Use BJORM's generated field predicates for index-friendly COUNT and EXISTS, incl
 inside `db.tx` and injected Spring `@Transactional` methods:
 
 ```java
-long total = db.count(Product.class, Product_.name.eq("Pencil"));
-boolean any = db.exists(Product.class, Product_.name.eq("Pencil"));
+long total = db.count(Product.class, WProduct.product.name.eq("Pencil"));
+boolean any = db.exists(Product.class, WProduct.product.name.eq("Pencil"));
 // Result sets are not materialized: COUNT(*) and SELECT 1 ... LIMIT 1.
 db.tx(tx -> {
-    if (tx.lockOne(Product.class, Product_.id.eq(productId), LockMode.UPDATE)) {
+    if (tx.lockOne(Product.class, WProduct.product.id.eq(productId), LockMode.UPDATE)) {
         // Update in the same transaction. Lock is released on commit/rollback.
     }
 });
@@ -117,7 +136,7 @@ limit of **flat entities with one primary key**, ordered by that key:
 ```java
 db.tx(tx -> {
     List<Product> claimed = tx.lockRows(Product.class,
-        Product_.status.eq(Status.PENDING), LockMode.UPDATE_SKIP_LOCKED, 50);
+        WProduct.product.status.eq(Status.PENDING), LockMode.UPDATE_SKIP_LOCKED, 50);
     // Process and update the claimed rows in this SAME transaction.
 });
 ```
@@ -264,7 +283,7 @@ transaction commits on success and rolls back on exception.
 
 ```java
 long count = db.withStream(
-    db.select(Product.class).where(Product_.status.eq(Status.ACTIVE)),
+    WProduct.find(db).where(WProduct.product.status.eq(Status.ACTIVE)),
     stream -> stream.filter(p -> p.price().signum() > 0).count()
 );
 ```
@@ -336,8 +355,8 @@ do not rely on the cached instance being fresh.
 
 ```java
 // Writes require a non-null typed predicate. Unknown property names are rejected.
-tenantDb.updateBy(Customer.class, Map.of("name", "Updated"), Customer_.id.eq(id));
-tenantDb.deleteBy(Customer.class, Customer_.id.eq(id));
+tenantDb.updateBy(Customer.class, Map.of("name", "Updated"), WCustomer.customer.id.eq(id));
+tenantDb.deleteBy(Customer.class, WCustomer.customer.id.eq(id));
 tenantDb.batchDelete(List.of(customer1, customer2));
 List<Customer> saved = tenantDb.batchUpsertReturning(List.of(customer3, customer4));
 Customer current = tenantDb.updateReturning(customer); // reloaded @Version
@@ -402,21 +421,21 @@ no JPA, Hibernate or Spring JdbcClient is required.
 `findOne` returns `Optional<T>` and issues `LIMIT 1` at the database; no matching row yields `Optional.empty()`.
 
 ```java
-Optional<Product> first = db.findOne(Product.class, Product_.name.eq("Pencil"));
-Optional<Product> latest = db.select(Product.class)
-    .orderBy(Product_.name.desc()).first();
+Optional<Product> first = db.findOne(Product.class, WProduct.product.name.eq("Pencil"));
+Optional<Product> latest = WProduct.find(db)
+    .orderBy(WProduct.product.name.desc()).first();
 ```
 
 Use **Java property names**, not SQL column names. The processor compiles the mapping: `"price"` becomes `unit_price` for `@Column("unit_price")`. A mistaken or malicious property name fails validation before SQL is executed. The map returned by `findFields` is keyed by Java property names, keeps SQL `NULL` values, and **never creates partially initialized entities**.
 
 ```java
 List<Map<String,Object>> products = db.findFields(
-    Product.class, Product_.name.eq("Pencil"), "id", "name", "price"
+    Product.class, WProduct.product.name.eq("Pencil"), "id", "name", "price"
 );
 // SELECT id, name, unit_price FROM products WHERE name = ?
 
 Optional<Map<String,Object>> one = db.findOneFields(
-    Product.class, Product_.name.eq("Pencil"), "name", "price"
+    Product.class, WProduct.product.name.eq("Pencil"), "name", "price"
 );
 
 var ordered = db.select(Product.class).as("p")
@@ -430,9 +449,9 @@ For one scalar column, avoid allocating row maps:
 
 ```java
 List<String> names = db.findColumn(Product.class, "name", String.class,
-    Product_.price.gt(new BigDecimal("10.00")));
+    WProduct.product.price.gt(new BigDecimal("10.00")));
 Optional<String> name = db.findColumnOne(Product.class, "name", String.class,
-    Product_.name.eq("Pencil"));
+    WProduct.product.name.eq("Pencil"));
 // DSL alternative: db.select(Product.class).fields("name").values(String.class);
 ```
 
@@ -441,12 +460,12 @@ For **multiple typed fields without maps**, use the generated `@Projection` reco
 ```java
 @Projection public record ProductSummary(UUID id, String name) {}
 
-List<ProductSummary> summaries = db.select(Product.class)
-    .where(Product_.name.eq("Pencil"))
+List<ProductSummary> summaries = WProduct.find(db)
+    .where(WProduct.product.name.eq("Pencil"))
     .fields("id", "name")
     .fetch(ProductSummary_BjormRowMapper.INSTANCE);
 
-Optional<ProductSummary> summary = db.select(Product.class)
+Optional<ProductSummary> summary = WProduct.find(db)
     .fields("id", "name")
     .first(ProductSummary_BjormRowMapper.INSTANCE);
 ```
@@ -845,7 +864,7 @@ public record Invoice(
 Invoice invoice = bjorm.find(Invoice.class, invoiceId); // one SELECT with LEFT JOIN
 Customer customer = invoice.customer();
 List<Invoice> page = bjorm.select(Invoice.class)
-    .orderBy(Invoice_.reference.asc()).limit(25).fetch();
+    .orderBy(WInvoice.invoice.reference.asc()).limit(25).fetch();
 ```
 
 `customer` is a read-only eager projection of the referenced row: only
@@ -893,12 +912,12 @@ Enable Spring Data web argument resolution in your MVC application with `@Enable
 ```java
 @GetMapping("/products/page")
 Page<Product> page(@PageableDefault(sort = "name") Pageable pageable) {
-    return bjormPages.page(Product.class, Product_.active.eq(true), pageable);
+    return bjormPages.page(Product.class, WProduct.product.active.eq(true), pageable);
 }
 
 @GetMapping("/products/slice")
 Slice<Product> slice(@PageableDefault(sort = "name") Pageable pageable) {
-    return bjormPages.slice(Product.class, Product_.active.eq(true), pageable);
+    return bjormPages.slice(Product.class, WProduct.product.active.eq(true), pageable);
 }
 ```
 

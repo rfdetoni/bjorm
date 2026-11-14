@@ -194,6 +194,14 @@ public final class AdvancedSmokeTest {
         check(spy.last().sql().equals(
             "SELECT t0.id, t0.name, t0.unit_price, t0.status, t0.version FROM products t0 WHERE t0.name = ?"),
             "automatic root alias matches generated typed fields");
+        var preferred = WProduct.find(db).where(rootPath.name.eq("Pencil"))
+            .orderBy(rootPath.name.asc()).limit(5).fetch();
+        check(preferred.size()==1 && preferred.getFirst().getName().equals("Pencil"),
+            "generated W* find uses the same mapper and query execution");
+        check(spy.last().sql().contains("FROM products t0 WHERE t0.name = ? ORDER BY t0.name ASC LIMIT ?"),
+            "generated W* find keeps the deterministic root alias and bound paging");
+        check(spy.last().binds().equals(Map.of(1,"Pencil",2,5)),
+            "generated W* find binds query params safely");
         db.select(Product.class).where(Product_.name.eq("Pencil")).fetch();
         check(spy.last().sql().startsWith(
             "SELECT t0.id, t0.name, t0.unit_price, t0.status, t0.version FROM products t0"),
@@ -489,6 +497,8 @@ public final class AdvancedSmokeTest {
             check(tx.count(Product.class,Product_.name.eq("Pencil"))==3L,"count stays in transaction");
             check(tx.exists(Product.class,Product_.name.eq("Pencil")),"exists stays in transaction");
             check(tx.findOne(Product.class,Product_.name.eq("Pencil")).isPresent(),"findOne in transaction");
+            check(WProduct.find(tx).where(WProduct.product.name.eq("Pencil")).first().isPresent(),
+                "generated W* find works with scoped transaction Operations");
             check(tx.findFields(Product.class,Product_.name.eq("Pencil"),"name").size()==1,"findFields in transaction");
         });
         check(spy.connections.get()==startConns+1,"select projections respect tx connection");
