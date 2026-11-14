@@ -9,6 +9,8 @@ import java.util.Objects;
 public interface EntityPath<T> {
     Class<T> type();
     String alias();
+    /** Return the same generated path type qualified by an explicit alias. */
+    EntityPath<T> as(String alias);
 
     /** Use the generated metamodel with the regular explicit BJORM selector. */
     default Select<T> select(Operations db) {
