@@ -825,7 +825,7 @@ public final class EntityProcessor extends AbstractProcessor {
     private void generatePaths(TypeElement entity,List<Col> cols)throws IOException {
         String clazz=entity.getSimpleName().toString();
         try(Writer w=file(packageOf(entity),clazz+"_",entity)) {
-            w.write("package "+packageOf(entity)+";\npublic final class "+clazz+"_ {private "+clazz+"_(){}\n");
+            w.write("package "+packageOf(entity)+";\n/** Legacy metamodel preserved for source compatibility. Prefer W"+clazz+" for new queries. */\npublic final class "+clazz+"_ {private "+clazz+"_(){}\n");
             for(Col c:cols)w.write("public static final com.github.rfdetoni.bjorm.Field<"+boxed(c.type())+"> "+c.property().replace('.','_')+" = new com.github.rfdetoni.bjorm.Field<>(\""+c.column()+"\""+(c.converter()==null?"":", new "+c.converter()+"()::write")+");\n");
             w.write("}\n");
         }
@@ -841,6 +841,7 @@ public final class EntityProcessor extends AbstractProcessor {
         String pkg=packageOf(entity);
         try(Writer w=file(pkg,generatedName,entity)) {
             w.write("package "+pkg+";\n");
+            w.write("/** Preferred typed query entry point; generated at compilation, no ORM session or reflection. */\n");
             w.write("public final class "+generatedName+
                 " implements com.github.rfdetoni.bjorm.EntityPath<"+entityName+"> {\n");
             w.write("public static final "+generatedName+" "+instanceName+
@@ -862,6 +863,8 @@ public final class EntityProcessor extends AbstractProcessor {
             w.write("}\n");
             w.write("public "+generatedName+" as(String alias){return new "+
                 generatedName+"(alias); }\n");
+            w.write("/** Start a typed query with the explicit caller-owned database context. */\n");
+            w.write("public static com.github.rfdetoni.bjorm.Select<"+entityName+"> find(com.github.rfdetoni.bjorm.Operations db){return "+instanceName+".select(java.util.Objects.requireNonNull(db, \"db\"));}\n");
             w.write("public String alias(){return alias;}\n");
             w.write("public Class<"+entityName+"> type(){return "+entityName+".class;}\n");
             w.write("}\n");
