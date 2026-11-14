@@ -475,6 +475,34 @@ public final class Bjorm implements Operations {
         return new SqlPredicate(m.columnFor(m.idProperty())+(descending?" < ?":" > ?"),
             java.util.Collections.singletonList(id));
     }
+    /**
+     * Seek over a mapped scalar sort column and the unique primary key.
+     * This is a single range predicate with stable tie-breaking, no OFFSET.
+     * Null sort values and composite IDs require a different explicit cursor strategy.
+     */
+    public <T> SqlPredicate seekAfterSorted(Class<T> type,String property,Object value,
+                                            Object id,boolean descending) {
+        Objects.requireNonNull(value,"sort cursor value");
+        Objects.requireNonNull(id,"sort cursor ID");
+        EntityMapper<T> m=mapper(type);
+        if(m.compositeId())throw new UnsupportedOperationException(
+            "Sorted keyset currently requires a single-column primary key");
+        if(m.idProperty().equals(property))return seekAfterId(type,id,descending);
+        String column=m.columnFor(property);
+        String key=m.columnFor(m.idProperty());
+        String direction=descending?" < ?":" > ?";
+        String root=SqlAliases.root()+".";
+        Object stored=m.bulkParameterValue(property,value);
+        if(stored==null)throw new IllegalArgumentException("Sort cursor converted to null");
+        return new SqlPredicate("("+root+column+direction+" OR ("+root+column+" = ? AND "+
+            root+key+direction+"))",List.of(stored,stored,id));
+    }
+    /** Generated scalar property getter, used only for cursor creation. */
+    public <T> Object mappedPropertyValue(T entity,String property) {
+        Objects.requireNonNull(entity,"entity");
+        return mapper(entity.getClass()).propertyValue(entity,property);
+    }
+
     /** Generated primary-key property names, including all components of a composite key. */
     public <T> List<String> primaryKeyProperties(Class<T> type) {
         return List.copyOf(mapper(type).idProperties());

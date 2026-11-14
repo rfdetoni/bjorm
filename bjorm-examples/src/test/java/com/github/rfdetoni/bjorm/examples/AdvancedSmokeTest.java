@@ -373,6 +373,22 @@ public final class AdvancedSmokeTest {
             "typed exists uses the generated root alias");
         check(spy.last().sql().equals("SELECT 1 FROM products t0 WHERE t0.name = ? LIMIT 1"),
             "exists SQL declares t0");
+        check(db.mappedPropertyValue(p,"name").equals("Pencil"),
+            "generated cursor getter avoids runtime reflection");
+        SqlPredicate forward=db.seekAfterSorted(Product.class,"name","Pencil",spy.id,false);
+        check(forward.sql().equals("(t0.name > ? OR (t0.name = ? AND t0.id > ?))"),
+            "sorted seek uses a value range and ID tie breaker");
+        check(forward.params().equals(List.of("Pencil","Pencil",spy.id)),
+            "sorted seek uses bound parameters, with stable parameter order");
+        SqlPredicate reverse=db.seekAfterSorted(Product.class,"name","Pencil",spy.id,true);
+        check(reverse.sql().equals("(t0.name < ? OR (t0.name = ? AND t0.id < ?))"),
+            "descending seek must reverse both predicates");
+        try {
+            db.seekAfterSorted(Product.class,"notMapped","x",spy.id,false);
+            throw new AssertionError("Unmapped sort property accepted");
+        } catch(IllegalArgumentException expected) {
+            check(expected.getMessage().contains("Unknown"),"unsafe sort is rejected before JDBC");
+        }
         check(spy.last().binds().equals(Map.of(1,"Pencil")),"qualified aggregate binds value");
         // Bulk DML must declare the same alias as generated W* predicates.
         check(db.updateBy(User.class,Map.of("age",29),WUser.user.name.eq("Pencil"))==1,

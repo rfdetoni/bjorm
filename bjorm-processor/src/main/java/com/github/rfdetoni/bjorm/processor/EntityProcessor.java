@@ -475,6 +475,10 @@ public final class EntityProcessor extends AbstractProcessor {
                 w.write("case \""+col.property()+"\" -> "+readColumn(col,"index",i)+";\n");
             }
             w.write("default -> throw new IllegalArgumentException(\"Unknown mapped property: \"+property);};}\n");
+            w.write("public Object propertyValue("+clazz+" value,String property){return switch(property){\n");
+            for(Col c:cols)w.write("case \""+c.property()+"\" -> "+c.read()+";\n");
+            w.write("default -> throw new IllegalArgumentException(\"Unknown mapped property: \"+property);};}\n");
+
 
             w.write("public String bulkParameterSql(String property,com.github.rfdetoni.bjorm.SqlDialect dialect){return switch(property){\n");
             for(Col c:cols)if(!c.updatable()||c.createdAt())w.write("case \""+c.property()+"\" -> throw new IllegalArgumentException(\"Read-only mapped property: "+c.property()+"\");\n");
