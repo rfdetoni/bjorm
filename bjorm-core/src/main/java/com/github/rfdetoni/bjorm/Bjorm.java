@@ -540,6 +540,92 @@ public final class Bjorm implements Operations {
         query.limit(1);
         return withConnection(c->scalarOne(c,query,property,type));
     }
+    @Override public RoutineResult executeRoutine(RoutineCall routine) {
+        if (Objects.requireNonNull(routine, "routine").owner() != this)
+            throw new IllegalArgumentException("RoutineCall belongs to a different Operations context");
+        requireNativeSqlPermission();
+        // Routines can modify data. Use the same transactional boundary as other writes.
+        return operationTxResult(tx -> tx.executeRoutine(routine));
+    }
+
+    private RoutineResult executeRoutine(Connection c, RoutineCall routine) throws SQLException {
+        String sql = routine.sql(dialect);
+        try (CallableStatement call = c.prepareCall(sql)) {
+            if(options.queryTimeoutSeconds()>0)call.setQueryTimeout(options.queryTimeoutSeconds());
+            call.setFetchSize(options.fetchSize());
+            if(options.maxBufferedRows()<Integer.MAX_VALUE)
+                call.setMaxRows(options.maxBufferedRows()+1);
+            List<RoutineCall.Parameter> args=routine.parameters();
+            int shift=routine.isFunction()?1:0;
+            if(routine.isFunction()) {
+                int code=routine.returnType().getVendorTypeNumber();
+                if(code==Types.REF_CURSOR)
+                    throw new UnsupportedOperationException("Use SELECT via query() for set-returning/refcursor functions");
+                call.registerOutParameter(1,code);
+            }
+            for(int i=0;i<args.size();i++){
+                RoutineCall.Parameter arg=args.get(i);
+                int position=i+1+shift;
+                if(arg.mode()!=RoutineCall.Mode.IN) {
+                    int code=arg.type().getVendorTypeNumber();
+                    if(code==Types.REF_CURSOR)
+                        throw new UnsupportedOperationException("REF_CURSOR OUT values cannot escape a closed routine call");
+                    call.registerOutParameter(position,code);
+                }
+                if(arg.mode()!=RoutineCall.Mode.OUT){
+                    if(arg.value()==null && arg.type()!=null)
+                        call.setNull(position,arg.type().getVendorTypeNumber());
+                    else dialect.bindValue(call,position,arg.value());
+                }
+            }
+            SqlObserver observer=sqlObserver;
+            long start=System.nanoTime();boolean ok=false;boolean hasRows;
+            try {hasRows=call.execute();ok=true;}
+            finally {if(observer!=null)notifyObserver(observer,SqlOperation.UPDATE,start,ok);}
+            List<List<?>> sets=new ArrayList<>();
+            List<Integer> counts=new ArrayList<>();
+            List<RowMapper<?>> mappers=routine.mappers();
+            int total=0;
+            while(true) {
+                if(hasRows) {
+                    if(mappers.isEmpty() || (mappers.size()>1 && sets.size()>=mappers.size()))
+                        throw new IllegalStateException("Routine returned an unmapped ResultSet");
+                    RowMapper<?> reader=mappers.size()==1?mappers.getFirst():mappers.get(sets.size());
+                    List<Object> rows=new ArrayList<>();
+                    try(ResultSet result=call.getResultSet()){
+                        while(result.next()) {
+                            checkRows(++total);
+                            rows.add(Objects.requireNonNull(reader.read(result),"Routine row mapper returned null"));
+                        }
+                    }
+                    sets.add(rows);
+                } else {
+                    int count=call.getUpdateCount();
+                    if(count==-1)break;
+                    counts.add(count);
+                }
+                hasRows=call.getMoreResults(Statement.CLOSE_CURRENT_RESULT);
+            }
+            Map<String,Object> outputs=new LinkedHashMap<>();
+            if(routine.isFunction()){
+                Object value=call.getObject(1);
+                if(value instanceof ResultSet)
+                    throw new UnsupportedOperationException("REF_CURSOR results need an explicit query() mapping");
+                outputs.put("return",value);
+            }
+            for(int i=0;i<args.size();i++){
+                RoutineCall.Parameter arg=args.get(i);
+                if(arg.mode()!=RoutineCall.Mode.IN){
+                    Object value=call.getObject(i+1+shift);
+                    if(value instanceof ResultSet)
+                        throw new UnsupportedOperationException("REF_CURSOR results need an explicit query() mapping");
+                    outputs.put(arg.name(),value);
+                }
+            }
+            return new RoutineResult(outputs,sets,counts);
+        }
+    }
+
     public <T> List<T> query(String sql,StatementBinder bind,RowMapper<T> mapper) {requireNativeSqlPermission();return withConnection(c->query(c,sql,bind,mapper));}
     public <T> T one(String sql,StatementBinder bind,RowMapper<T> mapper) {requireNativeSqlPermission();return withConnection(c->one(c,sql,bind,mapper));}
     public int execute(String sql,StatementBinder bind) {requireNativeSqlPermission();return withConnection(c->execute(c,sql,bind));}
@@ -1570,6 +1656,13 @@ public final class Bjorm implements Operations {
         public <T,C> Optional<C> columnOne(Select<T> query,String property,Class<C> type) {
             query.limit(1);
             return use(c->Bjorm.this.scalarOne(c,query,property,type));
+        }
+        @Override public RoutineResult executeRoutine(RoutineCall routine) {
+            Objects.requireNonNull(routine,"routine");
+            if(routine.owner()!=this && routine.owner()!=Bjorm.this)
+                throw new IllegalArgumentException("RoutineCall belongs to a different Operations context");
+            requireNativeSqlPermission();
+            return useWrite(c->Bjorm.this.executeRoutine(c,routine));
         }
         public <T> List<T> query(String sql,StatementBinder bind,RowMapper<T> mapper) {requireNativeSqlPermission();return useWrite(c->Bjorm.this.query(c,sql,bind,mapper));}
         public <T> T one(String sql,StatementBinder bind,RowMapper<T> mapper) {requireNativeSqlPermission();return useWrite(c->Bjorm.this.one(c,sql,bind,mapper));}
