@@ -6,6 +6,8 @@ import com.github.rfdetoni.bjorm.OptimisticLockException;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -93,6 +95,30 @@ class BjormBootApplicationContextIntegrationTest {
                     assertNull(a.find(BjormSpringRealDatabaseTest.Row.class,rollbackId));
                     assertEquals(committed,a.find(BjormSpringRealDatabaseTest.Row.class,id),
                         "Spring manager controls rollback of all joined operations");
+                    // Without an ID tie-breaker, offset pages with duplicate labels can
+                    // repeat or skip rows. Verify both SQL execution and deterministic order.
+                    UUID second=UUID.randomUUID(), third=UUID.randomUUID();
+                    a.insertReturning(new BjormSpringRealDatabaseTest.Row(second,"same",0));
+                    a.insertReturning(new BjormSpringRealDatabaseTest.Row(third,"same",0));
+                    BjormPages pages=new BjormPages(a,10_000,7);
+                    var byLabel=Sort.by("label");
+                    var page0=pages.slice(BjormSpringRealDatabaseTest.Row.class,PageRequest.of(0,1,byLabel));
+                    var page1=pages.slice(BjormSpringRealDatabaseTest.Row.class,PageRequest.of(1,1,byLabel));
+                    var page2=pages.slice(BjormSpringRealDatabaseTest.Row.class,PageRequest.of(2,1,byLabel));
+                    assertTrue(page0.hasNext() && page1.hasNext() && !page2.hasNext(),
+                        "slice lookahead and stable tie-breaking on the generated primary key");
+                    assertEquals(3,java.util.Set.of(page0.getContent().getFirst().id(),
+                        page1.getContent().getFirst().id(),page2.getContent().getFirst().id()).size(),
+                        "multiple equal labels must not repeat rows across pages");
+                    assertEquals(page1.getContent(),
+                        pages.slice(BjormSpringRealDatabaseTest.Row.class,
+                            PageRequest.of(1,1,byLabel)).getContent(),
+                        "same request yields the same ordered slice without writes");
+                    assertThrows(IllegalArgumentException.class,
+                        ()->pages.slice(BjormSpringRealDatabaseTest.Row.class,
+                            PageRequest.of(0,8,byLabel)),
+                        "configured maxPageSize applies before SQL");
+
                     if(pg) {
                         Bjorm b=root.forTenant(tenantB);
                         b.insertReturning(new BjormSpringRealDatabaseTest.Row(id,"tenant-b",0));
