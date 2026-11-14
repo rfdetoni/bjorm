@@ -14,6 +14,8 @@ import org.springframework.data.domain.Sort;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.HashSet;
+import java.util.Set;
 
 /** Spring Data paging types backed by BJORM JDBC queries; no Spring dependency in bjorm-core. */
 public final class BjormPages {
@@ -95,11 +97,20 @@ public final class BjormPages {
         Objects.requireNonNull(type, "type");
         Select<T> query = db.select(type);
         if (predicate != null) query.where(predicate);
+        Set<String> sorted = new HashSet<>();
+        boolean descending = false;
         for (Sort.Order order : pageable.getSort()) {
             if (order.isIgnoreCase() || order.getNullHandling() != Sort.NullHandling.NATIVE)
                 throw new IllegalArgumentException("Unsupported sort option for property: " + order.getProperty());
             SqlOrder mapped = db.mappedOrder(type, order.getProperty(), order.isDescending());
             query.orderBy(mapped);
+            sorted.add(order.getProperty());
+            descending = order.isDescending();
+        }
+        // Every offset page needs a total order. A non-unique name/createdAt sort
+        // alone can skip or duplicate rows even without concurrent writes.
+        for (String key : db.primaryKeyProperties(type)) {
+            if (!sorted.contains(key)) query.orderBy(db.mappedOrder(type, key, descending));
         }
         return query;
     }
