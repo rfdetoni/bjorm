@@ -840,7 +840,7 @@ public final class EntityProcessor extends AbstractProcessor {
             w.write("public final class "+generatedName+
                 " implements com.github.rfdetoni.bjorm.EntityPath<"+entityName+"> {\n");
             w.write("public static final "+generatedName+" "+instanceName+
-                " = new "+generatedName+"(\"a\");\n");
+                " = new "+generatedName+"(com.github.rfdetoni.bjorm.SqlAliases.root());\n");
             w.write("private final String alias;\n");
             for(Col col:cols) {
                 String pathName=col.property().replace('.','_');
