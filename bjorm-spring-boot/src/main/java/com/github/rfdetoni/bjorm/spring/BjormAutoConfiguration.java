@@ -36,7 +36,9 @@ public class BjormAutoConfiguration {
     }
     @Bean
     @ConditionalOnMissingBean(BjormPages.class)
-    public BjormPages bjormPages(Bjorm bjorm, @Value("${bjorm.pagination.max-offset:10000}") long maxOffset) {
-        return new BjormPages(bjorm,maxOffset);
+    public BjormPages bjormPages(Bjorm bjorm,
+                                 @Value("${bjorm.pagination.max-offset:10000}") long maxOffset,
+                                 @Value("${bjorm.pagination.max-page-size:500}") int maxPageSize) {
+        return new BjormPages(bjorm,maxOffset,maxPageSize);
     }
 }
