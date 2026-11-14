@@ -195,6 +195,69 @@ expressions and conflict updates by composite key), **use BJORM's existing**
 compile `@Query` repositories before adding Spring JdbcClient. Those are
 first-class BJORM APIs, not a reason to expand the DSL with every SQL feature.
 
+## Stored procedures and functions (JDBC `CallableStatement`)
+
+BJORM exposes stored routines through the same explicit `Bjorm` or `db.tx(tx -> ...)`
+context used for all JDBC operations. No Spring `JdbcClient`, reflection,
+global registry, or implicit session is required.
+
+```java
+import java.sql.JDBCType;
+
+// Function (JDBC return at position 1):
+int sum = db.function("bjorm_it_sum")
+    .in("a", 4).in("b", 7)
+    .returns(JDBCType.INTEGER)
+    .execute().get("return", Integer.class);
+
+// Procedure with IN, OUT and INOUT:
+RoutineResult result = db.call("calculate_totals")
+    .in("year", 2026)
+    .out("total", JDBCType.DECIMAL)
+    .inOut("revision", 1, JDBCType.INTEGER)
+    .execute();
+BigDecimal total = result.get("total", BigDecimal.class);
+
+// Result sets from a procedure:
+RoutineResult rows = db.call("find_reports")
+    .in("year", 2026)
+    .rows(rs -> new Report(rs.getLong(1), rs.getString(2)))
+    .execute();
+List<Report> reports = rows.rows(0, Report.class);
+
+// Same behavior on the caller's transaction/connection:
+db.tx(tx -> tx.call("close_month").in("month", 11).execute());
+```
+
+The `in/out/inOut` names are **result aliases**, not JDBC named-parameter
+binding. Parameters are bound in declaration order, so always match the
+database signature. `in(name, null, JDBCType.INTEGER)` and typed `inOut`
+support NULL inputs. `get(name, type)` returns null for a SQL NULL output
+and rejects unknown parameter names. One `.rows(mapper)` works for all
+result sets; `.rows(mapper1, mapper2)` maps result sets by index.
+Unmapped sets fail rather than silently dropping data. All JDBC resources
+are closed before returning and total rows across sets are bounded by
+`bjorm.jdbc.max-buffered-rows`. Use a regular paginated SQL query for
+large sets or PostgreSQL set-returning functions; JDBC `REF_CURSOR`
+output parameters are intentionally unsupported.
+
+The routine identifier (optionally `schema.routine`) is validated, not
+concatenated from arbitrary user input. Callbacks and SQL run with the
+same timeout, tenant context and transaction semantics as native queries.
+In tenant-required mode, routines remain **denied** until an authorized
+tenant view uses `permitReviewedTenantNativeSql()`; database roles and
+schema permissions are still mandatory. A stored procedure may modify
+rows, so routine execution invalidates the transaction's identity cache.
+
+**Dialect notes:** pgJDBC's default JDBC escape call mode converts
+`{call ...}` into a function `SELECT`. BJORM therefore emits native
+`CALL ...` for PostgreSQL procedures and JDBC `{? = call ...}` for
+functions. MySQL uses JDBC call escape syntax. PostgreSQL procedures that
+perform their own `COMMIT`/`ROLLBACK` are incompatible with BJORM's
+transaction-owned execution; do not call them through this API.
+`@Query`/native `SELECT` remain preferable for ordinary functions that
+return tabular results.
+
 ## Fixed schema mapping (compile-time, not tenant routing)
 
 A model can target a known PostgreSQL schema or MySQL database with
