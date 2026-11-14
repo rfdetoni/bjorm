@@ -51,8 +51,9 @@ public final class SqlSubqueries {
         return table;
     }
     private static String alias(String alias) {
-        if(alias==null || !alias.matches("[A-Za-z_][A-Za-z_0-9]*"))
-            throw new IllegalArgumentException("Invalid subquery alias");
-        return alias;
+        try { return SqlAliases.explicit(alias); }
+        catch(IllegalArgumentException e) {
+            throw new IllegalArgumentException("Invalid subquery alias",e);
+        }
     }
 }
