@@ -188,6 +188,27 @@ public final class AdvancedSmokeTest {
             .orderBy(Product_.name.as("p").asc()).fetch();
         check(spy.last().sql().equals("SELECT p.id, p.name, p.unit_price, p.status, p.version FROM products p INNER JOIN users u ON p.id = u.id WHERE p.name = ? ORDER BY p.name ASC"),"typed join compilation");
         check(spy.last().binds().equals(Map.of(1,"Pencil")),"typed join bind ordering");
+        // Compile-time generated W* paths complement existing Entity_ fields without
+        // changing mapper execution or introducing any entity session/proxy.
+        WProduct productPath = WProduct.product.as("p");
+        db.selectFrom(productPath)
+            .where(productPath.name.contains("50%_!"))
+            .orderBy(productPath.price.desc()).fetch();
+        check(spy.last().sql().equals(
+            "SELECT p.id, p.name, p.unit_price, p.status, p.version FROM products p WHERE p.name LIKE ? ESCAPE '!' ORDER BY p.unit_price DESC"),
+            "generated W* path produces a parameterized explicit SQL select");
+        check(spy.last().binds().equals(Map.of(1,"%50!%!_!!%")),
+            "W* contains escapes LIKE wildcards and escape characters");
+        check(productPath.id instanceof com.github.rfdetoni.bjorm.Paths.UuidPath,
+            "UUID W* path uses its compile-time type");
+        check(productPath.price instanceof com.github.rfdetoni.bjorm.Paths.NumberPath<?>,
+            "numeric W* path uses its compile-time type");
+        try {
+            WProduct.product.as("p;DROP");
+            throw new AssertionError("Unsafe generated alias accepted");
+        } catch(IllegalArgumentException expected) {
+            check(expected.getMessage().contains("alias"), "generated aliases validated");
+        }
         db.select(Product.class).as("p")
             .join(User.class,"u",Product_.id.as("p").sameAs(User_.id.as("u"))
                 .and(Product_.name.as("p").eq("ON_VALUE")))
