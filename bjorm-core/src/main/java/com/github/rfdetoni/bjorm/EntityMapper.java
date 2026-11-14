@@ -74,6 +74,10 @@ public interface EntityMapper<T> extends RowMapper<T> {
     default Object readProperty(ResultSet rs, int index, String property) throws SQLException {
         throw new IllegalArgumentException("Unknown mapped property: " + property);
     }
+    /** Compile-time getter used to construct a stable sorted cursor without reflection. */
+    default Object propertyValue(T entity, String property) {
+        throw new UnsupportedOperationException("Generated property getter is not available");
+    }
     /** Qualified positional select fields for explicit DSL joins. */
     default String qualifiedColumns(String alias) { throw new UnsupportedOperationException("Join mapper not generated"); }
     void bindInsert(PreparedStatement ps, T entity) throws SQLException;
