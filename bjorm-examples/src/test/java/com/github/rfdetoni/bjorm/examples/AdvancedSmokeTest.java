@@ -188,6 +188,48 @@ public final class AdvancedSmokeTest {
             .orderBy(Product_.name.as("p").asc()).fetch();
         check(spy.last().sql().equals("SELECT p.id, p.name, p.unit_price, p.status, p.version FROM products p INNER JOIN users u ON p.id = u.id WHERE p.name = ? ORDER BY p.name ASC"),"typed join compilation");
         check(spy.last().binds().equals(Map.of(1,"Pencil")),"typed join bind ordering");
+        // t0 is the shared root alias for generated W* and the plain Select DSL.
+        WProduct rootPath = WProduct.product;
+        db.selectFrom(rootPath).where(rootPath.name.eq("Pencil")).fetch();
+        check(spy.last().sql().equals(
+            "SELECT t0.id, t0.name, t0.unit_price, t0.status, t0.version FROM products t0 WHERE t0.name = ?"),
+            "automatic root alias matches generated typed fields");
+        db.select(Product.class).where(Product_.name.eq("Pencil")).fetch();
+        check(spy.last().sql().startsWith(
+            "SELECT t0.id, t0.name, t0.unit_price, t0.status, t0.version FROM products t0"),
+            "classic Select uses the same automatic root alias");
+        db.selectFrom(rootPath)
+            .join(WUser.user, user -> rootPath.id.sameAs(user.id))
+            .where(rootPath.name.eq("Pencil")).fetch();
+        check(spy.last().sql().contains(
+            " FROM products t0 INNER JOIN users t1 ON t0.id = t1.id WHERE t0.name = ?"),
+            "typed JOIN automatically allocates t1 and binds root predicate");
+        db.selectFrom(rootPath)
+            .join(WUser.user, user -> rootPath.id.sameAs(user.id))
+            .join(WUser.user, user -> rootPath.id.sameAs(user.id)).fetch();
+        check(spy.last().sql().contains(" INNER JOIN users t2 ON t0.id = t2.id"),
+            "multiple typed joins allocate deterministic, distinct aliases");
+        db.selectFrom(rootPath)
+            .join(User.class, "t1", rootPath.id.sameAs(User_.id.as("t1")))
+            .join(WUser.user, user -> rootPath.id.sameAs(user.id)).fetch();
+        check(spy.last().sql().contains(" INNER JOIN users t2 ON t0.id = t2.id"),
+            "auto aliases skip previously reserved explicit aliases");
+        WProduct customRoot = rootPath.as("p");
+        db.selectFrom(customRoot)
+            .join(WUser.user, user -> customRoot.id.sameAs(user.id)).fetch();
+        check(spy.last().sql().contains(" FROM products p INNER JOIN users t1 ON p.id = t1.id"),
+            "manual root alias remains supported");
+        WProduct reservedRoot = rootPath.as("t1");
+        db.selectFrom(reservedRoot)
+            .join(WUser.user, user -> reservedRoot.id.sameAs(user.id)).fetch();
+        check(spy.last().sql().contains(" FROM products t1 INNER JOIN users t2 ON t1.id = t2.id"),
+            "root aliases also reserve automatic JOIN positions");
+        try {
+            com.github.rfdetoni.bjorm.SqlAliases.at(-1);
+            throw new AssertionError("Negative alias slot accepted");
+        } catch(IllegalArgumentException expected) {
+            check(expected.getMessage().contains("non-negative"), "alias slot validation");
+        }
         // Compile-time generated W* paths complement existing Entity_ fields without
         // changing mapper execution or introducing any entity session/proxy.
         WProduct productPath = WProduct.product.as("p");
@@ -304,7 +346,7 @@ public final class AdvancedSmokeTest {
         // FindOne must return Optional, fetch a single row server-side, and bind filters.
         Optional<Product> first=db.findOne(Product.class,Product_.name.eq("Pencil"));
         check(first.isPresent() && first.get().getName().equals("Pencil"),"findOne maps matching entity");
-        check(spy.last().sql().equals("SELECT id, name, unit_price, status, version FROM products WHERE name = ? LIMIT ?"),"findOne pushes LIMIT 1 to SQL");
+        check(spy.last().sql().equals("SELECT t0.id, t0.name, t0.unit_price, t0.status, t0.version FROM products t0 WHERE name = ? LIMIT ?"),"findOne pushes LIMIT 1 to SQL");
         check(spy.last().binds().equals(Map.of(1,"Pencil",2,1)),"findOne binds filter and LIMIT 1");
         check(db.count(Product.class,Product_.name.eq("Pencil"))==3L,"count avoids entity materialization");
         check(spy.last().sql().equals("SELECT COUNT(*) FROM products WHERE name = ?"),"count uses single SQL aggregate");
@@ -339,17 +381,17 @@ public final class AdvancedSmokeTest {
         check(projected.size()==1,"findFields returns results");
         check(projected.getFirst().get("price").equals(new BigDecimal("12.50")),"findFields reads @Column renamed property");
         check(projected.getFirst().get("status")==Status.ACTIVE,"findFields generated enum reader");
-        check(spy.last().sql().equals("SELECT name, unit_price, status FROM products WHERE name = ?"),"findFields generates column-restricted SQL");
+        check(spy.last().sql().equals("SELECT t0.name, t0.unit_price, t0.status FROM products t0 WHERE name = ?"),"findFields generates column-restricted SQL");
         check(spy.last().binds().equals(Map.of(1,"Pencil")),"findFields binds filter");
         List<BigDecimal> prices=db.findColumn(Product.class,"price",BigDecimal.class,Product_.name.eq("Pencil"));
         check(prices.equals(List.of(new BigDecimal("12.50"))),"findColumn reads scalar using generated mapper");
-        check(spy.last().sql().equals("SELECT unit_price FROM products WHERE name = ?"),"findColumn selects only requested column");
+        check(spy.last().sql().equals("SELECT t0.unit_price FROM products t0 WHERE name = ?"),"findColumn selects only requested column");
         check(db.findColumn(Product.class,"version",int.class).equals(List.of(0)),
             "primitive int.class is boxed for scalarList");
         check(db.findColumnOne(Product.class,"version",int.class).orElseThrow()==0,
             "primitive int.class is boxed for scalarOne");
         check(db.findColumnOne(Product.class,"name",String.class,Product_.name.eq("Pencil")).orElseThrow().equals("Pencil"),"findColumnOne typed Optional");
-        check(spy.last().sql().equals("SELECT name FROM products WHERE name = ? LIMIT ?"),"findColumnOne limits at database");
+        check(spy.last().sql().equals("SELECT t0.name FROM products t0 WHERE name = ? LIMIT ?"),"findColumnOne limits at database");
         check(db.select(Product.class).fields("name").values(String.class).equals(List.of("Pencil")),"DSL values without Map");
         check(db.select(Product.class).fields("name").firstValue(String.class).orElseThrow().equals("Pencil"),"DSL firstValue without Map");
 
@@ -365,7 +407,7 @@ public final class AdvancedSmokeTest {
         var projectedDto=db.select(Product.class).fields("id","name")
             .fetch(ProductSummary_BjormRowMapper.INSTANCE);
         check(projectedDto.size()==1&&projectedDto.getFirst().name().equals("Pencil"),"generated record projection without Maps");
-        check(spy.last().sql().equals("SELECT id, name FROM products"),"record projection selects exactly two columns");
+        check(spy.last().sql().equals("SELECT t0.id, t0.name FROM products t0"),"record projection selects exactly two columns");
         check(db.select(Product.class).fields("id","name").first(ProductSummary_BjormRowMapper.INSTANCE).isPresent(),"first typed record projection");
         check(db.select(Product.class).where(Product_.name.eq("Pencil")).first().isPresent(),"DSL first entity");
         int beforeCache=spy.calls.size();
