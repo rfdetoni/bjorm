@@ -847,9 +847,7 @@ public final class EntityProcessor extends AbstractProcessor {
                 w.write("public final "+typedPathType(col)+" "+pathName+";\n");
             }
             w.write("private "+generatedName+"(String alias) {\n");
-            w.write("if(alias==null || !alias.matches(\"[A-Za-z_][A-Za-z_0-9]*\"))"+
-                "throw new IllegalArgumentException(\"Invalid SQL alias\");\n");
-            w.write("this.alias=alias;\n");
+            w.write("this.alias=com.github.rfdetoni.bjorm.SqlAliases.explicit(alias);\n");
             for(Col col:cols) {
                 String property=col.property().replace('.','_');
                 String pathType=typedPathType(col);
