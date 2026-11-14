@@ -118,6 +118,25 @@ class BjormBootApplicationContextIntegrationTest {
                         ()->pages.slice(BjormSpringRealDatabaseTest.Row.class,
                             PageRequest.of(0,8,byLabel)),
                         "configured maxPageSize applies before SQL");
+                    // Keyset: no COUNT/OFFSET; sorted value and ID both advance.
+                    var seek0=pages.seekSliceSorted(BjormSpringRealDatabaseTest.Row.class,
+                        "label",null,1);
+                    assertTrue(seek0.hasNext(),"first sorted cursor page has next");
+                    var cursor0=(SortedCursor)seek0.nextCursor();
+                    assertEquals(seek0.content().getFirst().label(),cursor0.sortValue());
+                    var seek1=pages.seekSliceSorted(BjormSpringRealDatabaseTest.Row.class,
+                        "label",cursor0,1);
+                    var seek2=pages.seekSliceSorted(BjormSpringRealDatabaseTest.Row.class,
+                        "label",(SortedCursor)seek1.nextCursor(),1);
+                    assertTrue(seek1.hasNext() && !seek2.hasNext(),
+                        "cursor must advance past duplicate sort values");
+                    assertEquals(3,java.util.Set.of(seek0.content().getFirst().id(),
+                        seek1.content().getFirst().id(),seek2.content().getFirst().id()).size(),
+                        "composite cursor never duplicates rows sharing the same label");
+                    assertThrows(IllegalArgumentException.class,
+                        ()->pages.seekSliceSorted(BjormSpringRealDatabaseTest.Row.class,
+                            "noSuchColumn",null,1),
+                        "keyset sort field must come from the generated mapper");
 
                     if(pg) {
                         Bjorm b=root.forTenant(tenantB);
