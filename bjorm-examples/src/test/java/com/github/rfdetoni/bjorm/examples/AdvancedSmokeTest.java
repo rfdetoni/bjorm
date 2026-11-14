@@ -497,6 +497,8 @@ public final class AdvancedSmokeTest {
             check(tx.count(Product.class,Product_.name.eq("Pencil"))==3L,"count stays in transaction");
             check(tx.exists(Product.class,Product_.name.eq("Pencil")),"exists stays in transaction");
             check(tx.findOne(Product.class,Product_.name.eq("Pencil")).isPresent(),"findOne in transaction");
+            check(WProduct.find(tx).where(WProduct.product.name.eq("Pencil")).first().isPresent(),
+                "generated W* find works with scoped transaction Operations");
             check(tx.findFields(Product.class,Product_.name.eq("Pencil"),"name").size()==1,"findFields in transaction");
         });
         check(spy.connections.get()==startConns+1,"select projections respect tx connection");
