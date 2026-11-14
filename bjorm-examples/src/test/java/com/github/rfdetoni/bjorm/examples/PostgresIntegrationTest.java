@@ -72,8 +72,8 @@ public final class PostgresIntegrationTest {
             st.execute("CREATE TABLE bjorm_it_shared_branches (id uuid PRIMARY KEY,primaryRootId uuid REFERENCES bjorm_it_shared_roots(id),backupRootId uuid REFERENCES bjorm_it_shared_roots(id))");
             st.execute("CREATE TABLE bjorm_it_shared_leaves (id uuid PRIMARY KEY,branchId uuid NOT NULL REFERENCES bjorm_it_shared_branches(id),label text)");
             st.execute("CREATE FUNCTION bjorm_it_sum(a integer,b integer) RETURNS integer LANGUAGE SQL AS 'SELECT a+b'");
-            st.execute("CREATE PROCEDURE bjorm_it_noop(IN a integer) LANGUAGE plpgsql AS $ BEGIN PERFORM a; END $");
-            st.execute("CREATE PROCEDURE bjorm_it_increment(IN a integer, INOUT b integer) LANGUAGE plpgsql AS $ BEGIN b := a+b; END $");
+            st.execute("CREATE PROCEDURE bjorm_it_noop(IN a integer) LANGUAGE plpgsql AS 'BEGIN PERFORM a; END'");
+            st.execute("CREATE PROCEDURE bjorm_it_increment(IN a integer, INOUT b integer) LANGUAGE plpgsql AS 'BEGIN b := a+b; END'");
         }
         Bjorm db=Bjorm.open(ds,ItUser_BjormMapper.INSTANCE,ItProduct_BjormMapper.INSTANCE,ItDocument_BjormMapper.INSTANCE,ItOrder_BjormMapper.INSTANCE,ItOrderInner_BjormMapper.INSTANCE,ItOrderOuter_BjormMapper.INSTANCE,ItOrderWithCustomer_BjormMapper.INSTANCE,ItOrderLine_BjormMapper.INSTANCE,ItLineWithUser_BjormMapper.INSTANCE,ItOrderWithNestedReference_BjormMapper.INSTANCE,ItOrderNote_BjormMapper.INSTANCE,AutoUuidRecord_BjormMapper.INSTANCE,AutoStringRecord_BjormMapper.INSTANCE,AutoLongRecord_BjormMapper.INSTANCE,AutoIntRecord_BjormMapper.INSTANCE,AutoUuidPojo_BjormMapper.INSTANCE,AutoParentRecord_BjormMapper.INSTANCE,AutoChildRecord_BjormMapper.INSTANCE,InheritedPatient_BjormMapper.INSTANCE,ItTypedJson_BjormMapper.INSTANCE,ItInstant_BjormMapper.INSTANCE,
             MappedColumns_BjormMapper.INSTANCE,OrdinalEvent_BjormMapper.INSTANCE,
