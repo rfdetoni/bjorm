@@ -840,21 +840,21 @@ public final class EntityProcessor extends AbstractProcessor {
             w.write("public final class "+generatedName+
                 " implements com.github.rfdetoni.bjorm.EntityPath<"+entityName+"> {\n");
             w.write("public static final "+generatedName+" "+instanceName+
-                " = new "+generatedName+"(\\"a\\");\n");
+                " = new "+generatedName+"(\"a\");\n");
             w.write("private final String alias;\n");
             for(Col col:cols) {
                 String pathName=col.property().replace('.','_');
                 w.write("public final "+typedPathType(col)+" "+pathName+";\n");
             }
             w.write("private "+generatedName+"(String alias) {\n");
-            w.write("if(alias==null || !alias.matches(\\"[A-Za-z_][A-Za-z_0-9]*\\"))"+
-                "throw new IllegalArgumentException(\\"Invalid SQL alias\\");\n");
+            w.write("if(alias==null || !alias.matches(\"[A-Za-z_][A-Za-z_0-9]*\"))"+
+                "throw new IllegalArgumentException(\"Invalid SQL alias\");\n");
             w.write("this.alias=alias;\n");
             for(Col col:cols) {
                 String property=col.property().replace('.','_');
                 String pathType=typedPathType(col);
                 String ctor=pathType.contains("<") ? pathType.substring(0,pathType.indexOf('<'))+"<>" : pathType;
-                w.write("this."+property+"=new "+ctor+"(alias+\\"."+col.column()+"\\""+
+                w.write("this."+property+"=new "+ctor+"(alias+\"."+col.column()+"\""+
                     (col.converter()==null?"":",new "+col.converter()+"()::write")+");\n");
             }
             w.write("}\n");
