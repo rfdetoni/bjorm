@@ -9,7 +9,13 @@ public final class Example {
         var user = new User(UUID.randomUUID(), "Ana", 28);
         user.insert(db); // Optional Active Record; no global singleton
         var loaded = db.find(User.class, user.id());
-        var adults = db.list(User.class, User_.age.gt(18).and(User_.name.like("A%")));
+        // Preferred query API: generated typed WUser path, explicit DB context.
+        var u = WUser.user;
+        var adults = WUser.find(db)
+            .where(u.age.gt(18).and(u.name.startsWith("A")))
+            .orderBy(u.name.asc())
+            .limit(50)
+            .fetch();
         db.tx(tx -> {
             tx.update(new User(loaded.id(), "Ana Maria", 29));
             tx.insert(new User(UUID.randomUUID(), "Bruno", 30));
