@@ -475,6 +475,10 @@ public final class Bjorm implements Operations {
         return new SqlPredicate(m.columnFor(m.idProperty())+(descending?" < ?":" > ?"),
             java.util.Collections.singletonList(id));
     }
+    /** Generated primary-key property names, including all components of a composite key. */
+    public <T> List<String> primaryKeyProperties(Class<T> type) {
+        return List.copyOf(mapper(type).idProperties());
+    }
     public <T> SqlOrder primaryKeyOrder(Class<T> type, boolean descending) {
         EntityMapper<T> m=mapper(type);
         if(m.compositeId())throw new UnsupportedOperationException("Order composite keys explicitly by individual mapped columns");
