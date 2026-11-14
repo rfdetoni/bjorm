@@ -1,7 +1,7 @@
 package com.github.rfdetoni.bjorm;
 import java.util.*;
 /** Generated type-safe SQL field; column identifiers are validated, values always bound. */
-public final class Field<T> {
+public class Field<T> {
     private final String column;
     private final java.util.function.Function<? super T, ?> converter;
     public Field(String column) { this(column, null); }
@@ -12,11 +12,13 @@ public final class Field<T> {
         this.converter = converter;
     }
     public String column() { return column; }
-    public Field<T> as(String alias) {
-        if(!alias.matches("[A-Za-z_][A-Za-z_0-9]*") || column.contains("."))
+    protected final java.util.function.Function<? super T, ?> converter() { return converter; }
+    protected final String qualified(String alias) {
+        if(alias == null || !alias.matches("[A-Za-z_][A-Za-z_0-9]*") || column.contains("."))
             throw new IllegalArgumentException("Invalid alias or already-qualified column");
-        return new Field<>(alias+"."+column, converter);
+        return alias + "." + column;
     }
+    public Field<T> as(String alias) { return new Field<>(qualified(alias), converter); }
     /** Typed join equality comparing two column paths, not a bound value. */
     public SqlPredicate sameAs(Field<T> other) {
         return new SqlPredicate(column+" = "+Objects.requireNonNull(other).column, List.of());
