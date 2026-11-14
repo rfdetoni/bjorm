@@ -54,6 +54,14 @@ class BjormSpringRealDatabaseTest {
         @Override public String qualifiedColumns(String alias) {
             return alias+".id, "+alias+".label, "+alias+".version";
         }
+        @Override public Object propertyValue(Row entity,String property) {
+            return switch(property) {
+                case "id" -> entity.id();
+                case "label" -> entity.label();
+                case "version" -> entity.version();
+                default -> throw new IllegalArgumentException("Unknown property");
+            };
+        }
         @Override public void bindInsert(PreparedStatement ps,Row value)throws SQLException {
             bindInsert(ps,value,SqlDialects.POSTGRESQL);
         }
