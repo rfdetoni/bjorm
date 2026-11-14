@@ -778,7 +778,7 @@ public final class Bjorm implements Operations {
                 }
             } else {
                 // Descendants must be removed before the child: do not depend on loaded collections.
-                try(PreparedStatement ps=prepareRead(c,"SELECT "+childMapper.qualifiedColumns("c")+" FROM "+childMapper.table()+" c WHERE c."+fk+" = ?")) {
+                try(PreparedStatement ps=prepareRead(c,"SELECT "+childMapper.qualifiedColumns(SqlAliases.root())+" FROM "+childMapper.table()+" "+SqlAliases.root()+" WHERE "+SqlAliases.root()+"."+fk+" = ?")) {
                     childMapper.bindId(ps,1,id,dialect);
                     try(ResultSet rs=executeQueryObserved(ps)) {
                         while(rs.next())removeGraph(c,childMapper.read(rs),visited);
