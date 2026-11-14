@@ -57,6 +57,14 @@ public interface Operations {
     <T,P> Optional<P> projectOne(Select<T> query,String[] properties,RowMapper<P> projection);
     <T,C> List<C> columnValues(Select<T> query,String property,Class<C> type);
     <T,C> Optional<C> columnOne(Select<T> query,String property,Class<C> type);
+    /** Explicit-context stored procedure: arguments are bound by positional order. */
+    default RoutineCall call(String routine) { return new RoutineCall(this, routine, false); }
+    /** JDBC stored function: call .returns(JDBCType...) before execute(). */
+    default RoutineCall function(String routine) { return new RoutineCall(this, routine, true); }
+    /** Implemented by Bjorm and its transaction context; no raw JDBC handle escapes. */
+    default RoutineResult executeRoutine(RoutineCall call) {
+        throw new UnsupportedOperationException("Callable routines are not supported by this Operations implementation");
+    }
     <T> List<T> query(String sql, StatementBinder binder, RowMapper<T> mapper);
     <T> T one(String sql, StatementBinder binder, RowMapper<T> mapper);
     int execute(String sql, StatementBinder binder);
