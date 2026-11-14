@@ -389,7 +389,7 @@ public final class Bjorm implements Operations {
         return withConnection(c -> exists(c,type,where));
     }
     private <T> long count(Connection c, Class<T> type, SqlPredicate where) throws SQLException {
-        String sql = "SELECT COUNT(*) FROM " + mapper(type).table() +
+        String sql = "SELECT COUNT(*) FROM " + mapper(type).table() + " " + SqlAliases.root() +
             (where == null ? "" : " WHERE " + where.sql());
         try (PreparedStatement ps = prepareRead(c,sql)) {
             bindPredicate(ps,where);
@@ -400,7 +400,7 @@ public final class Bjorm implements Operations {
         }
     }
     private <T> boolean exists(Connection c, Class<T> type, SqlPredicate where) throws SQLException {
-        String sql = "SELECT 1 FROM " + mapper(type).table() +
+        String sql = "SELECT 1 FROM " + mapper(type).table() + " " + SqlAliases.root() +
             (where == null ? "" : " WHERE " + where.sql()) + " LIMIT 1";
         try (PreparedStatement ps = prepareRead(c,sql)) {
             bindPredicate(ps,where);
@@ -431,7 +431,7 @@ public final class Bjorm implements Operations {
         if(mapper.compositeId() || !mapper.children().isEmpty() || !mapper.parents().isEmpty())
             throw new UnsupportedOperationException(
                 "lockRows requires a flat mapped entity with a single primary key");
-        String sql=mapper.selectAllSql()+" WHERE "+where.sql()+
+        String sql="SELECT "+mapper.qualifiedColumns(SqlAliases.root())+" FROM "+mapper.table()+" "+SqlAliases.root()+" WHERE "+where.sql()+
             " ORDER BY "+mapper.columnFor(mapper.idProperty())+" LIMIT ? "+mode.sql();
         try(PreparedStatement ps=prepareRead(c,sql)) {
             bindPredicate(ps,where);
@@ -451,7 +451,7 @@ public final class Bjorm implements Operations {
         if (c.getAutoCommit())
             throw new IllegalStateException("BJORM row locking requires an active transaction");
         EntityMapper<T> m=mapper(type);
-        String sql = "SELECT " + m.columnFor(m.idProperty()) + " FROM " + m.table() +
+        String sql = "SELECT " + SqlAliases.root() + "." + m.columnFor(m.idProperty()) + " FROM " + m.table() + " " + SqlAliases.root() +
             " WHERE " + where.sql() + " LIMIT 1 " + mode.sql();
         try (PreparedStatement ps = prepareRead(c,sql)) {
             bindPredicate(ps,where);
@@ -820,7 +820,7 @@ public final class Bjorm implements Operations {
             assignments.add(column+" = "+m.bulkParameterSql(property,dialect));
             values.add(m.bulkParameterValue(property,entry.getValue()));
         }
-        String sql="UPDATE "+m.table()+" SET "+assignments+" WHERE "+predicate.sql();
+        String sql="UPDATE "+m.table()+" "+SqlAliases.root()+" SET "+assignments+" WHERE "+predicate.sql();
         try(PreparedStatement ps=prepare(c,sql)) {
             int i=1;
             for(Object value:values)dialect.bindValue(ps,i++,value);
@@ -831,7 +831,7 @@ public final class Bjorm implements Operations {
     private <T> int deleteBy(Connection c,Class<T> type,SqlPredicate predicate) throws SQLException {
         requireBulkSafe(type,predicate);
         EntityMapper<T> m=mapper(type);
-        try(PreparedStatement ps=prepare(c,"DELETE FROM "+m.table()+" WHERE "+predicate.sql())) {
+        try(PreparedStatement ps=prepare(c,"DELETE FROM "+m.table()+" "+SqlAliases.root()+" WHERE "+predicate.sql())) {
             bindPredicate(ps,predicate);
             return executeUpdateObserved(ps);
         }
