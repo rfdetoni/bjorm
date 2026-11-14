@@ -57,10 +57,13 @@ class BjormBootApplicationContextIntegrationTest {
                     "bjorm.tenant.required=true",
                     "bjorm.dialect="+(pg?"postgresql":"mysql"),
                     "bjorm.jdbc.fetch-size=16",
-                    "bjorm.jdbc.batch-size=8")
+                    "bjorm.jdbc.batch-size=8",
+                    "bjorm.pagination.max-page-size=7")
                 .run(context->{
                     assertNull(context.getStartupFailure(),"Boot auto-configuration failed to start");
                     assertNotNull(context.getBean(BjormPages.class),"Boot provided paging bean");
+                    assertEquals(7, context.getBean(BjormPages.class).maxPageSize(),
+                        "Boot must honor its max-page-size resource limit");
                     Bjorm root=context.getBean(Bjorm.class);
                     assertThrows(IllegalStateException.class,
                         ()->root.find(BjormSpringRealDatabaseTest.Row.class,UUID.randomUUID()),
