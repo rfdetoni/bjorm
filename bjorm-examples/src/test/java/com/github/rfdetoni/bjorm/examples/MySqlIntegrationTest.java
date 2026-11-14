@@ -57,6 +57,9 @@ public final class MySqlIntegrationTest {
             st.execute("CREATE TABLE bjorm_it_shared_roots(id CHAR(36) PRIMARY KEY,title VARCHAR(255))");
             st.execute("CREATE TABLE bjorm_it_shared_branches(id CHAR(36) PRIMARY KEY,primaryRootId CHAR(36),backupRootId CHAR(36),FOREIGN KEY(primaryRootId) REFERENCES bjorm_it_shared_roots(id),FOREIGN KEY(backupRootId) REFERENCES bjorm_it_shared_roots(id))");
             st.execute("CREATE TABLE bjorm_it_shared_leaves(id CHAR(36) PRIMARY KEY,branchId CHAR(36) NOT NULL,label VARCHAR(255),FOREIGN KEY(branchId) REFERENCES bjorm_it_shared_branches(id))");
+            st.execute("CREATE FUNCTION bjorm_it_sum(a INT,b INT) RETURNS INT DETERMINISTIC RETURN a+b");
+            st.execute("CREATE PROCEDURE bjorm_it_change(IN a INT, OUT b INT, INOUT c INT) BEGIN SET b = a*2; SET c = c+a; END");
+            st.execute("CREATE PROCEDURE bjorm_it_two_results(IN a INT) BEGIN SELECT a AS amount; SELECT a+1 AS amount; END");
         }
         try{
             Bjorm db=Bjorm.open(source,BjormOptions.defaults(),SqlDialects.MYSQL,
@@ -73,6 +76,23 @@ public final class MySqlIntegrationTest {
                 ItEmbeddedRecord_BjormMapper.INSTANCE,ItEmbeddedPojo_BjormMapper.INSTANCE,
                 ItCompositeRecord_BjormMapper.INSTANCE,ItCompositePojo_BjormMapper.INSTANCE,ItConvertedRecord_BjormMapper.INSTANCE,ItCompositeReference_BjormMapper.INSTANCE,
                 ItSharedRoot_BjormMapper.INSTANCE,ItSharedBranch_BjormMapper.INSTANCE,ItSharedLeaf_BjormMapper.INSTANCE);
+            RoutineResult sum=db.function("bjorm_it_sum")
+                .in("a",3).in("b",6).returns(JDBCType.INTEGER).execute();
+            check(sum.get("return",Integer.class)==9,"MySQL JDBC callable function return");
+            RoutineResult changed=db.call("bjorm_it_change")
+                .in("a",5).out("twice",JDBCType.INTEGER)
+                .inOut("total",7,JDBCType.INTEGER).execute();
+            check(changed.get("twice",Integer.class)==10 &&
+                changed.get("total",Integer.class)==12,"MySQL callable OUT and INOUT");
+            RoutineResult two=db.call("bjorm_it_two_results").in("a",11)
+                .rows(rs->rs.getInt(1)).execute();
+            check(two.resultSetCount()==2 &&
+                two.rows(0,Integer.class).equals(List.of(11)) &&
+                two.rows(1,Integer.class).equals(List.of(12)),
+                "MySQL callable multiple result sets");
+            db.tx(tx -> check(tx.function("bjorm_it_sum").in("a",1).in("b",2)
+                .returns(JDBCType.INTEGER).execute().get("return",Integer.class)==3,
+                "MySQL callable inside BJORM transaction"));
             ItUser invoiceCustomer=db.insertReturning(new ItUser(null,"MySQL Invoice Customer",27));
             ItInvoice invoice=db.insertReturning(new ItInvoice(null,invoiceCustomer.id(),"MYSQL-INV",null));
             java.util.concurrent.atomic.AtomicInteger queryCount=new java.util.concurrent.atomic.AtomicInteger();
@@ -616,6 +636,9 @@ public final class MySqlIntegrationTest {
             System.out.println("PASS: MySQL 8.4 CRUD, native upsert, JSON, UUID v7, AUTO_INCREMENT and eager JOIN graph");
         }finally {
             try(Connection c=source.getConnection();Statement st=c.createStatement()){
+                st.execute("DROP PROCEDURE IF EXISTS bjorm_it_two_results");
+                st.execute("DROP PROCEDURE IF EXISTS bjorm_it_change");
+                st.execute("DROP FUNCTION IF EXISTS bjorm_it_sum");
                 for(String name:List.of("bjorm_it_shared_leaves","bjorm_it_shared_branches","bjorm_it_shared_roots","bjorm_it_converted","bjorm_it_composite_refs","bjorm_it_composite","bjorm_it_composite_pojo","bjorm_it_embedded_records","bjorm_it_embedded_pojos","bjorm_it_invoice_links","bjorm_it_invoices","bjorm_it_order_notes","bjorm_it_order_lines_to_one","bjorm_it_order_lines","bjorm_it_orders",
                     "bjorm_it_columns","bjorm_it_ordinal","bjorm_it_audit","bjorm_it_audit_pojo",
                     "bjorm_it_explicit_assigned","bjorm_it_explicit_identity","bjorm_it_explicit_uuid",
