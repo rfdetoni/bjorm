@@ -71,6 +71,9 @@ public final class PostgresIntegrationTest {
             st.execute("CREATE TABLE bjorm_it_shared_roots (id uuid PRIMARY KEY,title text)");
             st.execute("CREATE TABLE bjorm_it_shared_branches (id uuid PRIMARY KEY,primaryRootId uuid REFERENCES bjorm_it_shared_roots(id),backupRootId uuid REFERENCES bjorm_it_shared_roots(id))");
             st.execute("CREATE TABLE bjorm_it_shared_leaves (id uuid PRIMARY KEY,branchId uuid NOT NULL REFERENCES bjorm_it_shared_branches(id),label text)");
+            st.execute("CREATE FUNCTION bjorm_it_sum(a integer,b integer) RETURNS integer LANGUAGE SQL AS 'SELECT a+b'");
+            st.execute("CREATE PROCEDURE bjorm_it_noop(IN a integer) LANGUAGE plpgsql AS $ BEGIN PERFORM a; END $");
+            st.execute("CREATE PROCEDURE bjorm_it_increment(IN a integer, INOUT b integer) LANGUAGE plpgsql AS $ BEGIN b := a+b; END $");
         }
         Bjorm db=Bjorm.open(ds,ItUser_BjormMapper.INSTANCE,ItProduct_BjormMapper.INSTANCE,ItDocument_BjormMapper.INSTANCE,ItOrder_BjormMapper.INSTANCE,ItOrderInner_BjormMapper.INSTANCE,ItOrderOuter_BjormMapper.INSTANCE,ItOrderWithCustomer_BjormMapper.INSTANCE,ItOrderLine_BjormMapper.INSTANCE,ItLineWithUser_BjormMapper.INSTANCE,ItOrderWithNestedReference_BjormMapper.INSTANCE,ItOrderNote_BjormMapper.INSTANCE,AutoUuidRecord_BjormMapper.INSTANCE,AutoStringRecord_BjormMapper.INSTANCE,AutoLongRecord_BjormMapper.INSTANCE,AutoIntRecord_BjormMapper.INSTANCE,AutoUuidPojo_BjormMapper.INSTANCE,AutoParentRecord_BjormMapper.INSTANCE,AutoChildRecord_BjormMapper.INSTANCE,InheritedPatient_BjormMapper.INSTANCE,ItTypedJson_BjormMapper.INSTANCE,ItInstant_BjormMapper.INSTANCE,
             MappedColumns_BjormMapper.INSTANCE,OrdinalEvent_BjormMapper.INSTANCE,
@@ -84,6 +87,33 @@ public final class PostgresIntegrationTest {
             ItSharedRoot_BjormMapper.INSTANCE,ItSharedBranch_BjormMapper.INSTANCE,ItSharedLeaf_BjormMapper.INSTANCE);
         UUID id=UUID.randomUUID();ItUser alice=new ItUser(id,"BJORM",34);
         try {
+            RoutineResult sum=db.function("bjorm_it_sum")
+                .in("a",4).in("b",7).returns(JDBCType.INTEGER).execute();
+            check(sum.get("return",Integer.class)==11,"PostgreSQL JDBC callable function scalar return");
+            check(db.call("bjorm_it_noop").in("a",3).execute().resultSetCount()==0,
+                "PostgreSQL callable procedure without OUT");
+            RoutineResult increment=db.call("bjorm_it_increment").in("a",5)
+                .inOut("total",8,JDBCType.INTEGER).execute();
+            check(increment.get("total",Integer.class)==13,"PostgreSQL callable INOUT");
+            db.tx(tx -> {
+                check(tx.function("bjorm_it_sum").in("a",2).in("b",3)
+                    .returns(JDBCType.INTEGER).execute().get("return",Integer.class)==5,
+                    "PostgreSQL callable function within BJORM transaction");
+            });
+            try {
+                db.call("bjorm_it_noop;DROP TABLE bjorm_it_users").execute();
+                throw new AssertionError("Unsafe routine name accepted");
+            } catch (IllegalArgumentException expected) {}
+            try {
+                db.call("bjorm_it_noop").in("a",1).in("a",2);
+                throw new AssertionError("Duplicate callable alias accepted");
+            } catch (IllegalArgumentException expected) {}
+            try {
+                Bjorm.tenantRequired(ds,BjormOptions.defaults(),SqlDialects.POSTGRESQL,
+                    ItUser_BjormMapper.INSTANCE).forTenant("bjorm_tenant_a")
+                    .call("bjorm_it_noop").in("a",1).execute();
+                throw new AssertionError("Tenant without reviewed native SQL called a routine");
+            } catch (SecurityException expected) {}
             StaticSchemaRecord fixed=db.insertReturning(new StaticSchemaRecord(null,"initial-static"));
             check(db.find(StaticSchemaRecord.class,fixed.id()).label().equals("initial-static"),
                 "PostgreSQL fixed-schema INSERT/SELECT");
@@ -789,6 +819,9 @@ public final class PostgresIntegrationTest {
                 st.execute("DROP TABLE IF EXISTS bjorm_it_order_lines");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_order_notes");
                 st.execute("DROP TABLE IF EXISTS bjorm_it_orders");
+                st.execute("DROP PROCEDURE IF EXISTS bjorm_it_increment");
+                st.execute("DROP PROCEDURE IF EXISTS bjorm_it_noop");
+                st.execute("DROP FUNCTION IF EXISTS bjorm_it_sum");
                 st.execute("DROP SCHEMA IF EXISTS bjorm_test CASCADE");
                 st.execute("DROP SCHEMA IF EXISTS bjorm_tenant_a CASCADE");
                 st.execute("DROP SCHEMA IF EXISTS bjorm_tenant_b CASCADE");
