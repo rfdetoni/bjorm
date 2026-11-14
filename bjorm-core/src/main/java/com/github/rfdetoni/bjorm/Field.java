@@ -14,9 +14,10 @@ public class Field<T> {
     public String column() { return column; }
     protected final java.util.function.Function<? super T, ?> converter() { return converter; }
     protected final String qualified(String alias) {
-        if(alias == null || !alias.matches("[A-Za-z_][A-Za-z_0-9]*") || column.contains("."))
-            throw new IllegalArgumentException("Invalid alias or already-qualified column");
-        return alias + "." + column;
+        String validated = SqlAliases.explicit(alias);
+        if(column.contains("."))
+            throw new IllegalArgumentException("Field is already qualified: " + column);
+        return validated + "." + column;
     }
     public Field<T> as(String alias) { return new Field<>(qualified(alias), converter); }
     /** Typed join equality comparing two column paths, not a bound value. */
