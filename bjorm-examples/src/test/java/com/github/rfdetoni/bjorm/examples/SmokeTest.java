@@ -68,7 +68,7 @@ public final class SmokeTest {
         expect(statements.getLast().params().equals(Map.of(1,u.id(),2,u.name(),3,u.age())),"bind order");
         db.list(User.class,User_.name.eq("test' OR 1=1 --").and(User_.age.gt(18)));
         var listed = statements.getLast();
-        expect(listed.sql().equals("SELECT id, name, age FROM users WHERE (name = ? AND age > ?)"),"DSL SQL shape");
+        expect(listed.sql().equals("SELECT t0.id, t0.name, t0.age FROM users t0 WHERE (name = ? AND age > ?)"),"DSL SQL shape");
         expect(listed.params().get(1).equals("test' OR 1=1 --"),"SQL value parameterization");
         int before = connections.get();
         db.tx(tx->{tx.update(u);tx.delete(u);});

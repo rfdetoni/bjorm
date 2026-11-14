@@ -313,6 +313,7 @@ public final class EntityProcessor extends AbstractProcessor {
         generateMapper(entity,qualifiedTable,schema,cols,id,keyColumns,ver,record,relations,toOnes,embeddeds);
         mapperServices.add(packageOf(entity)+"."+entity.getSimpleName()+"_BjormMapper");
         generatePaths(entity,cols);
+        generateTypedPaths(entity,cols);
     }
     private Relation relation(Element field,String getter) {
         Children ann=field.getAnnotation(Children.class);
@@ -824,6 +825,65 @@ public final class EntityProcessor extends AbstractProcessor {
             for(Col c:cols)w.write("public static final com.github.rfdetoni.bjorm.Field<"+boxed(c.type())+"> "+c.property().replace('.','_')+" = new com.github.rfdetoni.bjorm.Field<>(\""+c.column()+"\""+(c.converter()==null?"":", new "+c.converter()+"()::write")+");\n");
             w.write("}\n");
         }
+    }
+    /**
+     * W* path model uses exactly the compile-time validated columns of the
+     * existing mapper. There is no runtime field scanning or SQL parsing.
+     */
+    private void generateTypedPaths(TypeElement entity,List<Col> cols) throws IOException {
+        String entityName=entity.getSimpleName().toString();
+        String generatedName="W"+entityName;
+        String instanceName=Character.toLowerCase(entityName.charAt(0))+entityName.substring(1);
+        String pkg=packageOf(entity);
+        try(Writer w=file(pkg,generatedName,entity)) {
+            w.write("package "+pkg+";\n");
+            w.write("public final class "+generatedName+
+                " implements com.github.rfdetoni.bjorm.EntityPath<"+entityName+"> {\n");
+            w.write("public static final "+generatedName+" "+instanceName+
+                " = new "+generatedName+"(com.github.rfdetoni.bjorm.SqlAliases.root());\n");
+            w.write("private final String alias;\n");
+            for(Col col:cols) {
+                String pathName=col.property().replace('.','_');
+                w.write("public final "+typedPathType(col)+" "+pathName+";\n");
+            }
+            w.write("private "+generatedName+"(String alias) {\n");
+            w.write("this.alias=com.github.rfdetoni.bjorm.SqlAliases.explicit(alias);\n");
+            for(Col col:cols) {
+                String property=col.property().replace('.','_');
+                String pathType=typedPathType(col);
+                String ctor=pathType.contains("<") ? pathType.substring(0,pathType.indexOf('<'))+"<>" : pathType;
+                w.write("this."+property+"=new "+ctor+"(alias+\"."+col.column()+"\""+
+                    (col.converter()==null?"":",new "+col.converter()+"()::write")+");\n");
+            }
+            w.write("}\n");
+            w.write("public "+generatedName+" as(String alias){return new "+
+                generatedName+"(alias); }\n");
+            w.write("public String alias(){return alias;}\n");
+            w.write("public Class<"+entityName+"> type(){return "+entityName+".class;}\n");
+            w.write("}\n");
+        }
+    }
+    private String typedPathType(Col col) {
+        String type=boxed(col.type());
+        String base="com.github.rfdetoni.bjorm.";
+        if(col.converter()!=null || col.enumOrdinal() || col.json())
+            return base+"Field<"+type+">";
+        return switch(type) {
+            case "java.lang.String" -> base+"Paths.StringPath";
+            case "java.util.UUID" -> base+"Paths.UuidPath";
+            case "java.lang.Boolean" -> base+"Paths.BooleanPath";
+            case "java.lang.Byte","java.lang.Short","java.lang.Integer","java.lang.Long",
+                 "java.lang.Float","java.lang.Double","java.math.BigInteger","java.math.BigDecimal" ->
+                base+"Paths.NumberPath<"+type+">";
+            default -> {
+                TypeElement declared=elements.getTypeElement(type);
+                if(declared!=null && declared.getKind()==ElementKind.ENUM)
+                    yield base+"Paths.EnumPath<"+type+">";
+                if(type.startsWith("java.time."))
+                    yield base+"Paths.TemporalPath<"+type+">";
+                yield base+"Field<"+type+">";
+            }
+        };
     }
     private void projection(TypeElement type) throws IOException {
         if(!generated.add(type.getQualifiedName()+"#projection"))return;

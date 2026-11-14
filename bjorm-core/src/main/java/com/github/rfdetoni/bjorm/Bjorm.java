@@ -778,7 +778,7 @@ public final class Bjorm implements Operations {
                 }
             } else {
                 // Descendants must be removed before the child: do not depend on loaded collections.
-                try(PreparedStatement ps=prepareRead(c,"SELECT "+childMapper.qualifiedColumns("c")+" FROM "+childMapper.table()+" c WHERE c."+fk+" = ?")) {
+                try(PreparedStatement ps=prepareRead(c,"SELECT "+childMapper.qualifiedColumns(SqlAliases.root())+" FROM "+childMapper.table()+" "+SqlAliases.root()+" WHERE "+SqlAliases.root()+"."+fk+" = ?")) {
                     childMapper.bindId(ps,1,id,dialect);
                     try(ResultSet rs=executeQueryObserved(ps)) {
                         while(rs.next())removeGraph(c,childMapper.read(rs),visited);
@@ -929,7 +929,7 @@ public final class Bjorm implements Operations {
                     "Nested @ManyToOne requires LEFT join to preserve nullable ancestors");
             int slotIndex=hops.size();
             ParentHop hop=new ParentHop(parentSlot,(ParentRelation<Object>)relationship,
-                target,nextOffset[0],"p"+slotIndex);
+                target,nextOffset[0],SqlAliases.at(slotIndex+1));
             hops.add(hop);
             nextOffset[0]+=target.columnCount();
             collectParentHops(target,slotIndex,ancestors,hops,nextOffset);
@@ -963,15 +963,15 @@ public final class Bjorm implements Operations {
 
         String rootSql=query.sql(root,type->mapper(type),dialect);
         StringBuilder sql=new StringBuilder("WITH roots AS (").append(rootSql)
-            .append(") SELECT ").append(root.qualifiedColumns("r"));
+            .append(") SELECT ").append(root.qualifiedColumns(SqlAliases.root()));
         for(ParentHop hop:hops)
             sql.append(", ").append(hop.target().qualifiedColumns(hop.alias()));
-        sql.append(" FROM roots r");
+        sql.append(" FROM roots ").append(SqlAliases.root());
         for(ParentHop hop:hops) {
             EntityMapper<?> source=hop.parentSlot()<0
                 ?root:hops.get(hop.parentSlot()).target();
             String sourceAlias=hop.parentSlot()<0
-                ?"r":hops.get(hop.parentSlot()).alias();
+                ?SqlAliases.root():hops.get(hop.parentSlot()).alias();
             sql.append(' ').append(dialect.join(hop.relation().joinType())).append(' ')
                .append(hop.target().table()).append(' ').append(hop.alias())
                .append(" ON ").append(parentJoin(source,sourceAlias,hop.target(),
@@ -986,7 +986,7 @@ public final class Bjorm implements Operations {
             String column=separator<0?field:field.substring(separator+1);
             root.columnIndex(column);
             sql.append(firstOrder?" ORDER BY ":", ")
-               .append("r.").append(column).append(order.descending()?" DESC":" ASC");
+               .append(SqlAliases.root()).append(".").append(column).append(order.descending()?" DESC":" ASC");
             firstOrder=false;
         }
         try(PreparedStatement ps=prepareRead(c,sql.toString())) {
@@ -1055,7 +1055,7 @@ public final class Bjorm implements Operations {
         String rootSql=query.sql(root,type->mapper(type),dialect);
         // Multiple matching explicit joins cannot multiply roots before eager expansion.
         // LIMIT/OFFSET on such joins remains rejected by Select.sql().
-        if(query.hasJoins())rootSql="SELECT DISTINCT * FROM ("+rootSql+") bjorm_unique_roots";
+        if(query.hasJoins())rootSql="SELECT DISTINCT * FROM ("+rootSql+") "+SqlAliases.root();
         int rootColumns=root.columnCount();
         // Append root @ManyToOne columns AFTER all child slots so existing
         // discriminator and child slot offsets are preserved across UNION paths.
@@ -1084,7 +1084,7 @@ public final class Bjorm implements Operations {
                     throw new UnsupportedOperationException(
                         "Nested child @ManyToOne target must be a flat entity");
                 nestedParents.add(new GraphParentSlot(childIndex,relation,target,parentOffset,
-                    "cp"+nestedParents.size()));
+                    SqlAliases.at(slots.size()+parents.size()+nestedParents.size()+1)));
                 parentOffset+=target.columnCount();
             }
         }
@@ -1092,25 +1092,25 @@ public final class Bjorm implements Operations {
         for(int branch=0;branch<paths.size();branch++) {
             if(branch>0)sql.append(" UNION ALL ");
             List<Integer> path=paths.get(branch);
-            sql.append("SELECT ").append(root.qualifiedColumns("r")).append(", ").append(branch);
+            sql.append("SELECT ").append(root.qualifiedColumns(SqlAliases.root())).append(", ").append(branch);
             for(int i=0;i<slots.size();i++) {
                 GraphSlot slot=slots.get(i);
                 if(path.contains(i)) sql.append(", ").append(slot.mapper.qualifiedColumns(slot.alias));
                 else for(int col=0;col<slot.mapper.columnCount();col++)sql.append(", NULL");
             }
             for(int i=0;i<parentTargets.size();i++)
-                sql.append(", ").append(parentTargets.get(i).qualifiedColumns("p"+i));
+                sql.append(", ").append(parentTargets.get(i).qualifiedColumns(SqlAliases.at(slots.size()+i+1)));
             for(GraphParentSlot nested:nestedParents) {
                 if(path.contains(nested.childSlot()))
                     sql.append(", ").append(nested.target().qualifiedColumns(nested.alias()));
                 else for(int col=0;col<nested.target().columnCount();col++)
                     sql.append(", NULL");
             }
-            sql.append(" FROM roots r");
+            sql.append(" FROM roots ").append(SqlAliases.root());
             for(int i:path) {
                 GraphSlot slot=slots.get(i);
                 EntityMapper<Object> parent=slot.parent==0?(EntityMapper<Object>)root:slots.get(slot.parent-1).mapper;
-                String parentAlias=slot.parent==0?"r":slots.get(slot.parent-1).alias;
+                String parentAlias=slot.parent==0?SqlAliases.root():slots.get(slot.parent-1).alias;
                 sql.append(' ').append(dialect.join(slot.relation.joinType())).append(' ').append(slot.mapper.table()).append(' ').append(slot.alias)
                    .append(" ON ").append(slot.alias).append('.').append(slot.mapper.columnFor(slot.relation.mappedBy()))
                    .append(" = ").append(parentAlias).append('.').append(parent.columnFor(parent.idProperty()));
@@ -1119,8 +1119,8 @@ public final class Bjorm implements Operations {
                 ParentRelation<T> relation=parents.get(i);
                 EntityMapper<Object> target=parentTargets.get(i);
                 sql.append(' ').append(dialect.join(relation.joinType())).append(' ')
-                   .append(target.table()).append(" p").append(i)
-                   .append(" ON ").append(parentJoin(root,"r",target,"p"+i,relation));
+                   .append(target.table()).append(" ").append(SqlAliases.at(slots.size()+i+1))
+                   .append(" ON ").append(parentJoin(root,SqlAliases.root(),target,SqlAliases.at(slots.size()+i+1),relation));
             }
             for(GraphParentSlot nested:nestedParents) {
                 if(!path.contains(nested.childSlot()))continue;
@@ -1222,7 +1222,7 @@ public final class Bjorm implements Operations {
             EntityMapper<Object> child=(EntityMapper<Object>)mapper(relation.childType());
             int index=slots.size();
             int offset=2; // root count is added after constructing all slots below
-            slots.add(new GraphSlot(child,relation,parentSlot,offset,"c"+index));
+            slots.add(new GraphSlot(child,relation,parentSlot,offset,SqlAliases.at(index+1)));
             ArrayList<Integer> next=new ArrayList<>(path);next.add(index);
             collectGraphPaths(child,index+1,next,ancestors,slots,paths);
         }

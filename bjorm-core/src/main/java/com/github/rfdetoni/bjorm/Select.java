@@ -33,7 +33,7 @@ public final class Select<T> {
     private Integer limit;
     private Long offset;
     Select(Operations db,Class<T> type){this.db=Objects.requireNonNull(db);this.type=Objects.requireNonNull(type);}
-    public Select<T> as(String value){this.alias=identifier(value);return this;}
+    public Select<T> as(String value){this.alias=SqlAliases.explicit(value);return this;}
     public JoinOnStep<T> join(Class<?> type,String alias) {return new JoinOnStep<>(this,type,alias,JoinType.INNER);}
     public JoinOnStep<T> innerJoin(Class<?> type,String alias) {return join(type,alias);}
     public JoinOnStep<T> leftJoin(Class<?> type,String alias) {return new JoinOnStep<>(this,type,alias,JoinType.LEFT);}
@@ -49,11 +49,48 @@ public final class Select<T> {
     public Select<T> outerJoin(Class<?> type,String alias,SqlPredicate on) {return fullJoin(type,alias).on(on);}
     public Select<T> fullOuterJoin(Class<?> type,String alias,SqlPredicate on) {return fullJoin(type,alias).on(on);}
     private Select<T> addJoin(Class<?> type,String alias,SqlPredicate on,JoinType joinType){
-        joins.add(new Join(Objects.requireNonNull(type),identifier(alias),Objects.requireNonNull(on),joinType));return this;
+        joins.add(new Join(Objects.requireNonNull(type),SqlAliases.explicit(alias),Objects.requireNonNull(on),joinType));return this;
     }
-    private static String identifier(String value){
-        if(value==null||!value.matches("[A-Za-z_][A-Za-z_0-9]*"))throw new IllegalArgumentException("Invalid SQL alias: "+value);
-        return value;
+    private static String identifier(String value){return SqlAliases.explicit(value);}
+    /** Deterministic next free alias, including manually reserved aliases. */
+    private String nextJoinAlias(){
+        String root=rootAlias();
+        int position=1;
+        while(true){
+            String candidate=SqlAliases.at(position++);
+            if(candidate.equals(root))continue;
+            boolean used=false;
+            for(Join join:joins)if(candidate.equals(join.alias())){used=true;break;}
+            if(!used)return candidate;
+        }
+    }
+    /**
+     * Automatically allocate the joined path's alias and expose the aliased,
+     * compile-time typed path to the ON predicate. The original path is immutable.
+     */
+    @SuppressWarnings("unchecked")
+    public <J,P extends EntityPath<J>> Select<T> join(P target,Function<P,SqlPredicate> on){
+        return joinTyped(target,on,JoinType.INNER);
+    }
+    @SuppressWarnings("unchecked")
+    public <J,P extends EntityPath<J>> Select<T> leftJoin(P target,Function<P,SqlPredicate> on){
+        return joinTyped(target,on,JoinType.LEFT);
+    }
+    @SuppressWarnings("unchecked")
+    public <J,P extends EntityPath<J>> Select<T> rightJoin(P target,Function<P,SqlPredicate> on){
+        return joinTyped(target,on,JoinType.RIGHT);
+    }
+    @SuppressWarnings("unchecked")
+    public <J,P extends EntityPath<J>> Select<T> fullJoin(P target,Function<P,SqlPredicate> on){
+        return joinTyped(target,on,JoinType.FULL);
+    }
+    @SuppressWarnings("unchecked")
+    private <J,P extends EntityPath<J>> Select<T> joinTyped(P target,Function<P,SqlPredicate> on,JoinType mode){
+        Objects.requireNonNull(target,"target");
+        Objects.requireNonNull(on,"on");
+        String assigned=nextJoinAlias();
+        P joined=(P)target.as(assigned);
+        return addJoin(target.type(),assigned,Objects.requireNonNull(on.apply(joined),"on predicate"),mode);
     }
     public Select<T> where(SqlPredicate value){predicate=Objects.requireNonNull(value);return this;}
     Select<T> whereNullable(SqlPredicate value){predicate=value;return this;}
@@ -67,7 +104,7 @@ public final class Select<T> {
     public Optional<T> first(){limit(1);return db.first(this);}
     Operations operations(){return db;}
     boolean hasJoins(){return !joins.isEmpty();}
-    String rootAlias(){return alias==null?"a":alias;}
+    String rootAlias(){return alias==null?SqlAliases.root():alias;}
     boolean hasRightOrFullJoin(){return joins.stream().anyMatch(j -> j.joinType()==JoinType.RIGHT || j.joinType()==JoinType.FULL);}
     List<SqlOrder> sorting(){return List.copyOf(orders);}
 
@@ -87,38 +124,34 @@ public final class Select<T> {
         if(limit!=null && !joins.isEmpty())
             throw new IllegalArgumentException("Paginating JOIN results may multiply root entities; page root IDs first, then fetch relations separately");
         StringBuilder sql=new StringBuilder();
-        if(properties==null && alias==null && joins.isEmpty()){sql.append(base.selectAllSql());}
-        else {
-            boolean qualified=alias!=null||!joins.isEmpty();
-            String root=alias==null?"a":alias;
-            sql.append("SELECT ");
-            if(properties==null)sql.append(base.qualifiedColumns(root));
-            else for(int n=0;n<properties.length;n++) {
-                if(n>0)sql.append(", ");
-                if(qualified)sql.append(root).append('.');
-                sql.append(base.columnFor(properties[n]));
-            }
-            sql.append(" FROM ").append(base.table());
-            if(qualified)sql.append(" ").append(root);
-            Set<String> known=new HashSet<>();known.add(root);
-            for(Join join:joins){
-                if(!known.add(join.alias))throw new IllegalArgumentException("Duplicate SQL alias: "+join.alias);
-                // OR clauses can make an otherwise linked join degenerate into a Cartesian product.
-                if(Pattern.compile("(?i)\\bOR\\b").matcher(join.on.sql()).find())
-                    throw new IllegalArgumentException("JOIN ON with OR is not supported; it can multiply rows unpredictably");
-                boolean linked=false;
-                Matcher matcher=JOIN_KEYS.matcher(join.on.sql());
-                while(matcher.find()) {
-                    String a=matcher.group(1),b=matcher.group(2);
-                    if(!a.equals(b) && (a.equals(join.alias) && known.contains(b) || b.equals(join.alias) && known.contains(a))) {
-                        linked=true; break;
-                    }
+        String root=rootAlias();
+        sql.append("SELECT ");
+        if(properties==null)sql.append(base.qualifiedColumns(root));
+        else for(int n=0;n<properties.length;n++){
+            if(n>0)sql.append(", ");
+            sql.append(root).append('.').append(base.columnFor(properties[n]));
+        }
+        sql.append(" FROM ").append(base.table()).append(' ').append(root);
+        Set<String> known=new HashSet<>();known.add(root);
+        for(Join join:joins){
+            if(!known.add(join.alias))throw new IllegalArgumentException("Duplicate SQL alias: "+join.alias);
+            // OR clauses can make an otherwise linked join degenerate into a Cartesian product.
+            if(Pattern.compile("(?i)\\\\bOR\\\\b").matcher(join.on.sql()).find())
+                throw new IllegalArgumentException("JOIN ON with OR is not supported; it can multiply rows unpredictably");
+            boolean linked=false;
+            Matcher matcher=JOIN_KEYS.matcher(join.on.sql());
+            while(matcher.find()){
+                String a=matcher.group(1),b=matcher.group(2);
+                if(!a.equals(b) && (a.equals(join.alias) && known.contains(b) ||
+                                    b.equals(join.alias) && known.contains(a))){
+                    linked=true;break;
                 }
-                if(!linked) throw new IllegalArgumentException("JOIN ON must relate indexed/mapped columns of two distinct table aliases; cartesian joins are not supported");
-                EntityMapper<?> target=lookup.apply(join.type);
-                sql.append(" ").append(dialect.join(join.joinType)).append(" ").append(target.table()).append(" ").append(join.alias)
-                        .append(" ON ").append(join.on.sql());
             }
+            if(!linked)throw new IllegalArgumentException(
+                "JOIN ON must relate indexed/mapped columns of two distinct table aliases; cartesian joins are not supported");
+            EntityMapper<?> target=lookup.apply(join.type);
+            sql.append(" ").append(dialect.join(join.joinType)).append(" ").append(target.table())
+               .append(" ").append(join.alias).append(" ON ").append(join.on.sql());
         }
         if(predicate!=null)sql.append(" WHERE ").append(predicate.sql());
         if(!orders.isEmpty()){
