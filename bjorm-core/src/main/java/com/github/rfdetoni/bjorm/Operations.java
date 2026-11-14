@@ -107,6 +107,11 @@ public interface Operations {
     }
     default <T> List<T> list(Class<T> type) { return list(type, null); }
     default <T> Select<T> select(Class<T> type) { return new Select<>(this, type); }
+    /** Begin a typed query from a generated W* path; no runtime entity discovery. */
+    default <T> Select<T> selectFrom(EntityPath<T> path) {
+        Objects.requireNonNull(path, "path");
+        return select(path.type()).as(path.alias());
+    }
     default <T> Optional<T> findOne(Class<T> type, SqlPredicate where) {
         return select(type).whereNullable(where).first();
     }
