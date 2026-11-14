@@ -93,6 +93,43 @@ public final class BjormPages {
         return new SeekSlice<>(content,next,hasNext);
     }
 
+    /**
+     * Stable keyset pagination ordered by an indexed scalar plus the primary key.
+     * Uses a single SELECT with LIMIT(size+1), no OFFSET or COUNT. The sort
+     * column must be non-null; composite primary keys need an explicit tuple plan.
+     */
+    public <T> SeekSlice<T> seekSliceSorted(Class<T> type,String sortProperty,
+                                            SortedCursor after,int pageSize) {
+        return seekSliceSorted(type,sortProperty,null,after,pageSize,false);
+    }
+
+    public <T> SeekSlice<T> seekSliceSorted(Class<T> type,String sortProperty,
+                                            SqlPredicate predicate,SortedCursor after,
+                                            int pageSize,boolean descending) {
+        checkPageSize(pageSize);
+        Objects.requireNonNull(type,"type");
+        Objects.requireNonNull(sortProperty,"sortProperty");
+        if(db.primaryKeyProperties(type).contains(sortProperty))
+            throw new IllegalArgumentException("Use seekSlice for primary-key sorting");
+        SqlOrder sorted=db.mappedOrder(type,sortProperty,descending);
+        SqlOrder key=db.primaryKeyOrder(type,descending);
+        SqlPredicate filter=predicate;
+        if(after!=null) {
+            SqlPredicate seek=db.seekAfterSorted(type,sortProperty,
+                after.sortValue(),after.id(),descending);
+            filter=filter==null?seek:filter.and(seek);
+        }
+        Select<T> query=db.select(type).orderBy(sorted,key).limit(pageSize+1);
+        if(filter!=null)query.where(filter);
+        List<T> rows=query.fetch();
+        boolean hasNext=rows.size()>pageSize;
+        List<T> content=hasNext?new ArrayList<>(rows.subList(0,pageSize)):rows;
+        SortedCursor next=hasNext?new SortedCursor(
+            db.mappedPropertyValue(content.getLast(),sortProperty),
+            db.primaryKeyValue(content.getLast())):null;
+        return new SeekSlice<>(content,next,hasNext);
+    }
+
     private <T> Select<T> select(Class<T> type, SqlPredicate predicate, Pageable pageable) {
         Objects.requireNonNull(type, "type");
         Select<T> query = db.select(type);
