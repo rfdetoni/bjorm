@@ -3,7 +3,7 @@
 BJORM generates two source-level metamodels for each public `@Table` entity:
 
 - `Product_`: existing static `Field<T>` constants, unchanged for source compatibility.
-- `WProduct`: typed instance paths with a validated, explicit SQL alias.
+- `WProduct`: typed instance paths with a shared, deterministic SQL alias policy.
 
 Neither metamodel uses runtime entity reflection, proxies, dirty checking, sessions or a second-level entity cache.
 
@@ -24,6 +24,37 @@ a bound parameter. `W*` fields use the same columns as the generated mapper,
 including renamed columns and flattened embedded scalar fields. `@Converted`,
 `@Json` and `@EnumOrdinal` remain plain `Field<T>` paths to avoid
 inventing unsupported string/numeric semantics.
+
+## Unified SQL alias policy
+
+All BJORM fluent `Select` queries use `t0` for the root entity by default,
+including `db.select(Entity.class)`, projections, and generated `W*` paths.
+Explicit root aliases through `.as("p")` remain supported.
+
+Automatic typed joins allocate `t1`, `t2`, etc., in insertion order. They
+skip aliases reserved by explicit JOINs or by an explicit root alias. The
+callback receives the correct compile-time typed joined path, so callers
+never construct an alias string:
+
+```java
+WProduct product = WProduct.product; // automatically t0
+List<Product> rows = db.selectFrom(product)
+    .join(WUser.user, user -> product.ownerId.sameAs(user.id)) // user is t1
+    .where(product.name.eq("Pen"))
+    .fetch();
+```
+
+Use `.leftJoin(path, on)`, `.rightJoin(path, on)`, or `.fullJoin(path, on)`
+for other explicit join types. A repeated join to the same entity receives a
+new alias; aliases are per query, not globally allocated. Eager graph joins
+follow the same positional numbering within their generated SELECT scope.
+Nested CTE SELECTs start a fresh scope with `t0`.
+
+Manually supplied aliases and native `@Query` statements are preserved. The
+existing static `Entity_` fields remain unqualified for source compatibility;
+use the `W*` path API when a join requires unambiguous, qualified references.
+Fixed SQL CRUD statements and manual `@Query` SQL are not automatically
+rewritten.
 
 ## When is SQL created?
 
