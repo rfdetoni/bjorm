@@ -91,6 +91,7 @@ public final class RoutineCall {
         return operations.executeRoutine(this);
     }
 
+    Operations owner() { return operations; }
     public String routine() { return routine; }
     public boolean isFunction() { return function; }
     public SQLType returnType() { return returnType; }
