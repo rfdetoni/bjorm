@@ -2,21 +2,39 @@
 
 BJORM generates two source-level metamodels for each public `@Table` entity:
 
-- `Product_`: existing static `Field<T>` constants, unchanged for source compatibility.
-- `WProduct`: typed instance paths with a shared, deterministic SQL alias policy.
+- **`WProduct` (preferred)**: typed, aliased query paths for all new code.
+- **`Product_` (compatibility)**: legacy static `Field<T>` constants, generated with unchanged behavior so existing applications continue to compile.
+
+A third generated type, `Product_BjormMapper`, handles JDBC bindings, SQL and rows.
+It is infrastructure, **not** a public query facade. Neither query metamodel
+creates an ORM session, dirty checking or a global database context.
 
 Neither metamodel uses runtime entity reflection, proxies, dirty checking, sessions or a second-level entity cache.
 
 ## Usage
 
 ```java
-WProduct p = WProduct.product.as("p");
-List<Product> rows = db.selectFrom(p)
+WProduct p = WProduct.product; // t0, generated at compile time
+List<Product> rows = WProduct.find(db) // explicit Operations/Bjorm context
     .where(p.name.startsWith("Pen").and(p.price.gte(new BigDecimal("10"))))
     .orderBy(p.name.asc())
     .limit(50)
     .fetch();
+
+// With a custom root alias, keep using the existing selectFrom path:
+WProduct named = WProduct.product.as("p");
+List<Product> namedRows = db.selectFrom(named)
+    .where(named.name.eq("Pencil"))
+    .fetch();
 ```
+
+`WProduct.find(db)` is a generated static shortcut for
+`WProduct.product.select(db)`, which delegates to the regular BJORM query
+builder. It accepts `Operations` so it works with a scoped `Bjorm`
+or an explicit BJORM transaction, without a static connection or
+thread-local session. For predicates use `.eq(value)`, not Java
+`.equals(value)`. The annotation processor **cannot add** static
+`find()` methods to the existing `Product` type.
 
 `p.name` is a `Paths.StringPath`, `p.price` is a `Paths.NumberPath<BigDecimal>`.
 `contains`, `startsWith`, and `endsWith` escape SQL LIKE wildcards and use
@@ -51,8 +69,21 @@ follow the same positional numbering within their generated SELECT scope.
 Nested CTE SELECTs start a fresh scope with `t0`.
 
 Manually supplied aliases and native `@Query` statements are preserved. The
-existing static `Entity_` fields remain unqualified for source compatibility;
-use the `W*` path API when a join requires unambiguous, qualified references.
+existing static `Entity_` fields remain unqualified for source compatibility.
+Keep them in pre-existing code; write new queries with `W*`:
+
+```java
+// Old code: still compiles, no removal or warning introduced.
+db.select(Product.class).where(Product_.name.eq("Pencil")).fetch();
+
+// New code: same JDBC engine, typed path with deterministic t0.
+WProduct p = WProduct.product;
+WProduct.find(db).where(p.name.eq("Pencil")).fetch();
+```
+
+Do not convert a native SQL query to a fluent DSL if doing so harms
+query plans, projections, authorization or database-specific capabilities.
+Use `@Query` for fixed SQL and `db.query` for reviewed native SQL.
 Fixed SQL CRUD statements and manual `@Query` SQL are not automatically
 rewritten.
 
