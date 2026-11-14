@@ -374,6 +374,19 @@ public final class AdvancedSmokeTest {
         check(spy.last().sql().equals("SELECT 1 FROM products t0 WHERE t0.name = ? LIMIT 1"),
             "exists SQL declares t0");
         check(spy.last().binds().equals(Map.of(1,"Pencil")),"qualified aggregate binds value");
+        // Bulk DML must declare the same alias as generated W* predicates.
+        check(db.updateBy(User.class,Map.of("age",29),WUser.user.name.eq("Pencil"))==1,
+            "qualified root predicate updates using the generated mapping");
+        check(spy.last().sql().equals("UPDATE users t0 SET age = ? WHERE t0.name = ?"),
+            "bulk UPDATE declares t0");
+        check(spy.last().binds().equals(Map.of(1,29,2,"Pencil")),
+            "bulk UPDATE binds changed properties ahead of its predicate");
+        check(db.deleteBy(User.class,WUser.user.name.eq("Pencil"))==1,
+            "qualified root predicate deletes using the generated mapping");
+        check(spy.last().sql().equals("DELETE FROM users t0 WHERE t0.name = ?"),
+            "bulk DELETE declares t0");
+        check(spy.last().binds().equals(Map.of(1,"Pencil")),"bulk DELETE binds predicate");
+
 
         try {
             db.lockOne(Product.class,Product_.name.eq("Pencil"),LockMode.UPDATE);
