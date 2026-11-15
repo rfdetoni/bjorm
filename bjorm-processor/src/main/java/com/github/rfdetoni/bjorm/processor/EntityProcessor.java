@@ -312,7 +312,6 @@ public final class EntityProcessor extends AbstractProcessor {
             }
         generateMapper(entity,qualifiedTable,schema,cols,id,keyColumns,ver,record,relations,toOnes,embeddeds);
         mapperServices.add(packageOf(entity)+"."+entity.getSimpleName()+"_BjormMapper");
-        generatePaths(entity,cols);
         generateTypedPaths(entity,cols);
     }
     private Relation relation(Element field,String getter) {
@@ -821,14 +820,6 @@ public final class EntityProcessor extends AbstractProcessor {
             args.add(name.equals(replacementProperty)?replacement:"value."+name+"()");
         }
         return String.join(", ",args);
-    }
-    private void generatePaths(TypeElement entity,List<Col> cols)throws IOException {
-        String clazz=entity.getSimpleName().toString();
-        try(Writer w=file(packageOf(entity),clazz+"_",entity)) {
-            w.write("package "+packageOf(entity)+";\n/** Legacy metamodel preserved for source compatibility. Prefer W"+clazz+" for new queries. */\npublic final class "+clazz+"_ {private "+clazz+"_(){}\n");
-            for(Col c:cols)w.write("public static final com.github.rfdetoni.bjorm.Field<"+boxed(c.type())+"> "+c.property().replace('.','_')+" = new com.github.rfdetoni.bjorm.Field<>(\""+c.column()+"\""+(c.converter()==null?"":", new "+c.converter()+"()::write")+");\n");
-            w.write("}\n");
-        }
     }
     /**
      * W* path model uses exactly the compile-time validated columns of the

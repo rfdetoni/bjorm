@@ -48,7 +48,7 @@ public final class DialectSmokeTest {
         mysql.insertReturning(new ItUser(id,"Ana",15));
         check(p.sql.startsWith("INSERT INTO bjorm_it_users"),"MySQL insert SQL");
         check(id.toString().equals(p.binds.get(1)),"MySQL UUID should use CHAR(36) text");
-        mysql.select(ItUser.class).where(ItUser_.id.eq(id)).fetch();
+        mysql.select(ItUser.class).where(WItUser.itUser.id.eq(id)).fetch();
         check(id.toString().equals(p.binds.get(1)),"MySQL UUID in typed WHERE predicate must bind as CHAR(36) text");
         mysql.upsertReturning(new ItUser(id,"Bia",16));
         check(p.sql.contains(" AS bjorm_new ON DUPLICATE KEY UPDATE "),"MySQL native upsert alias");
@@ -59,7 +59,7 @@ public final class DialectSmokeTest {
         check(p.sql.contains("CAST(? AS JSON)") && !p.sql.contains("jsonb"),"MySQL JSON dialect");
         try {
             mysql.select(ItUser.class).as("u").fullJoin(ItProduct.class,"p")
-                .on(ItUser_.id.as("u").sameAs(ItProduct_.id.as("p"))).fetch();
+                .on(WItUser.itUser.as("u").id.sameAs(WItProduct.itProduct.as("p").id)).fetch();
             throw new AssertionError("FULL JOIN must fail on MySQL");
         } catch(UnsupportedOperationException expected) {
             check(expected.getMessage().contains("FULL OUTER"),"MySQL join error");

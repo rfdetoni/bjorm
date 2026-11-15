@@ -8,6 +8,9 @@ javac -d "$OUT/core" $(find bjorm-core/src/main/java -name '*.java')
 javac -cp "$OUT/core" -d "$OUT/processor" $(find bjorm-processor/src/main/java -name '*.java')
 javac -cp "$OUT/core" -processorpath "$OUT/core:$OUT/processor" -processor com.github.rfdetoni.bjorm.processor.EntityProcessor -s "$OUT/generated" -d "$OUT/example" $(find bjorm-examples/src/main/java -name '*.java')
 javac -cp "$OUT/core:$OUT/example" -d "$OUT/example" $(find bjorm-examples/src/test/java -name '*.java')
+if find "$OUT/generated" -type f -name '*_.java' | grep -q .; then
+  echo 'FAIL: obsolete Entity_ metamodel was generated' >&2; exit 1
+fi
 java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.SmokeTest
 
 java -cp "$OUT/core:$OUT/example" com.github.rfdetoni.bjorm.examples.AdvancedSmokeTest

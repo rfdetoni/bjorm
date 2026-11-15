@@ -112,14 +112,14 @@ public final class MySqlIntegrationTest {
                 loadedLink.invoice().customer().id().equals(invoiceCustomer.id()) &&
                 multiHopQueries.get()==1,
                 "MySQL two-hop to-one graph requires exactly one query");
-            check(db.select(ItInvoiceLink.class).where(ItInvoiceLink_.id.eq(link.id()))
+            check(db.select(ItInvoiceLink.class).where(WItInvoiceLink.itInvoiceLink.id.eq(link.id()))
                 .limit(1).fetch().getFirst().invoice().customer()!=null,
                 "MySQL two-hop root paging is preserved");
             ItInvoiceLink emptyLink=db.insertReturning(new ItInvoiceLink(null,null,"missing-parent",null));
             check(db.find(ItInvoiceLink.class,emptyLink.id()).invoice()==null,
                 "MySQL nullable outer to-one retains root");
-            SqlPredicate correlated=ItInvoice_.customerId.as("i").sameAs(ItUser_.id.as("u"))
-                .and(ItInvoice_.reference.as("i").eq("MYSQL-INV"));
+            SqlPredicate correlated=WItInvoice.itInvoice.as("i").customerId.sameAs(WItUser.itUser.as("u").id)
+                .and(WItInvoice.itInvoice.as("i").reference.eq("MYSQL-INV"));
             check(db.select(ItUser.class).as("u")
                 .where(SqlSubqueries.exists(ItInvoice_BjormMapper.INSTANCE,"i",correlated))
                 .fetch().stream().anyMatch(entry->invoiceCustomer.id().equals(entry.id())),
@@ -129,14 +129,14 @@ public final class MySqlIntegrationTest {
                 .fetch().stream().noneMatch(entry->invoiceCustomer.id().equals(entry.id())),
                 "MySQL typed correlated NOT EXISTS");
             check(db.select(ItUser.class).as("u")
-                .where(SqlSubqueries.in(ItUser_.id.as("u"),
-                    ItInvoice_BjormMapper.INSTANCE,"i",ItInvoice_.customerId.as("i"),
-                    ItInvoice_.reference.as("i").eq("MYSQL-INV")))
+                .where(SqlSubqueries.in(WItUser.itUser.as("u").id,
+                    ItInvoice_BjormMapper.INSTANCE,"i",WItInvoice.itInvoice.as("i").customerId,
+                    WItInvoice.itInvoice.as("i").reference.eq("MYSQL-INV")))
                 .fetch().stream().anyMatch(entry->invoiceCustomer.id().equals(entry.id())),
                 "MySQL typed IN subquery with prepared bound filter");
 
-            check(db.select(ItInvoice.class).where(ItInvoice_.customerId.eq(invoiceCustomer.id()))
-                .orderBy(ItInvoice_.reference.asc()).limit(1).fetch().getFirst().customer()!=null,
+            check(db.select(ItInvoice.class).where(WItInvoice.itInvoice.customerId.eq(invoiceCustomer.id()))
+                .orderBy(WItInvoice.itInvoice.reference.asc()).limit(1).fetch().getFirst().customer()!=null,
                 "MySQL ManyToOne sorted paging");
             ItInvoice orphan=db.insertReturning(new ItInvoice(null,null,"MYSQL-NO-CUSTOMER",null));
             check(db.find(ItInvoice.class,orphan.id()).customer()==null,
@@ -154,7 +154,7 @@ public final class MySqlIntegrationTest {
             check(embeddedAddress.equals(db.find(ItEmbeddedRecord.class,embedded.id()).address()),
                 "MySQL flattened embedded record roundtrip");
             check(db.updateBy(ItEmbeddedRecord.class,Map.of("address.zipCode","89220"),
-                ItEmbeddedRecord_.id.eq(embedded.id()))==1 &&
+                WItEmbeddedRecord.itEmbeddedRecord.id.eq(embedded.id()))==1 &&
                 db.find(ItEmbeddedRecord.class,embedded.id()).address().zipCode().equals("89220"),
                 "MySQL embedded nested bulk mapped update");
             ItEmbeddedPojo embeddedPojo=new ItEmbeddedPojo();
@@ -187,11 +187,11 @@ public final class MySqlIntegrationTest {
             check(db.find(ItConvertedRecord.class,converted.id()).amount().equals(converted.amount()),
                 "MySQL generated JDBC converter round-trip");
             check(db.list(ItConvertedRecord.class,
-                ItConvertedRecord_.amount.eq(new MoneyValue(new java.math.BigDecimal("22.50")))).size()==1,
+                WItConvertedRecord.itConvertedRecord.amount.eq(new MoneyValue(new java.math.BigDecimal("22.50")))).size()==1,
                 "MySQL typed equality converts domain values");
             check(db.updateBy(ItConvertedRecord.class,
                 Map.of("amount",new MoneyValue(new java.math.BigDecimal("31.75"))),
-                ItConvertedRecord_.id.eq(converted.id()))==1 &&
+                WItConvertedRecord.itConvertedRecord.id.eq(converted.id()))==1 &&
                 db.find(ItConvertedRecord.class,converted.id()).amount().amount().compareTo(new java.math.BigDecimal("31.75"))==0,
                 "MySQL generated converter supports mapped bulk update");
             UUID compositeTenant=UUID.randomUUID();
@@ -206,7 +206,7 @@ public final class MySqlIntegrationTest {
                 throw new AssertionError("stale composite update accepted");}
             catch(OptimisticLockException expected) {}
             try {db.updateBy(ItCompositeRecord.class,Map.of("tenantId",UUID.randomUUID()),
-                ItCompositeRecord_.sku.eq("SKU-MY"));
+                WItCompositeRecord.itCompositeRecord.sku.eq("SKU-MY"));
                 throw new AssertionError("MySQL bulk write altered tuple identifier");}
             catch(IllegalArgumentException expected) {}
             ItCompositeRecord anotherComposite=db.insertReturning(new ItCompositeRecord(
@@ -216,7 +216,7 @@ public final class MySqlIntegrationTest {
             check(db.find(ItCompositeReference.class,linkedComposite.id()).product().equals(modified),
                 "MySQL composite FK eager JOIN must include both UUID and SKU key parts");
             check(db.select(ItCompositeReference.class).where(
-                ItCompositeReference_.id.eq(linkedComposite.id())).limit(1).fetch().getFirst()
+                WItCompositeReference.itCompositeReference.id.eq(linkedComposite.id())).limit(1).fetch().getFirst()
                 .product().sku().equals("SKU-MY"),"MySQL composite FK root paging");
             ItCompositeReference optionalComposite=db.insertReturning(new ItCompositeReference(
                 null,null,null,"nullable",null));
@@ -254,7 +254,7 @@ public final class MySqlIntegrationTest {
             check(modifiedAudit.createdAt().equals(insertedAudit.createdAt()) &&
                 !modifiedAudit.updatedAt().isBefore(insertedAudit.updatedAt()),
                 "MySQL audit update");
-            check(db.updateBy(ItAuditRecord.class,Map.of("label","bulk-audit"),ItAuditRecord_.id.eq(audit.id()))==1,
+            check(db.updateBy(ItAuditRecord.class,Map.of("label","bulk-audit"),WItAuditRecord.itAuditRecord.id.eq(audit.id()))==1,
                 "MySQL audit bulk auto-stamp");
             ItAuditRecord afterBulkAudit=db.find(ItAuditRecord.class,audit.id());
             check(afterBulkAudit.createdAt().equals(insertedAudit.createdAt()) &&
@@ -411,10 +411,10 @@ public final class MySqlIntegrationTest {
             check(db.find(ItUser.class,original.id()).age()==33,
                 "Unsupported MySQL native RETURNING must fail without modifying a row");
 
-            UUID streamedId=db.withStream(db.select(ItUser.class).where(ItUser_.id.eq(original.id())),
+            UUID streamedId=db.withStream(db.select(ItUser.class).where(WItUser.itUser.id.eq(original.id())),
                 rows->rows.findFirst().orElseThrow().id());
             check(streamedId.equals(original.id()),"MySQL resource-scoped mapped Stream roundtrip");
-            check(db.updateBy(ItUser.class,Map.of("age",35),ItUser_.id.eq(original.id()))==1,
+            check(db.updateBy(ItUser.class,Map.of("age",35),WItUser.itUser.id.eq(original.id()))==1,
                 "MySQL native updateBy");
             check(db.find(ItUser.class,original.id()).age()==35,"MySQL bulk property roundtrip");
             UUID upsertId=UUID.randomUUID();
@@ -435,22 +435,22 @@ public final class MySqlIntegrationTest {
             }
             check(db.find(ItUser.class,original.id()).age()==34 && db.find(ItUser.class,conflictingId)==null,
                 "MySQL secondary-key collision cannot mutate unrelated entity");
-            check(db.select(ItUser.class).where(ItUser_.id.eq(original.id())).fetch().size()==1,"MySQL UUID predicate bind");
+            check(db.select(ItUser.class).where(WItUser.itUser.id.eq(original.id())).fetch().size()==1,"MySQL UUID predicate bind");
             Instant testInstant=Instant.parse("2026-11-10T10:20:30Z");
             Instant returned=db.one("SELECT ?",
                 db.params(testInstant),
                 rs->rs.getTimestamp(1).toInstant());
             check(testInstant.equals(returned),"native BJORM Instant binder MySQL timestamp");
-            check(db.count(ItUser.class, ItUser_.id.eq(original.id()))==1L,
+            check(db.count(ItUser.class, WItUser.itUser.id.eq(original.id()))==1L,
                 "MySQL typed count uses dialect UUID binding");
-            check(db.exists(ItUser.class, ItUser_.id.eq(original.id())),
+            check(db.exists(ItUser.class, WItUser.itUser.id.eq(original.id())),
                 "MySQL EXISTS uses dialect UUID binding");
-            check(!db.exists(ItUser.class, ItUser_.name.eq("nobody")),
+            check(!db.exists(ItUser.class, WItUser.itUser.name.eq("nobody")),
                 "MySQL EXISTS returns false for missing row");
             db.tx(tx -> {
-                check(tx.lockOne(ItUser.class, ItUser_.id.eq(original.id()), LockMode.UPDATE),
+                check(tx.lockOne(ItUser.class, WItUser.itUser.id.eq(original.id()), LockMode.UPDATE),
                     "MySQL FOR UPDATE works inside transaction");
-                check(tx.lockOne(ItUser.class, ItUser_.id.eq(original.id()), LockMode.SHARE),
+                check(tx.lockOne(ItUser.class, WItUser.itUser.id.eq(original.id()), LockMode.SHARE),
                     "MySQL FOR SHARE works inside transaction");
             });
             String explicitIsolation=db.txResult(TransactionIsolation.READ_COMMITTED,
@@ -458,7 +458,7 @@ public final class MySqlIntegrationTest {
             check("READ-COMMITTED".equalsIgnoreCase(explicitIsolation),
                 "MySQL honors explicit READ COMMITTED isolation within BJORM transaction");
             db.tx(TransactionIsolation.SERIALIZABLE,tx->
-                check(tx.count(ItUser.class,ItUser_.id.eq(original.id()))==1L,
+                check(tx.count(ItUser.class,WItUser.itUser.id.eq(original.id()))==1L,
                     "MySQL SERIALIZABLE transaction accepts mapped SQL"));
             java.util.concurrent.atomic.AtomicInteger mysqlReplayCount=
                 new java.util.concurrent.atomic.AtomicInteger();
@@ -480,14 +480,14 @@ public final class MySqlIntegrationTest {
             ItDocument searchableJson=db.insertReturning(new ItDocument(null,
                 "{\"meta\":{\"status\":\"ready\"},\"flags\":{\"published\":true}}"));
             check(db.count(ItDocument.class,
-                SqlJsonPredicates.contains(ItDocument_.payload,db.dialect(),
+                SqlJsonPredicates.contains(WItDocument.itDocument.payload,db.dialect(),
                     "{\"flags\":{\"published\":true}}")
-                    .and(ItDocument_.id.eq(searchableJson.id())))==1L,
+                    .and(WItDocument.itDocument.id.eq(searchableJson.id())))==1L,
                 "MySQL JSON_CONTAINS accepts bound JSON value");
             check(db.count(ItDocument.class,
-                SqlJsonPredicates.textEquals(ItDocument_.payload,db.dialect(),
+                SqlJsonPredicates.textEquals(WItDocument.itDocument.payload,db.dialect(),
                     List.of("meta","status"),"ready")
-                    .and(ItDocument_.id.eq(searchableJson.id())))==1L,
+                    .and(WItDocument.itDocument.id.eq(searchableJson.id())))==1L,
                 "MySQL JSON_EXTRACT receives a bound validated path");
 
             AutoLongRecord serial=db.insertReturning(new AutoLongRecord(null,"serial"));
@@ -565,6 +565,11 @@ public final class MySqlIntegrationTest {
             db.insert(parent);
             ItOrder loaded=db.find(ItOrder.class,parent.getId());
             check(loaded!=null&&loaded.getLines().size()==1,"MySQL automatic relation JOIN");
+            ItOrder rootOnly=db.select(ItOrder.class)
+                .where(WItOrder.itOrder.id.eq(parent.getId()))
+                .withoutRelations().fetch().getFirst();
+            check(rootOnly.getLines().isEmpty() && rootOnly.getNotes().isEmpty(),
+                  "MySQL root-only query skips child hydration");
             db.delete(parent);
             check(db.find(ItOrder.class,parent.getId())==null,"MySQL cascade delete");
             ItUser nestedUser=db.insertReturning(new ItUser(null,"Nested child customer MySQL",29));
@@ -578,7 +583,7 @@ public final class MySqlIntegrationTest {
             });
             ItOrderWithNestedReference nestedLoaded=observedNested
                 .select(ItOrderWithNestedReference.class)
-                .where(ItOrderWithNestedReference_.id.eq(nestedOrder.id()))
+                .where(WItOrderWithNestedReference.itOrderWithNestedReference.id.eq(nestedOrder.id()))
                 .limit(1).fetch().getFirst();
             check(nestedLoaded.lines().size()==2 &&
                 nestedLoaded.lines().stream().anyMatch(item->
@@ -603,17 +608,17 @@ public final class MySqlIntegrationTest {
                 }
                 for(LockMode mode:List.of(LockMode.UPDATE_SKIP_LOCKED,LockMode.SHARE_SKIP_LOCKED)) {
                     List<ItUser> rows=db.txResult(tx->tx.lockRows(ItUser.class,
-                        ItUser_.id.eq(invoiceCustomer.id()),mode,1));
+                        WItUser.itUser.id.eq(invoiceCustomer.id()),mode,1));
                     check(rows.isEmpty(),"MySQL "+mode+" lockRows must skip a row held by another transaction");
                 }
                 for(LockMode mode:List.of(LockMode.UPDATE_SKIP_LOCKED,LockMode.SHARE_SKIP_LOCKED)) {
                     boolean selected=db.txResult(tx->
-                        tx.lockOne(ItUser.class,ItUser_.id.eq(invoiceCustomer.id()),mode));
+                        tx.lockOne(ItUser.class,WItUser.itUser.id.eq(invoiceCustomer.id()),mode));
                     check(!selected,"MySQL "+mode+" must skip an exclusively locked row");
                 }
                 for(LockMode mode:List.of(LockMode.UPDATE_NOWAIT,LockMode.SHARE_NOWAIT)) {
                     try {
-                        db.tx(tx->tx.lockOne(ItUser.class,ItUser_.id.eq(invoiceCustomer.id()),mode));
+                        db.tx(tx->tx.lockOne(ItUser.class,WItUser.itUser.id.eq(invoiceCustomer.id()),mode));
                         throw new AssertionError("MySQL NOWAIT unexpectedly acquired a blocked row");
                     } catch(BjormException refused) {
                         Throwable error=refused.getCause();
@@ -625,11 +630,11 @@ public final class MySqlIntegrationTest {
             }
             db.tx(tx->{
                 List<ItUser> rows=tx.lockRows(ItUser.class,
-                    ItUser_.id.eq(invoiceCustomer.id()),LockMode.UPDATE_SKIP_LOCKED,1);
+                    WItUser.itUser.id.eq(invoiceCustomer.id()),LockMode.UPDATE_SKIP_LOCKED,1);
                 check(rows.size()==1 && invoiceCustomer.id().equals(rows.getFirst().id()),
                     "MySQL lockRows must return bounded, primary-key-ordered mapped rows");
                 try {
-                    tx.lockRows(ItUser.class,ItUser_.id.eq(invoiceCustomer.id()),LockMode.UPDATE,0);
+                    tx.lockRows(ItUser.class,WItUser.itUser.id.eq(invoiceCustomer.id()),LockMode.UPDATE,0);
                     throw new AssertionError("lockRows accepted zero row limit");
                 } catch(IllegalArgumentException expected) {}
             });

@@ -2,8 +2,6 @@ package com.github.rfdetoni.bjorm;
 import java.sql.*;
 import java.util.*;
 import java.util.function.Function;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 /** Small, mutable single-use typed query builder. Explicit SQL joins; no implicit entity graph traversal. */
 public final class Select<T> {
@@ -22,8 +20,6 @@ public final class Select<T> {
             return query.addJoin(type,alias,Objects.requireNonNull(predicate),joinType);
         }
     }
-    private static final Pattern JOIN_KEYS = Pattern.compile(
-        "([A-Za-z_][A-Za-z_0-9]*)\\.[A-Za-z_][A-Za-z_0-9]*\\s*=\\s*([A-Za-z_][A-Za-z_0-9]*)\\.[A-Za-z_][A-Za-z_0-9]*");
     private final Operations db;
     private final Class<T> type;
     private SqlPredicate predicate;
@@ -32,6 +28,7 @@ public final class Select<T> {
     private final List<SqlOrder> orders=new ArrayList<>();
     private Integer limit;
     private Long offset;
+    private boolean hydrateRelations = true;
     Select(Operations db,Class<T> type){this.db=Objects.requireNonNull(db);this.type=Objects.requireNonNull(type);}
     public Select<T> as(String value){this.alias=SqlAliases.explicit(value);return this;}
     public JoinOnStep<T> join(Class<?> type,String alias) {return new JoinOnStep<>(this,type,alias,JoinType.INNER);}
@@ -97,6 +94,9 @@ public final class Select<T> {
     public Select<T> orderBy(SqlOrder... values){orders.addAll(Arrays.asList(values));return this;}
     public Select<T> limit(int value){if(value<1)throw new IllegalArgumentException("limit must be positive");limit=value;return this;}
     public Select<T> offset(long value){if(value<0)throw new IllegalArgumentException("offset must be non-negative");offset=value;return this;}
+    /** Explicit root-only query: no @Children or @ManyToOne eager hydration. */
+    public Select<T> withoutRelations(){hydrateRelations=false;return this;}
+    boolean hydrateRelations(){return hydrateRelations;}
     public List<T> fetch(){return db.list(this);}
     /** Restrict SELECT to named Java properties. Does not materialize a partial entity. */
     public FieldSelect<T> fields(String... properties){return new FieldSelect<>(this, properties);}
@@ -135,20 +135,6 @@ public final class Select<T> {
         Set<String> known=new HashSet<>();known.add(root);
         for(Join join:joins){
             if(!known.add(join.alias))throw new IllegalArgumentException("Duplicate SQL alias: "+join.alias);
-            // OR clauses can make an otherwise linked join degenerate into a Cartesian product.
-            if(Pattern.compile("(?i)\\bOR\\b").matcher(join.on.sql()).find())
-                throw new IllegalArgumentException("JOIN ON with OR is not supported; it can multiply rows unpredictably");
-            boolean linked=false;
-            Matcher matcher=JOIN_KEYS.matcher(join.on.sql());
-            while(matcher.find()){
-                String a=matcher.group(1),b=matcher.group(2);
-                if(!a.equals(b) && (a.equals(join.alias) && known.contains(b) ||
-                                    b.equals(join.alias) && known.contains(a))){
-                    linked=true;break;
-                }
-            }
-            if(!linked)throw new IllegalArgumentException(
-                "JOIN ON must relate indexed/mapped columns of two distinct table aliases; cartesian joins are not supported");
             EntityMapper<?> target=lookup.apply(join.type);
             sql.append(" ").append(dialect.join(join.joinType)).append(" ").append(target.table())
                .append(" ").append(join.alias).append(" ON ").append(join.on.sql());

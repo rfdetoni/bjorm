@@ -66,9 +66,9 @@ public final class SmokeTest {
         db.insert(u);
         expect(statements.getLast().sql().equals("INSERT INTO users (id, name, age) VALUES (?, ?, ?)"),"compiled INSERT");
         expect(statements.getLast().params().equals(Map.of(1,u.id(),2,u.name(),3,u.age())),"bind order");
-        db.list(User.class,User_.name.eq("test' OR 1=1 --").and(User_.age.gt(18)));
+        db.list(User.class,WUser.user.name.eq("test' OR 1=1 --").and(WUser.user.age.gt(18)));
         var listed = statements.getLast();
-        expect(listed.sql().equals("SELECT t0.id, t0.name, t0.age FROM users t0 WHERE (name = ? AND age > ?)"),"DSL SQL shape");
+        expect(listed.sql().equals("SELECT t0.id, t0.name, t0.age FROM users t0 WHERE (t0.name = ? AND t0.age > ?)"),"DSL SQL shape");
         expect(listed.params().get(1).equals("test' OR 1=1 --"),"SQL value parameterization");
         int before = connections.get();
         db.tx(tx->{tx.update(u);tx.delete(u);});
@@ -80,7 +80,7 @@ public final class SmokeTest {
         try {db.tx(tx->{tx.insert(u);throw new IllegalStateException("fail");});throw new AssertionError("should fail");}
         catch(IllegalStateException expected) {expect(expected.getMessage().equals("fail"),"original exception propagated");}
         expect(rollbacks.get()==1,"transaction rolls back");
-        expect(User_.name.eq(null).sql().equals("name IS NULL"),"NULL comparison");
+        expect(WUser.user.name.eq(null).sql().equals("t0.name IS NULL"),"NULL comparison");
         var escapedTx = new AtomicReference<Bjorm.Transaction>();
         db.tx(escapedTx::set);
         try {escapedTx.get().delete(u);throw new AssertionError("escaped transaction should be closed");}

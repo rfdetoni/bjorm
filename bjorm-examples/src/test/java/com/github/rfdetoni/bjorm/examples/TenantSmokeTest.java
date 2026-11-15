@@ -111,12 +111,12 @@ public final class TenantSmokeTest {
             "Tenant-scoped native DML RETURNING is denied before JDBC checkout");
         int beforeLock=pg.events.size();
         try {
-            guarded.lockOne(ItUser.class,ItUser_.name.eq("x"),
+            guarded.lockOne(ItUser.class,WItUser.itUser.name.eq("x"),
                 com.github.rfdetoni.bjorm.LockMode.UPDATE);
             throw new AssertionError("PG tenant lock acquired inside an implicit auto transaction");
         } catch(IllegalStateException expected) {}
         try {
-            guarded.lockRows(ItUser.class,ItUser_.name.eq("x"),
+            guarded.lockRows(ItUser.class,WItUser.itUser.name.eq("x"),
                 com.github.rfdetoni.bjorm.LockMode.UPDATE_SKIP_LOCKED,1);
             throw new AssertionError("PG tenant lockRows acquired without explicit transaction");
         } catch(IllegalStateException expected) {}
@@ -145,7 +145,7 @@ public final class TenantSmokeTest {
         check(mysql.connections==mysqlBorrowed,"MySQL native SQL denied before JDBC checkout");
         int mysqlLockEvents=mysql.events.size();
         try {
-            mysqlGuarded.lockOne(ItUser.class,ItUser_.name.eq("x"),
+            mysqlGuarded.lockOne(ItUser.class,WItUser.itUser.name.eq("x"),
                 com.github.rfdetoni.bjorm.LockMode.UPDATE);
             throw new AssertionError("MySQL tenant lock acquired without explicit transaction");
         } catch(IllegalStateException expected) {}
@@ -166,17 +166,17 @@ public final class TenantSmokeTest {
         // subquery; otherwise generated DSL could bypass tenant-scoped search_path.
         try {
             SqlSubqueries.exists(StaticSchemaRecord_BjormMapper.INSTANCE,"s",
-                ItUser_.name.eq("bad"));
+                WItUser.itUser.name.eq("bad"));
             throw new AssertionError("Static cross-schema subquery was accepted");
         } catch(IllegalArgumentException expected) {}
         try {
             SqlSubqueries.exists(ItInvoice_BjormMapper.INSTANCE,"i;DROP TABLE users",
-                ItUser_.name.eq("bad"));
+                WItUser.itUser.name.eq("bad"));
             throw new AssertionError("Unsafe subquery alias was accepted");
         } catch(IllegalArgumentException expected) {}
         try {
-            SqlSubqueries.in(ItUser_.id,ItInvoice_BjormMapper.INSTANCE,"i",
-                ItInvoice_.customerId.as("other"),ItInvoice_.reference.as("i").eq("bad"));
+            SqlSubqueries.in(WItUser.itUser.id,ItInvoice_BjormMapper.INSTANCE,"i",
+                WItInvoice.itInvoice.as("other").customerId,WItInvoice.itInvoice.as("i").reference.eq("bad"));
             throw new AssertionError("A projection from a foreign subquery alias was accepted");
         } catch(IllegalArgumentException expected) {}
         Spy isolatedA=new Spy(),isolatedB=new Spy();

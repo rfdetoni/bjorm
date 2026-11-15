@@ -100,7 +100,7 @@ class BjormBootApplicationContextIntegrationTest {
                     UUID second=UUID.randomUUID(), third=UUID.randomUUID();
                     a.insertReturning(new BjormSpringRealDatabaseTest.Row(second,"same",0));
                     a.insertReturning(new BjormSpringRealDatabaseTest.Row(third,"same",0));
-                    BjormPages pages=new BjormPages(a,10_000,7);
+                    BjormPages pages=context.getBean(BjormPages.class).forTenant(tenantA);
                     var byLabel=Sort.by("label");
                     var page0=pages.slice(BjormSpringRealDatabaseTest.Row.class,PageRequest.of(0,1,byLabel));
                     var page1=pages.slice(BjormSpringRealDatabaseTest.Row.class,PageRequest.of(1,1,byLabel));

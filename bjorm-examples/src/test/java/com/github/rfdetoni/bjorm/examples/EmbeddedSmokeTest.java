@@ -12,8 +12,8 @@ public final class EmbeddedSmokeTest {
         check(recordMapper.columnFor("address.street").equals("shipping_street") &&
               recordMapper.columnFor("address.zipCode").equals("shipping_postal"),
             "nested Java property names are statically mapped to SQL identifiers");
-        check(ItEmbeddedRecord_.address_street!=null &&
-              ItEmbeddedRecord_.address_zipCode!=null,
+        check(WItEmbeddedRecord.itEmbeddedRecord.address_street!=null &&
+              WItEmbeddedRecord.itEmbeddedRecord.address_zipCode!=null,
             "type-safe nested paths are generated");
         UUID id=UUID.randomUUID();
         ItAddress value=new ItAddress("Avenue","89201");

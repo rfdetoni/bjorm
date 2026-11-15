@@ -60,7 +60,7 @@ public final class GraphSharedRelationSmokeTest {
             "backup branch must hydrate its own children");
         try {
             db.select(ItSharedRoot.class).as("r")
-                .orderBy(ItSharedLeaf_.label.as("leaf").asc()).fetch();
+                .orderBy(WItSharedLeaf.itSharedLeaf.as("leaf").label.asc()).fetch();
             throw new AssertionError("ORDER BY joined-only graph property should fail");
         }catch(IllegalArgumentException expected){
             check(expected.getMessage().contains("root columns"),"clear graph sorting error");

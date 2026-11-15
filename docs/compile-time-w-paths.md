@@ -1,15 +1,9 @@
 # Compile-time W* paths and SQL execution
 
-BJORM generates two source-level metamodels for each public `@Table` entity:
-
-- **`WProduct` (preferred)**: typed, aliased query paths for all new code.
-- **`Product_` (compatibility)**: legacy static `Field<T>` constants, generated with unchanged behavior so existing applications continue to compile.
-
-A third generated type, `Product_BjormMapper`, handles JDBC bindings, SQL and rows.
-It is infrastructure, **not** a public query facade. Neither query metamodel
-creates an ORM session, dirty checking or a global database context.
-
-Neither metamodel uses runtime entity reflection, proxies, dirty checking, sessions or a second-level entity cache.
+BJORM generates one typed query metamodel, `WProduct`, and one JDBC infrastructure
+mapper, `Product_BjormMapper`, for each public `@Table` entity. The legacy
+`Product_` metamodel is no longer generated. Neither generated type uses runtime
+entity reflection, proxies, dirty checking, sessions or a second-level cache.
 
 ## Usage
 
@@ -21,7 +15,7 @@ List<Product> rows = WProduct.find(db) // explicit Operations/Bjorm context
     .limit(50)
     .fetch();
 
-// With a custom root alias, keep using the existing selectFrom path:
+// With a custom root alias, use selectFrom:
 WProduct named = WProduct.product.as("p");
 List<Product> namedRows = db.selectFrom(named)
     .where(named.name.eq("Pencil"))
@@ -68,15 +62,10 @@ new alias; aliases are per query, not globally allocated. Eager graph joins
 follow the same positional numbering within their generated SELECT scope.
 Nested CTE SELECTs start a fresh scope with `t0`.
 
-Manually supplied aliases and native `@Query` statements are preserved. The
-existing static `Entity_` fields remain unqualified for source compatibility.
-Keep them in pre-existing code; write new queries with `W*`:
+Manually supplied aliases and native `@Query` statements are preserved.
+The generated typed path is the only metamodel:
 
 ```java
-// Old code: still compiles, no removal or warning introduced.
-db.select(Product.class).where(Product_.name.eq("Pencil")).fetch();
-
-// New code: same JDBC engine, typed path with deterministic t0.
 WProduct p = WProduct.product;
 WProduct.find(db).where(p.name.eq("Pencil")).fetch();
 ```
@@ -106,3 +95,20 @@ an entity lifecycle manager is not part of this change.
 JOIN pagination, graph shape limits, and transaction ownership continue
 to follow the existing BJORM contracts. Apply tenant authorization through
 the caller's authorized `Bjorm.forTenant(...)` context.
+
+
+In tenant-required mode, compiled `@Query` methods still use native SQL.
+They require an explicitly authorized, tenant-scoped context with
+`permitReviewedTenantNativeSql()` and database permissions that prevent
+cross-tenant access. SQL compilation alone does not constitute authorization.
+
+
+## Root-only reads for expensive entity graphs
+
+Mapped `@Children` and `@ManyToOne` relations are eagerly hydrated by default.
+When only root columns are required, use `.withoutRelations()` on a typed
+`Select<T>`: `WOrder.find(db).withoutRelations().where(WOrder.order.id.eq(id)).fetch()`.
+This uses one flat SELECT and skips graph `JOIN`/`UNION ALL` expansion.
+The returned entity's relation properties are not hydrated; avoid depending
+on them until explicitly fetched. Root-only selections also support
+`withStream`, whose cursor must be consumed inside its callback.

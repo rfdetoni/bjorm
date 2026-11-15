@@ -25,11 +25,10 @@ The portable `verify.sh` also compiles and executes the source on Java 21 for sm
 
 ## Usage: POJO, Active Record and the preferred W* query DSL
 
-**For new queries use the generated `WEntity` path** (for example `WProduct`) with
+**Use the generated `WEntity` path** (for example `WProduct`) with
 `WProduct.find(db)` or `db.selectFrom(WProduct.product)`. Both use the same
-generated JDBC mapper and explicit connection/tenant context. The previous
-`Product_` metamodel stays generated and fully supported for existing sources;
-there is no migration deadline, global session, or dependency on Hibernate.
+generated JDBC mapper and explicit connection/tenant context. `WEntity` is the
+only generated query metamodel; no global session or Hibernate dependency exists.
 `Product_BjormMapper` remains a generated infrastructure component, not
 a query API that application services should call directly.
 
@@ -44,7 +43,7 @@ public class Product implements ActiveRecord<Product> {
     // public getters and setters for all fields
 }
 
-// Generated: Product_BjormMapper (JDBC), WProduct (preferred DSL), Product_ (legacy).
+// Generated: Product_BjormMapper (JDBC), WProduct (typed query DSL).
 var db = Bjorm.open(dataSource);    // discover generated mappers once at startup
 // Or: Bjorm.open(dataSource, Product_BjormMapper.INSTANCE) for explicit registration.
 Product p = new Product();
@@ -73,7 +72,7 @@ aliases in typed joins. `find(db)` is a static convenience method on the
 generated **W-class**, not on the entity: `Product.find()` is not generated.
 Use `.eq(...)` for predicates (not `.equals(...)`, which is Java object
 equality). Use `@Query` for fixed, complex SQL and generated projections for
-small result shapes. The legacy `Entity_` paths remain available unchanged.
+small result shapes. Legacy `Entity_` classes are no longer generated.
 See [W* DSL guide](docs/compile-time-w-paths.md).
 
 ## Explicit primary-key generation strategy
@@ -495,7 +494,7 @@ Use **Java property names**, not SQL column names. The processor compiles the ma
 List<Map<String,Object>> products = db.findFields(
     Product.class, WProduct.product.name.eq("Pencil"), "id", "name", "price"
 );
-// SELECT id, name, unit_price FROM products WHERE name = ?
+// SELECT t0.id, t0.name, t0.unit_price FROM products t0 WHERE t0.name = ?
 
 Optional<Map<String,Object>> one = db.findOneFields(
     Product.class, WProduct.product.name.eq("Pencil"), "name", "price"
@@ -503,8 +502,8 @@ Optional<Map<String,Object>> one = db.findOneFields(
 
 var ordered = db.select(Product.class).as("p")
     .fields("name", "price")
-    .where(Product_.name.as("p").like("P%"))
-    .orderBy(Product_.name.as("p").asc())
+    .where(WProduct.product.as("p").name.like("P%"))
+    .orderBy(WProduct.product.as("p").name.asc())
     .limit(20).fetch();
 ```
 
@@ -564,9 +563,35 @@ The processor converts named parameters into JDBC `?` and generates positional b
 - `@Version` on int/long columns uses `UPDATE ... SET version = version+1 WHERE id=? AND version=?` and conditional delete. **Re-read the entity after successful updates:** versions are not mutated automatically, especially on records.
 - `db.batchInsert` and `batchUpdate` use up to 256 rows per JDBC batch within one transaction; version-controlled unknown batch counts are rejected instead of assuming successful locking. `batchInsert` **rejects entity types with `@Children`**, instead of silently dropping child rows; use `insertReturning()` for a graph.
 - SELECT methods apply the configured `fetchSize` JDBC hint; this is not a hard client-side memory bound. PostgreSQL cursors require `autoCommit=false` to stream incrementally. `db.forEach` and `db.scan(sql, binder, mapper, consumer)` therefore retain explicit transaction boundaries. Resources close before the scan returns; do not keep row cursors outside the callback.
-- Explicit DSL joins are supported: `db.select(Product.class).as("p").join(User.class, "u", Product_.id.as("p").sameAs(User_.id.as("u"))).fetch()`; aliases and columns are validated, and ON parameters precede WHERE parameters.
+- Explicit DSL joins are supported: `db.select(Product.class).as("p").join(User.class, "u", WProduct.product.as("p").id.sameAs(WUser.user.as("u").id)).fetch()`; identifiers are validated, and ON parameters precede WHERE parameters. BJORM does not interpret arbitrary ON SQL using regex.
 - `@Json String payload` generates `CAST(? AS jsonb)` for PostgreSQL; callers provide serialized JSON. No JSON codec dependency in core.
 - Call `db.query(sql, binder, mapper)` for manually optimized SQL; map DTOs using generated `@Projection` readers.
+
+### Multitenant paging and compiled SQL
+
+For an authorized tenant, bind the injected pagination helper before querying:
+`BjormPages pages = injectedPages.forTenant(authorizedTenantSchema);`.
+The unscoped pagination bean cannot execute tenant-required SQL. The tenant identifier
+must be authorized by the service or IAM, not accepted directly from request input.
+Compiled `@Query` repositories are native SQL and remain denied in tenant-required
+contexts without an explicitly reviewed `permitReviewedTenantNativeSql()`
+context and least-privileged per-tenant database permissions.
+
+### Multi-row INSERT through JDBC driver batch rewriting
+
+`batchInsert` uses `PreparedStatement.addBatch()/executeBatch()` with a bounded
+chunk size (configurable `bjorm.jdbc.batch-size`, default 256). For compatible
+INSERTs, configure the **DataSource/driver** rather than duplicating the mapper:
+
+- PostgreSQL JDBC: `jdbc:postgresql://host/db?reWriteBatchedInserts=true`
+- MySQL Connector/J: `jdbc:mysql://host/db?rewriteBatchedStatements=true`
+
+The drivers may rewrite one-row prepared INSERT batches as a multi-values SQL
+statement. Rewriting is not guaranteed for every shape; PostgreSQL statements
+with `RETURNING` are not rewritten. Generated-ID, versioned UPSERT and graph
+inserts retain their existing correctness checks. MySQL rewritten UPSERTs can
+report `SUCCESS_NO_INFO` instead of per-row counts, which cannot establish
+optimistic-lock success. Benchmark before changing default chunk budgets.
 
 ## Optional Spring Boot 4 integration
 
@@ -867,7 +892,7 @@ Without an explicit prefix, BJORM uses `propertyName_`. Scalar value
 attributes can use `@Column`, `@EnumOrdinal` and `@Json`; the generated
 mappers expand and reconstruct the value with direct constructor calls.
 Native `updateBy` accepts the exact Java path `"shipping.street"`, while
-the generated typed DSL exposes `Customer_.shipping_street`.
+the generated typed DSL exposes `WCustomer.customer.shipping_street`.
 
 The embedded value is required for INSERT and UPDATE (null owners are
 rejected before execution). Recursive/nested embedded types and embedded
@@ -1011,7 +1036,7 @@ the default is `LEFT` to preserve previous entity-loading semantics.
 ```java
 var orders = db.select(ItOrder.class).as("o")
     .leftJoin(ItOrderLine.class,"l")
-    .on(ItOrder_.id.as("o").sameAs(ItOrderLine_.orderId.as("l")))
+    .on(WItOrder.itOrder.as("o").id.sameAs(WItOrderLine.itOrderLine.as("l").orderId))
     .fetch();
 ```
 
@@ -1089,17 +1114,17 @@ table names or end-user SQL. Pass a **compile-time mapper**, a validated alias
 and a `SqlPredicate` made from generated `Field<T>` values:
 
 ```java
-SqlPredicate linked = ItInvoice_.customerId.as("i")
-    .sameAs(ItUser_.id.as("u"))
-    .and(ItInvoice_.reference.as("i").eq("INV-42"));
+SqlPredicate linked = WItInvoice.itInvoice.as("i").customerId
+    .sameAs(WItUser.itUser.as("u").id)
+    .and(WItInvoice.itInvoice.as("i").reference.eq("INV-42"));
 
 List<ItUser> customers = db.select(ItUser.class).as("u")
     .where(SqlSubqueries.exists(ItInvoice_BjormMapper.INSTANCE, "i", linked))
     .fetch();
 
 // Also available: SqlSubqueries.notExists(...), and
-// SqlSubqueries.in(ItUser_.id.as("u"), ItInvoice_BjormMapper.INSTANCE,
-//                  "i", ItInvoice_.customerId.as("i"), filter).
+// SqlSubqueries.in(WItUser.itUser.as("u").id, ItInvoice_BjormMapper.INSTANCE,
+//                  "i", WItInvoice.itInvoice.as("i").customerId, filter).
 ```
 
 Aliases and table identifiers are strictly validated; `SqlSubqueries`
@@ -1155,9 +1180,9 @@ dialect and a generated mapped `Field`:
 
 ```java
 SqlPredicate filter = SqlJsonPredicates.contains(
-    ItDocument_.payload, db.dialect(), "{\"published\":true}");
+    WItDocument.itDocument.payload, db.dialect(), "{\"published\":true}");
 SqlPredicate matching = SqlJsonPredicates.textEquals(
-    ItDocument_.payload, db.dialect(), List.of("meta", "status"), "ready");
+    WItDocument.itDocument.payload, db.dialect(), List.of("meta", "status"), "ready");
 ```
 
 `textEquals` binds each PostgreSQL `jsonb_extract_path_text` key
