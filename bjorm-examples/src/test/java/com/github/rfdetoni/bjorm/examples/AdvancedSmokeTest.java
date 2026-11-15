@@ -357,13 +357,13 @@ public final class AdvancedSmokeTest {
         // FindOne must return Optional, fetch a single row server-side, and bind filters.
         Optional<Product> first=db.findOne(Product.class,WProduct.product.name.eq("Pencil"));
         check(first.isPresent() && first.get().getName().equals("Pencil"),"findOne maps matching entity");
-        check(spy.last().sql().equals("SELECT t0.id, t0.name, t0.unit_price, t0.status, t0.version FROM products t0 WHERE name = ? LIMIT ?"),"findOne pushes LIMIT 1 to SQL");
+        check(spy.last().sql().equals("SELECT t0.id, t0.name, t0.unit_price, t0.status, t0.version FROM products t0 WHERE t0.name = ? LIMIT ?"),"findOne pushes LIMIT 1 to SQL");
         check(spy.last().binds().equals(Map.of(1,"Pencil",2,1)),"findOne binds filter and LIMIT 1");
         check(db.count(Product.class,WProduct.product.name.eq("Pencil"))==3L,"count avoids entity materialization");
-        check(spy.last().sql().equals("SELECT COUNT(*) FROM products t0 WHERE name = ?"),"count uses single SQL aggregate");
+        check(spy.last().sql().equals("SELECT COUNT(*) FROM products t0 WHERE t0.name = ?"),"count uses single SQL aggregate");
         check(spy.last().binds().equals(Map.of(1,"Pencil")),"count predicate bound");
         check(db.exists(Product.class,WProduct.product.name.eq("Pencil")),"exists returns true");
-        check(spy.last().sql().equals("SELECT 1 FROM products t0 WHERE name = ? LIMIT 1"),"exists does not count all rows");
+        check(spy.last().sql().equals("SELECT 1 FROM products t0 WHERE t0.name = ? LIMIT 1"),"exists does not count all rows");
         check(spy.last().binds().equals(Map.of(1,"Pencil")),"exists predicate bound");
         // Generated W* qualified predicates must work across all read entry points.
         check(db.count(Product.class,WProduct.product.name.eq("Pencil"))==3L,
@@ -414,7 +414,7 @@ public final class AdvancedSmokeTest {
         db.tx(tx -> {
             check(tx.lockOne(Product.class,WProduct.product.name.eq("Pencil"),LockMode.UPDATE),
                 "transaction FOR UPDATE returns existing row");
-            check(spy.last().sql().equals("SELECT t0.id FROM products t0 WHERE name = ? LIMIT 1 FOR UPDATE"),
+            check(spy.last().sql().equals("SELECT t0.id FROM products t0 WHERE t0.name = ? LIMIT 1 FOR UPDATE"),
                 "mapped row lock SQL");
             check(spy.last().binds().equals(Map.of(1,"Pencil")),"row lock binds typed predicate");
             check(tx.lockOne(Product.class,WProduct.product.name.eq("Pencil"),LockMode.UPDATE),
@@ -438,17 +438,17 @@ public final class AdvancedSmokeTest {
         check(projected.size()==1,"findFields returns results");
         check(projected.getFirst().get("price").equals(new BigDecimal("12.50")),"findFields reads @Column renamed property");
         check(projected.getFirst().get("status")==Status.ACTIVE,"findFields generated enum reader");
-        check(spy.last().sql().equals("SELECT t0.name, t0.unit_price, t0.status FROM products t0 WHERE name = ?"),"findFields generates column-restricted SQL");
+        check(spy.last().sql().equals("SELECT t0.name, t0.unit_price, t0.status FROM products t0 WHERE t0.name = ?"),"findFields generates column-restricted SQL");
         check(spy.last().binds().equals(Map.of(1,"Pencil")),"findFields binds filter");
         List<BigDecimal> prices=db.findColumn(Product.class,"price",BigDecimal.class,WProduct.product.name.eq("Pencil"));
         check(prices.equals(List.of(new BigDecimal("12.50"))),"findColumn reads scalar using generated mapper");
-        check(spy.last().sql().equals("SELECT t0.unit_price FROM products t0 WHERE name = ?"),"findColumn selects only requested column");
+        check(spy.last().sql().equals("SELECT t0.unit_price FROM products t0 WHERE t0.name = ?"),"findColumn selects only requested column");
         check(db.findColumn(Product.class,"version",int.class).equals(List.of(0)),
             "primitive int.class is boxed for scalarList");
         check(db.findColumnOne(Product.class,"version",int.class).orElseThrow()==0,
             "primitive int.class is boxed for scalarOne");
         check(db.findColumnOne(Product.class,"name",String.class,WProduct.product.name.eq("Pencil")).orElseThrow().equals("Pencil"),"findColumnOne typed Optional");
-        check(spy.last().sql().equals("SELECT t0.name FROM products t0 WHERE name = ? LIMIT ?"),"findColumnOne limits at database");
+        check(spy.last().sql().equals("SELECT t0.name FROM products t0 WHERE t0.name = ? LIMIT ?"),"findColumnOne limits at database");
         check(db.select(Product.class).fields("name").values(String.class).equals(List.of("Pencil")),"DSL values without Map");
         check(db.select(Product.class).fields("name").firstValue(String.class).orElseThrow().equals("Pencil"),"DSL firstValue without Map");
 
