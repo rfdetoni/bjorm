@@ -33,6 +33,10 @@ public final class BjormPages {
         this.maxOffset = maxOffset;
         this.maxPageSize = maxPageSize;
     }
+    /** Bind pagination to an explicitly authorized tenant, retaining configured budgets. */
+    public BjormPages forTenant(String authorizedSchema) {
+        return new BjormPages(db.forTenant(authorizedSchema), maxOffset, maxPageSize);
+    }
     public long maxOffset() {return maxOffset;}
     public int maxPageSize() {return maxPageSize;}
     private void checkOffset(Pageable pageable) {
