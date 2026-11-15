@@ -59,7 +59,7 @@ public final class GraphQuerySmokeTest {
         } catch(IllegalStateException expected) { check(expected.getMessage().contains("maxBufferedRows"),"bounded graph reads"); }
         int before=sqls.size();
         var filtered=db.select(ItOrder.class).as("o")
-            .join(ItOrderLine.class,"l").on(ItOrder_.id.as("o").sameAs(ItOrderLine_.orderId.as("l")))
+            .join(ItOrderLine.class,"l").on(WItOrder.itOrder.as("o").id.sameAs(WItOrderLine.itOrderLine.as("l").orderId))
             .fetch();
         check(filtered.size()==1 && filtered.getFirst().getLines().size()==2,
             "QueryDSL explicit JOIN and children use one SQL");
@@ -68,7 +68,7 @@ public final class GraphQuerySmokeTest {
             "matched roots deduplicated before expanding child collections");
         try {
             db.select(ItOrder.class).as("o").rightJoin(ItOrderLine.class,"l")
-                .on(ItOrder_.id.as("o").sameAs(ItOrderLine_.orderId.as("l"))).limit(1).fetch();
+                .on(WItOrder.itOrder.as("o").id.sameAs(WItOrderLine.itOrderLine.as("l").orderId)).limit(1).fetch();
             throw new AssertionError("Expected paginated explicit JOIN guard");
         } catch(IllegalArgumentException expected) {
             check(expected.getMessage().contains("Paginating JOIN"),"unsafe joined pagination rejected");

@@ -176,16 +176,16 @@ public final class AdvancedSmokeTest {
         check(repo.rename("Pen",spy.id)==1,"@Query update");
         repo.literalSafety(spy.id);
         check(spy.last().sql().contains("':not_a_parameter'")&&spy.last().sql().contains("?::uuid -- :ignored"),"safe scanner preserves casts/strings/comments");
-        var selected=db.select(Product.class).where(Product_.name.in(List.of("Pencil","Pen"))
-                .and(Product_.version.between(0,2)).not()).orderBy(Product_.name.asc()).limit(10).offset(5).fetch();
+        var selected=db.select(Product.class).where(WProduct.product.name.in(List.of("Pencil","Pen"))
+                .and(WProduct.product.version.between(0,2)).not()).orderBy(WProduct.product.name.asc()).limit(10).offset(5).fetch();
         check(selected.size()==1,"typed selection returns rows");
-        check(spy.last().sql().contains("IN (?, ?)")&&spy.last().sql().endsWith(" ORDER BY name ASC LIMIT ? OFFSET ?"),"typed query SQL shape");
+        check(spy.last().sql().contains("IN (?, ?)")&&spy.last().sql().endsWith(" ORDER BY t0.name ASC LIMIT ? OFFSET ?"),"typed query SQL shape");
         check(spy.last().binds().get(5).equals(10)&&spy.last().binds().get(6).equals(5L),"pagination values parameterized");
-        check(Product_.name.in(List.of()).sql().equals("1 = 0"),"empty IN is false");
+        check(WProduct.product.name.in(List.of()).sql().equals("1 = 0"),"empty IN is false");
         db.select(Product.class).as("p")
-            .join(User.class,"u", Product_.id.as("p").sameAs(User_.id.as("u")))
-            .where(Product_.name.as("p").eq("Pencil"))
-            .orderBy(Product_.name.as("p").asc()).fetch();
+            .join(User.class,"u", WProduct.product.as("p").id.sameAs(WUser.user.as("u").id))
+            .where(WProduct.product.as("p").name.eq("Pencil"))
+            .orderBy(WProduct.product.as("p").name.asc()).fetch();
         check(spy.last().sql().equals("SELECT p.id, p.name, p.unit_price, p.status, p.version FROM products p INNER JOIN users u ON p.id = u.id WHERE p.name = ? ORDER BY p.name ASC"),"typed join compilation");
         check(spy.last().binds().equals(Map.of(1,"Pencil")),"typed join bind ordering");
         // t0 is the shared root alias for generated W* and the plain Select DSL.
@@ -202,7 +202,7 @@ public final class AdvancedSmokeTest {
             "generated W* find keeps the deterministic root alias and bound paging");
         check(spy.last().binds().equals(Map.of(1,"Pencil",2,5)),
             "generated W* find binds query params safely");
-        db.select(Product.class).where(Product_.name.eq("Pencil")).fetch();
+        db.select(Product.class).where(WProduct.product.name.eq("Pencil")).fetch();
         check(spy.last().sql().startsWith(
             "SELECT t0.id, t0.name, t0.unit_price, t0.status, t0.version FROM products t0"),
             "classic Select uses the same automatic root alias");
@@ -218,7 +218,7 @@ public final class AdvancedSmokeTest {
         check(spy.last().sql().contains(" INNER JOIN users t2 ON t0.id = t2.id"),
             "multiple typed joins allocate deterministic, distinct aliases");
         db.selectFrom(rootPath)
-            .join(User.class, "t1", rootPath.id.sameAs(User_.id.as("t1")))
+            .join(User.class, "t1", rootPath.id.sameAs(WUser.user.as("t1").id))
             .join(WUser.user, user -> rootPath.id.sameAs(user.id)).fetch();
         check(spy.last().sql().contains(" INNER JOIN users t2 ON t0.id = t2.id"),
             "auto aliases skip previously reserved explicit aliases");
@@ -259,34 +259,27 @@ public final class AdvancedSmokeTest {
         } catch(IllegalArgumentException expected) {
             check(expected.getMessage().contains("alias"), "generated aliases validated");
         }
-        try {
-            db.selectFrom(WProduct.product)
-                .join(WUser.user, u -> WProduct.product.id.sameAs(u.id)
-                    .or(WProduct.product.name.eq("ON_VALUE")))
-                .fetch();
-            throw new AssertionError("OR in JOIN ON must be rejected");
-        } catch(IllegalArgumentException expected) {
-            check(expected.getMessage().contains("OR is not supported"),
-                "OR JOIN guard must use regex word boundaries, not escaped literals");
-        }
+        db.selectFrom(WProduct.product)
+            .join(WUser.user, u -> WProduct.product.id.sameAs(u.id)
+                .or(WProduct.product.name.eq("ON_VALUE")))
+            .fetch();
+        check(spy.last().sql().contains(" OR "), "explicit JOIN ON supports valid SQL OR predicates");
         db.select(Product.class).as("p")
-            .join(User.class,"u",Product_.id.as("p").sameAs(User_.id.as("u"))
-                .and(Product_.name.as("p").eq("ON_VALUE")))
-            .where(Product_.name.as("p").eq("WHERE_VALUE")).fetch();
+            .join(User.class,"u",WProduct.product.as("p").id.sameAs(WUser.user.as("u").id)
+                .and(WProduct.product.as("p").name.eq("ON_VALUE")))
+            .where(WProduct.product.as("p").name.eq("WHERE_VALUE")).fetch();
         check(spy.last().binds().equals(Map.of(1,"ON_VALUE",2,"WHERE_VALUE")),"join ON parameters are bound before WHERE and LIMIT");
         try {
             db.select(Product.class).as("p")
-                .join(User.class,"u",Product_.id.as("p").sameAs(User_.id.as("u"))).limit(2).fetch();
+                .join(User.class,"u",WProduct.product.as("p").id.sameAs(WUser.user.as("u").id)).limit(2).fetch();
             throw new AssertionError("Paginated join accepted");
         } catch(IllegalArgumentException expected) {
             check(expected.getMessage().contains("Paginating JOIN"),"join pagination must fail closed");
         }
-        try {
-            db.select(Product.class).as("p").join(User.class,"u",Product_.name.as("p").eq("Pencil")).fetch();
-            throw new AssertionError("Cartesian join accepted");
-        } catch(IllegalArgumentException expected) {
-            check(expected.getMessage().contains("cartesian"),"cartesian join rejected");
-        }
+        db.select(Product.class).as("p")
+            .join(User.class,"u",WProduct.product.as("p").name.eq("Pencil")).fetch();
+        check(spy.last().sql().contains(" INNER JOIN users u ON p.name = ?"),
+            "explicit JOIN condition is emitted without incomplete regex-based SQL validation");
         AutoUuidPojo freshPojo=new AutoUuidPojo();freshPojo.setLabel("auto-pojo");db.insert(freshPojo);
         check(freshPojo.getId()!=null && freshPojo.getId().version()==7,"@Id UUID POJO generated without flags");
         AutoUuidRecord record=new AutoUuidRecord(null,"auto-record");
@@ -334,7 +327,7 @@ public final class AdvancedSmokeTest {
         check(spy.connections.get()==before+1,"batch and generated repo share transaction connection");
         check(spy.commits.get()==previousCommits+1,"batch committed");
         before=spy.calls.size();
-        db.forEach(Product.class, Product_.status.eq(Status.ACTIVE), item->check(item.getName().equals("Pencil"),"forEach row"));
+        db.forEach(Product.class, WProduct.product.status.eq(Status.ACTIVE), item->check(item.getName().equals("Pencil"),"forEach row"));
         check(spy.calls.size()==before+1,"forEach executed single query");
         db.scan("SELECT id, name FROM products WHERE name = ?", ps->ps.setString(1,"Pencil"),ProductSummary_BjormRowMapper.INSTANCE,
             row->check(row.name().equals("Pencil"),"native projection cursor"));
@@ -362,14 +355,14 @@ public final class AdvancedSmokeTest {
               "callback failure rolls back and closes JDBC resources");
 
         // FindOne must return Optional, fetch a single row server-side, and bind filters.
-        Optional<Product> first=db.findOne(Product.class,Product_.name.eq("Pencil"));
+        Optional<Product> first=db.findOne(Product.class,WProduct.product.name.eq("Pencil"));
         check(first.isPresent() && first.get().getName().equals("Pencil"),"findOne maps matching entity");
         check(spy.last().sql().equals("SELECT t0.id, t0.name, t0.unit_price, t0.status, t0.version FROM products t0 WHERE name = ? LIMIT ?"),"findOne pushes LIMIT 1 to SQL");
         check(spy.last().binds().equals(Map.of(1,"Pencil",2,1)),"findOne binds filter and LIMIT 1");
-        check(db.count(Product.class,Product_.name.eq("Pencil"))==3L,"count avoids entity materialization");
+        check(db.count(Product.class,WProduct.product.name.eq("Pencil"))==3L,"count avoids entity materialization");
         check(spy.last().sql().equals("SELECT COUNT(*) FROM products t0 WHERE name = ?"),"count uses single SQL aggregate");
         check(spy.last().binds().equals(Map.of(1,"Pencil")),"count predicate bound");
-        check(db.exists(Product.class,Product_.name.eq("Pencil")),"exists returns true");
+        check(db.exists(Product.class,WProduct.product.name.eq("Pencil")),"exists returns true");
         check(spy.last().sql().equals("SELECT 1 FROM products t0 WHERE name = ? LIMIT 1"),"exists does not count all rows");
         check(spy.last().binds().equals(Map.of(1,"Pencil")),"exists predicate bound");
         // Generated W* qualified predicates must work across all read entry points.
@@ -413,13 +406,13 @@ public final class AdvancedSmokeTest {
 
 
         try {
-            db.lockOne(Product.class,Product_.name.eq("Pencil"),LockMode.UPDATE);
+            db.lockOne(Product.class,WProduct.product.name.eq("Pencil"),LockMode.UPDATE);
             throw new AssertionError("row locks must require active transaction");
         } catch(IllegalStateException expected) {
             check(expected.getMessage().contains("active transaction"),"no autocommit lock");
         }
         db.tx(tx -> {
-            check(tx.lockOne(Product.class,Product_.name.eq("Pencil"),LockMode.UPDATE),
+            check(tx.lockOne(Product.class,WProduct.product.name.eq("Pencil"),LockMode.UPDATE),
                 "transaction FOR UPDATE returns existing row");
             check(spy.last().sql().equals("SELECT t0.id FROM products t0 WHERE name = ? LIMIT 1 FOR UPDATE"),
                 "mapped row lock SQL");
@@ -430,40 +423,40 @@ public final class AdvancedSmokeTest {
                 "SELECT t0.id FROM products t0 WHERE t0.name = ? LIMIT 1 FOR UPDATE"),
                 "row lock declares and qualifies t0");
 
-            check(tx.lockOne(Product.class,Product_.name.eq("Pencil"),LockMode.SHARE),
+            check(tx.lockOne(Product.class,WProduct.product.name.eq("Pencil"),LockMode.SHARE),
                 "transaction FOR SHARE returns existing row");
             check(spy.last().sql().endsWith("LIMIT 1 FOR SHARE"),"shared row lock SQL");
         });
         spy.noRows=true;
-        check(!db.exists(Product.class,Product_.name.eq("missing")),"exists returns false for empty result");
-        check(db.findOne(Product.class,Product_.name.eq("missing")).isEmpty(),"findOne returns empty Optional");
-        check(db.findOneFields(Product.class,Product_.name.eq("missing"),"name").isEmpty(),"findOneFields no row");
+        check(!db.exists(Product.class,WProduct.product.name.eq("missing")),"exists returns false for empty result");
+        check(db.findOne(Product.class,WProduct.product.name.eq("missing")).isEmpty(),"findOne returns empty Optional");
+        check(db.findOneFields(Product.class,WProduct.product.name.eq("missing"),"name").isEmpty(),"findOneFields no row");
         spy.noRows=false;
 
         // Explicit Java properties, including @Column renaming, must restrict SQL columns.
-        var projected=db.findFields(Product.class,Product_.name.eq("Pencil"),"name","price","status");
+        var projected=db.findFields(Product.class,WProduct.product.name.eq("Pencil"),"name","price","status");
         check(projected.size()==1,"findFields returns results");
         check(projected.getFirst().get("price").equals(new BigDecimal("12.50")),"findFields reads @Column renamed property");
         check(projected.getFirst().get("status")==Status.ACTIVE,"findFields generated enum reader");
         check(spy.last().sql().equals("SELECT t0.name, t0.unit_price, t0.status FROM products t0 WHERE name = ?"),"findFields generates column-restricted SQL");
         check(spy.last().binds().equals(Map.of(1,"Pencil")),"findFields binds filter");
-        List<BigDecimal> prices=db.findColumn(Product.class,"price",BigDecimal.class,Product_.name.eq("Pencil"));
+        List<BigDecimal> prices=db.findColumn(Product.class,"price",BigDecimal.class,WProduct.product.name.eq("Pencil"));
         check(prices.equals(List.of(new BigDecimal("12.50"))),"findColumn reads scalar using generated mapper");
         check(spy.last().sql().equals("SELECT t0.unit_price FROM products t0 WHERE name = ?"),"findColumn selects only requested column");
         check(db.findColumn(Product.class,"version",int.class).equals(List.of(0)),
             "primitive int.class is boxed for scalarList");
         check(db.findColumnOne(Product.class,"version",int.class).orElseThrow()==0,
             "primitive int.class is boxed for scalarOne");
-        check(db.findColumnOne(Product.class,"name",String.class,Product_.name.eq("Pencil")).orElseThrow().equals("Pencil"),"findColumnOne typed Optional");
+        check(db.findColumnOne(Product.class,"name",String.class,WProduct.product.name.eq("Pencil")).orElseThrow().equals("Pencil"),"findColumnOne typed Optional");
         check(spy.last().sql().equals("SELECT t0.name FROM products t0 WHERE name = ? LIMIT ?"),"findColumnOne limits at database");
         check(db.select(Product.class).fields("name").values(String.class).equals(List.of("Pencil")),"DSL values without Map");
         check(db.select(Product.class).fields("name").firstValue(String.class).orElseThrow().equals("Pencil"),"DSL firstValue without Map");
 
-        var nullColumn=db.findOneFields(Product.class,Product_.name.eq("Pencil"),"status").orElseThrow();
+        var nullColumn=db.findOneFields(Product.class,WProduct.product.name.eq("Pencil"),"status").orElseThrow();
         check(nullColumn.containsKey("status") && nullColumn.get("status")==null,"selected SQL NULL survives in property Map");
 
         var byDsl=db.select(Product.class).as("p").fields("name","price")
-            .where(Product_.name.as("p").eq("Pencil")).orderBy(Product_.price.as("p").desc()).limit(2).fetch();
+            .where(WProduct.product.as("p").name.eq("Pencil")).orderBy(WProduct.product.as("p").price.desc()).limit(2).fetch();
         check(byDsl.getFirst().get("name").equals("Pencil"),"DSL named properties");
         check(spy.last().sql().equals("SELECT p.name, p.unit_price FROM products p WHERE p.name = ? ORDER BY p.unit_price DESC LIMIT ?"),"qualified projected SQL");
         check(spy.last().binds().equals(Map.of(1,"Pencil",2,2)),"qualified projected bind order");
@@ -473,7 +466,7 @@ public final class AdvancedSmokeTest {
         check(projectedDto.size()==1&&projectedDto.getFirst().name().equals("Pencil"),"generated record projection without Maps");
         check(spy.last().sql().equals("SELECT t0.id, t0.name FROM products t0"),"record projection selects exactly two columns");
         check(db.select(Product.class).fields("id","name").first(ProductSummary_BjormRowMapper.INSTANCE).isPresent(),"first typed record projection");
-        check(db.select(Product.class).where(Product_.name.eq("Pencil")).first().isPresent(),"DSL first entity");
+        check(db.select(Product.class).where(WProduct.product.name.eq("Pencil")).first().isPresent(),"DSL first entity");
         int beforeCache=spy.calls.size();
         db.tx(tx -> {
             Product cached=tx.find(Product.class,spy.id);
@@ -494,12 +487,12 @@ public final class AdvancedSmokeTest {
         });
         int startConns=spy.connections.get();
         db.tx(tx -> {
-            check(tx.count(Product.class,Product_.name.eq("Pencil"))==3L,"count stays in transaction");
-            check(tx.exists(Product.class,Product_.name.eq("Pencil")),"exists stays in transaction");
-            check(tx.findOne(Product.class,Product_.name.eq("Pencil")).isPresent(),"findOne in transaction");
+            check(tx.count(Product.class,WProduct.product.name.eq("Pencil"))==3L,"count stays in transaction");
+            check(tx.exists(Product.class,WProduct.product.name.eq("Pencil")),"exists stays in transaction");
+            check(tx.findOne(Product.class,WProduct.product.name.eq("Pencil")).isPresent(),"findOne in transaction");
             check(WProduct.find(tx).where(WProduct.product.name.eq("Pencil")).first().isPresent(),
                 "generated W* find works with scoped transaction Operations");
-            check(tx.findFields(Product.class,Product_.name.eq("Pencil"),"name").size()==1,"findFields in transaction");
+            check(tx.findFields(Product.class,WProduct.product.name.eq("Pencil"),"name").size()==1,"findFields in transaction");
         });
         check(spy.connections.get()==startConns+1,"select projections respect tx connection");
         for(String bad:new String[]{"notAProperty","name; DROP TABLE products"}){
@@ -511,7 +504,7 @@ public final class AdvancedSmokeTest {
         try{db.select(Product.class).fields();throw new AssertionError("empty fields must fail");}
         catch(IllegalArgumentException expected){}
 
-        var joinOn = Product_.id.as("p").sameAs(User_.id.as("u"));
+        var joinOn = WProduct.product.as("p").id.sameAs(WUser.user.as("u").id);
         db.select(Product.class).as("p").join(User.class,"u").on(joinOn).fetch();
         check(spy.last().sql().contains(" INNER JOIN users u ON p.id = u.id"),"QueryDSL INNER JOIN");
         db.select(Product.class).as("p").leftJoin(User.class,"u").on(joinOn).fetch();

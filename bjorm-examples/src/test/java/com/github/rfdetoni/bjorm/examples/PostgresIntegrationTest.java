@@ -141,14 +141,14 @@ public final class PostgresIntegrationTest {
                 loadedLink.invoice().customer().id().equals(invoiceCustomer.id()) &&
                 multiHopQueries.get()==1,
                 "PostgreSQL nested to-one references hydrate from exactly one SQL SELECT");
-            check(db.select(ItInvoiceLink.class).where(ItInvoiceLink_.id.eq(link.id()))
+            check(db.select(ItInvoiceLink.class).where(WItInvoiceLink.itInvoiceLink.id.eq(link.id()))
                 .limit(1).fetch().getFirst().invoice().customer()!=null,
                 "PostgreSQL root paging remains correct for two-hop to-one graph");
             ItInvoiceLink emptyLink=db.insertReturning(new ItInvoiceLink(null,null,"missing-parent",null));
             check(db.find(ItInvoiceLink.class,emptyLink.id()).invoice()==null,
                 "PostgreSQL outer nullable to-one preserves the root");
-            SqlPredicate correlated=ItInvoice_.customerId.as("i").sameAs(ItUser_.id.as("u"))
-                .and(ItInvoice_.reference.as("i").eq("invoice-linked"));
+            SqlPredicate correlated=WItInvoice.itInvoice.as("i").customerId.sameAs(WItUser.itUser.as("u").id)
+                .and(WItInvoice.itInvoice.as("i").reference.eq("invoice-linked"));
             check(db.select(ItUser.class).as("u")
                 .where(SqlSubqueries.exists(ItInvoice_BjormMapper.INSTANCE,"i",correlated))
                 .fetch().stream().anyMatch(entry->invoiceCustomer.id().equals(entry.id())),
@@ -158,14 +158,14 @@ public final class PostgresIntegrationTest {
                 .fetch().stream().noneMatch(entry->invoiceCustomer.id().equals(entry.id())),
                 "PostgreSQL typed correlated NOT EXISTS");
             check(db.select(ItUser.class).as("u")
-                .where(SqlSubqueries.in(ItUser_.id.as("u"),
-                    ItInvoice_BjormMapper.INSTANCE,"i",ItInvoice_.customerId.as("i"),
-                    ItInvoice_.reference.as("i").eq("invoice-linked")))
+                .where(SqlSubqueries.in(WItUser.itUser.as("u").id,
+                    ItInvoice_BjormMapper.INSTANCE,"i",WItInvoice.itInvoice.as("i").customerId,
+                    WItInvoice.itInvoice.as("i").reference.eq("invoice-linked")))
                 .fetch().stream().anyMatch(entry->invoiceCustomer.id().equals(entry.id())),
                 "PostgreSQL typed IN subquery with prepared bound filter");
 
-            check(db.select(ItInvoice.class).where(ItInvoice_.customerId.eq(invoiceCustomer.id()))
-                    .orderBy(ItInvoice_.reference.asc()).limit(1).fetch().getFirst().customer()!=null,
+            check(db.select(ItInvoice.class).where(WItInvoice.itInvoice.customerId.eq(invoiceCustomer.id()))
+                    .orderBy(WItInvoice.itInvoice.reference.asc()).limit(1).fetch().getFirst().customer()!=null,
                 "PostgreSQL pageable ManyToOne root query");
             ItInvoice nullParent=db.insertReturning(new ItInvoice(null,null,"invoice-null",null));
             check(db.find(ItInvoice.class,nullParent.id()).customer()==null,
@@ -185,7 +185,7 @@ public final class PostgresIntegrationTest {
             check(embeddedAddress.equals(db.find(ItEmbeddedRecord.class,embedded.id()).address()),
                 "PostgreSQL embedded record value round-trip");
             check(db.updateBy(ItEmbeddedRecord.class,Map.of("address.street","New Street"),
-                    ItEmbeddedRecord_.id.eq(embedded.id()))==1 &&
+                    WItEmbeddedRecord.itEmbeddedRecord.id.eq(embedded.id()))==1 &&
                 db.find(ItEmbeddedRecord.class,embedded.id()).address().street().equals("New Street"),
                 "PostgreSQL embedded nested path is safely mapped in updateBy");
             ItEmbeddedPojo embeddedPojo=new ItEmbeddedPojo();
@@ -223,14 +223,14 @@ public final class PostgresIntegrationTest {
             check(db.find(ItConvertedRecord.class,converted.id()).amount().equals(converted.amount()),
                 "PostgreSQL generated JDBC converter round-trip");
             check(db.list(ItConvertedRecord.class,
-                ItConvertedRecord_.amount.eq(new MoneyValue(new BigDecimal("22.50")))).size()==1,
+                WItConvertedRecord.itConvertedRecord.amount.eq(new MoneyValue(new BigDecimal("22.50")))).size()==1,
                 "PostgreSQL typed equality converts domain values to JDBC parameters");
             check(db.list(ItConvertedRecord.class,
-                ItConvertedRecord_.amount.in(List.of(new MoneyValue(new BigDecimal("22.50"))))).size()==1,
+                WItConvertedRecord.itConvertedRecord.amount.in(List.of(new MoneyValue(new BigDecimal("22.50"))))).size()==1,
                 "PostgreSQL typed IN converts domain values");
             check(db.updateBy(ItConvertedRecord.class,
                 Map.of("amount",new MoneyValue(new BigDecimal("31.75"))),
-                ItConvertedRecord_.id.eq(converted.id()))==1 &&
+                WItConvertedRecord.itConvertedRecord.id.eq(converted.id()))==1 &&
                 db.find(ItConvertedRecord.class,converted.id()).amount().amount().compareTo(new BigDecimal("31.75"))==0,
                 "PostgreSQL generated converter supports bulk mapped update");
             UUID compositeTenant=UUID.randomUUID();
@@ -245,7 +245,7 @@ public final class PostgresIntegrationTest {
                 throw new AssertionError("stale composite key update accepted");}
             catch(OptimisticLockException expected) {}
             try {db.updateBy(ItCompositeRecord.class,Map.of("sku","changed"),
-                ItCompositeRecord_.sku.eq("ABC"));
+                WItCompositeRecord.itCompositeRecord.sku.eq("ABC"));
                 throw new AssertionError("composite key part changed via updateBy");}
             catch(IllegalArgumentException expected) {}
             ItCompositeRecord anotherComposite=db.insertReturning(
@@ -256,7 +256,7 @@ public final class PostgresIntegrationTest {
             check(hydratedComposite.product()!=null && hydratedComposite.product().equals(revisedComposite),
                 "PostgreSQL composite FK eager JOIN must match both ID parts");
             check(db.select(ItCompositeReference.class).where(
-                ItCompositeReference_.id.eq(linkedComposite.id())).limit(1).fetch().getFirst()
+                WItCompositeReference.itCompositeReference.id.eq(linkedComposite.id())).limit(1).fetch().getFirst()
                 .product().sku().equals("ABC"),"PostgreSQL composite FK root paging");
             ItCompositeReference optionalComposite=db.insertReturning(new ItCompositeReference(
                 null,null,null,"nullable",null));
@@ -311,10 +311,10 @@ public final class PostgresIntegrationTest {
             });
             check(tenantB.find(ItUser.class,sharedId).name().equals("Alice B"),"tenant B isolation");
             check(db.find(ItUser.class,sharedId)==null,"PostgreSQL tenant scope never leaks into public");
-            tenantA.tx(tx->tx.updateBy(ItUser.class,Map.of("age",33),ItUser_.id.eq(sharedId)));
+            tenantA.tx(tx->tx.updateBy(ItUser.class,Map.of("age",33),WItUser.itUser.id.eq(sharedId)));
             check(tenantA.find(ItUser.class,sharedId).age()==33 &&
                 tenantB.find(ItUser.class,sharedId).age()==22,"tenant-local transaction mutations");
-            check(tenantA.deleteBy(ItUser.class,ItUser_.id.eq(sharedId))==1,"tenant-local bulk delete");
+            check(tenantA.deleteBy(ItUser.class,WItUser.itUser.id.eq(sharedId))==1,"tenant-local bulk delete");
             check(tenantA.find(ItUser.class,sharedId)==null &&
                 tenantB.find(ItUser.class,sharedId)!=null,"deletion cannot cross tenants");
             ItAuditRecord generated=db.insertReturning(new ItAuditRecord(null,"created",null,null));
@@ -327,12 +327,12 @@ public final class PostgresIntegrationTest {
                 !changedAudit.updatedAt().isBefore(initialAudit.updatedAt()),
                 "PostgreSQL audit updates retain original creation date");
             check(db.updateBy(ItAuditRecord.class,Map.of("label","updated bulk"),
-                ItAuditRecord_.id.eq(generated.id()))==1,"PostgreSQL bulk @UpdatedAt stamp");
+                WItAuditRecord.itAuditRecord.id.eq(generated.id()))==1,"PostgreSQL bulk @UpdatedAt stamp");
             ItAuditRecord afterBulk=db.find(ItAuditRecord.class,generated.id());
             check(!afterBulk.updatedAt().isBefore(changedAudit.updatedAt()),
                 "PostgreSQL bulk audit auto-update");
             try {db.updateBy(ItAuditRecord.class,Map.of("createdAt",Instant.now()),
-                ItAuditRecord_.id.eq(generated.id()));
+                WItAuditRecord.itAuditRecord.id.eq(generated.id()));
                 throw new AssertionError("Creation timestamp bulk mutation accepted");
             } catch(IllegalArgumentException expected) {}
             ItAuditRecord upsertedAudit=db.upsertReturning(new ItAuditRecord(generated.id(),
@@ -448,11 +448,11 @@ public final class PostgresIntegrationTest {
             check(many.size()==2 && many.getFirst().id()!=null && !many.getFirst().id().equals(many.getLast().id()),"record UUID batch");
             AutoParentRecord root=db.insertReturning(new AutoParentRecord(null,"root",List.of(new AutoChildRecord(null,null,"child"))));
             check(root.id()!=null && root.children().getFirst().parentId().equals(root.id()) && root.children().getFirst().id()!=null,"immutable graph IDs/FK");
-            check(db.list(AutoChildRecord.class,AutoChildRecord_.parentId.eq(root.id())).size()==1,"immutable children persisted");
+            check(db.list(AutoChildRecord.class,WAutoChildRecord.autoChildRecord.parentId.eq(root.id())).size()==1,"immutable children persisted");
             check(db.find(AutoParentRecord.class,root.id()).children().size()==1,
                   "record graph JOIN returns reconstructed immutable child list");
             check(db.delete(root)==1,"record graph delete");
-            check(db.list(AutoChildRecord.class,AutoChildRecord_.parentId.eq(root.id())).isEmpty(),"record graph cascade delete");
+            check(db.list(AutoChildRecord.class,WAutoChildRecord.autoChildRecord.parentId.eq(root.id())).isEmpty(),"record graph cascade delete");
             db.insert(alice);
             check(db.find(ItUser.class,id).equals(alice),"actual database CRUD");
             UUID returningId=UUID.randomUUID();
@@ -491,17 +491,17 @@ public final class PostgresIntegrationTest {
                 "RETURNING exceeding buffered row budget rolls back the entire DML");
 
 
-            check(db.list(ItUser.class,ItUser_.name.eq("BJORM")).stream().anyMatch(x->x.id().equals(id)),"DSL binding against PostgreSQL");
-            check(db.findOne(ItUser.class,ItUser_.name.eq("BJORM")).orElseThrow().equals(alice),"findOne Optional against PostgreSQL");
-            check(db.findOne(ItUser.class,ItUser_.name.eq("missing")).isEmpty(),"findOne missing record");
-            check(db.count(ItUser.class,ItUser_.name.eq("BJORM")) == 1L, "mapped count predicate");
+            check(db.list(ItUser.class,WItUser.itUser.name.eq("BJORM")).stream().anyMatch(x->x.id().equals(id)),"DSL binding against PostgreSQL");
+            check(db.findOne(ItUser.class,WItUser.itUser.name.eq("BJORM")).orElseThrow().equals(alice),"findOne Optional against PostgreSQL");
+            check(db.findOne(ItUser.class,WItUser.itUser.name.eq("missing")).isEmpty(),"findOne missing record");
+            check(db.count(ItUser.class,WItUser.itUser.name.eq("BJORM")) == 1L, "mapped count predicate");
             check(db.count(ItUser.class,null) >= 1L, "mapped total count");
             MappedColumns mapped=db.insertReturning(new MappedColumns(null,"immutable","ignored",77,"never-persist"));
             MappedColumns columns=db.find(MappedColumns.class,mapped.id());
             check("immutable".equals(columns.readOnly()) && "server-default".equals(columns.serverValue()) &&
                 columns.localCounter()==0 && columns.localHint()==null,
                 "PostgreSQL transient and generated column metadata roundtrip");
-            try {db.updateBy(MappedColumns.class,Map.of("readOnly","mutated"),MappedColumns_.id.eq(mapped.id()));
+            try {db.updateBy(MappedColumns.class,Map.of("readOnly","mutated"),WMappedColumns.mappedColumns.id.eq(mapped.id()));
                 throw new AssertionError("read-only column updated");}
             catch(IllegalArgumentException expected) {}
             OrdinalEvent ordinal=db.insertReturning(new OrdinalEvent(null,Status.INACTIVE,"enum ordinal"));
@@ -509,16 +509,16 @@ public final class PostgresIntegrationTest {
             UUID bulkId=UUID.randomUUID();
             db.batchUpsertReturning(List.of(new ItUser(bulkId,"NativeBatch",10)));
             check(db.find(ItUser.class,bulkId).age()==10,"batchUpsertReturning inserts");
-            check(db.updateBy(ItUser.class,Map.of("age",99),ItUser_.id.eq(bulkId))==1,
+            check(db.updateBy(ItUser.class,Map.of("age",99),WItUser.itUser.id.eq(bulkId))==1,
                 "mapped updateBy parameters");
             check(db.find(ItUser.class,bulkId).age()==99,"mapped updateBy values persisted");
             db.batchDelete(List.of(new ItUser(bulkId,"NativeBatch",99)));
             check(db.find(ItUser.class,bulkId)==null,"batchDelete removes entity");
             UUID secondaryId=UUID.randomUUID();
             db.insert(new ItUser(secondaryId,"deleteBy",1));
-            check(db.deleteBy(ItUser.class,ItUser_.id.eq(secondaryId))==1 &&
+            check(db.deleteBy(ItUser.class,WItUser.itUser.id.eq(secondaryId))==1 &&
                 db.find(ItUser.class,secondaryId)==null,"predicate deleteBy");
-            try {db.deleteBy(ItProduct.class,ItProduct_.name.eq("anything"));
+            try {db.deleteBy(ItProduct.class,WItProduct.itProduct.name.eq("anything"));
                 throw new AssertionError("versioned bulk delete accepted");}
             catch(IllegalArgumentException expected) {}
             UUID secondId=UUID.randomUUID();
@@ -534,25 +534,25 @@ public final class PostgresIntegrationTest {
                 .fetch().size()==1, "mapped order with long offset");
             try {db.mappedOrder(ItUser.class,"notMapped",false);throw new AssertionError("unsafe sort property accepted");}
             catch(IllegalArgumentException expected) {}
-            var fields=db.findFields(ItUser.class,ItUser_.name.eq("BJORM"),"name","age");
+            var fields=db.findFields(ItUser.class,WItUser.itUser.name.eq("BJORM"),"name","age");
             check(fields.size()==1 && fields.getFirst().get("age").equals(34),"named Java properties return only selected columns");
-            check(db.findColumnOne(ItUser.class,"name",String.class,ItUser_.age.eq(34)).orElseThrow().equals("BJORM"),"typed scalar projection");
+            check(db.findColumnOne(ItUser.class,"name",String.class,WItUser.itUser.age.eq(34)).orElseThrow().equals("BJORM"),"typed scalar projection");
             Instant testInstant=Instant.parse("2026-11-10T10:20:30Z");
             Instant returned=db.one("SELECT CAST(? AS TIMESTAMPTZ)",
                 db.params(testInstant),
                 rs->rs.getTimestamp(1).toInstant());
             check(testInstant.equals(returned),"native BJORM Instant binder PostgreSQL TIMESTAMPTZ");
-            check(db.count(ItUser.class, ItUser_.name.eq("BJORM")) == 1L, "real PostgreSQL aggregate COUNT");
-            check(db.exists(ItUser.class, ItUser_.name.eq("BJORM")), "real PostgreSQL EXISTS with predicate");
-            check(!db.exists(ItUser.class, ItUser_.name.eq("MISSING")), "real PostgreSQL EXISTS false");
+            check(db.count(ItUser.class, WItUser.itUser.name.eq("BJORM")) == 1L, "real PostgreSQL aggregate COUNT");
+            check(db.exists(ItUser.class, WItUser.itUser.name.eq("BJORM")), "real PostgreSQL EXISTS with predicate");
+            check(!db.exists(ItUser.class, WItUser.itUser.name.eq("MISSING")), "real PostgreSQL EXISTS false");
             db.tx(tx -> {
-                check(tx.count(ItUser.class, ItUser_.name.eq("BJORM")) == 1L, "transaction COUNT");
-                check(tx.exists(ItUser.class, ItUser_.name.eq("BJORM")), "transaction EXISTS");
-                check(tx.lockOne(ItUser.class, ItUser_.name.eq("BJORM"), LockMode.UPDATE),
+                check(tx.count(ItUser.class, WItUser.itUser.name.eq("BJORM")) == 1L, "transaction COUNT");
+                check(tx.exists(ItUser.class, WItUser.itUser.name.eq("BJORM")), "transaction EXISTS");
+                check(tx.lockOne(ItUser.class, WItUser.itUser.name.eq("BJORM"), LockMode.UPDATE),
                     "PostgreSQL FOR UPDATE in transaction");
-                check(tx.lockOne(ItUser.class, ItUser_.name.eq("BJORM"), LockMode.SHARE),
+                check(tx.lockOne(ItUser.class, WItUser.itUser.name.eq("BJORM"), LockMode.SHARE),
                     "PostgreSQL FOR SHARE in transaction");
-                check(!tx.lockOne(ItUser.class, ItUser_.name.eq("MISSING"), LockMode.UPDATE),
+                check(!tx.lockOne(ItUser.class, WItUser.itUser.name.eq("MISSING"), LockMode.UPDATE),
                     "PostgreSQL lock absent row");
             });
 
@@ -561,7 +561,7 @@ public final class PostgresIntegrationTest {
             check("serializable".equalsIgnoreCase(explicitIsolation),
                 "PostgreSQL honors explicit SERIALIZABLE isolation within BJORM transaction");
             db.tx(TransactionIsolation.READ_COMMITTED,tx->
-                check(tx.count(ItUser.class,ItUser_.name.eq("BJORM"))==1L,
+                check(tx.count(ItUser.class,WItUser.itUser.name.eq("BJORM"))==1L,
                     "PostgreSQL READ COMMITTED transaction accepts mapped SQL"));
             java.util.concurrent.atomic.AtomicInteger pgReplayCount=
                 new java.util.concurrent.atomic.AtomicInteger();
@@ -579,10 +579,10 @@ public final class PostgresIntegrationTest {
                 db.find(ItUser.class,pgCommitted)!=null,
                 "PostgreSQL bounded retry rolls back first transaction and commits the second");
             try{db.tx(tx->{tx.insert(new ItUser(UUID.randomUUID(),"SHOULD_ROLLBACK",11));throw new IllegalStateException("rollback");});}catch(IllegalStateException expected){}
-            check(db.list(ItUser.class,ItUser_.name.eq("SHOULD_ROLLBACK")).isEmpty(),"real transaction rollback");
+            check(db.list(ItUser.class,WItUser.itUser.name.eq("SHOULD_ROLLBACK")).isEmpty(),"real transaction rollback");
             ItProduct product=new ItProduct(id,"Pencil",new BigDecimal("4.50"),Status.ACTIVE,0);
             db.insert(product);
-            var selectedPrice=db.findOneFields(ItProduct.class,ItProduct_.name.eq("Pencil"),"price").orElseThrow();
+            var selectedPrice=db.findOneFields(ItProduct.class,WItProduct.itProduct.name.eq("Pencil"),"price").orElseThrow();
             check(selectedPrice.get("price").equals(new BigDecimal("4.50")),"renamed @Column projects as Java property");
             check(db.select(ItProduct.class).fields("id","name").fetch().getFirst().get("name").equals("Pencil"),"DSL property selection");
             check(new ItQueries_Bjorm(db).productsByUserName("BJORM").size()==1,"compiled join against real database");
@@ -591,20 +591,20 @@ public final class PostgresIntegrationTest {
             ItDocument searchableJson=db.insertReturning(new ItDocument(null,
                 "{\"meta\":{\"status\":\"ready\"},\"flags\":{\"published\":true}}"));
             check(db.count(ItDocument.class,
-                SqlJsonPredicates.contains(ItDocument_.payload,db.dialect(),
+                SqlJsonPredicates.contains(WItDocument.itDocument.payload,db.dialect(),
                     "{\"flags\":{\"published\":true}}")
-                    .and(ItDocument_.id.eq(searchableJson.id())))==1L,
+                    .and(WItDocument.itDocument.id.eq(searchableJson.id())))==1L,
                 "PostgreSQL JSONB containment uses a bound JSON value");
             check(db.count(ItDocument.class,
-                SqlJsonPredicates.textEquals(ItDocument_.payload,db.dialect(),
+                SqlJsonPredicates.textEquals(WItDocument.itDocument.payload,db.dialect(),
                     List.of("meta","status"),"ready")
-                    .and(ItDocument_.id.eq(searchableJson.id())))==1L,
+                    .and(WItDocument.itDocument.id.eq(searchableJson.id())))==1L,
                 "PostgreSQL JSONB path extraction binds each path segment");
 
             check(db.update(product)==1,"version update");
             try{db.update(product);throw new AssertionError("stale update not detected");}catch(OptimisticLockException expected){}
             db.tx(tx->tx.batchInsert(List.of(new ItUser(UUID.randomUUID(),"Batch1",1),new ItUser(UUID.randomUUID(),"Batch2",2))));
-            check(db.list(ItUser.class,ItUser_.name.in(List.of("Batch1","Batch2"))).size()==2,"batch committed");
+            check(db.list(ItUser.class,WItUser.itUser.name.in(List.of("Batch1","Batch2"))).size()==2,"batch committed");
             ItOrderWithCustomer mixedOrder=new ItOrderWithCustomer();
             mixedOrder.setCustomerId(invoiceCustomer.id());
             mixedOrder.setDescription("Combined order");
@@ -693,7 +693,7 @@ public final class PostgresIntegrationTest {
             check(order.getId() != null && order.getId().version() == 7 && order.getId().variant() == 2, "native UUID v7 parent");
             check(line.getId() != null && line.getId().version() == 7, "native UUID v7 child");
             check(order.getId().equals(line.getOrderId()), "child FK assigned after parent ID generation");
-            check(db.list(ItOrderLine.class, ItOrderLine_.orderId.eq(order.getId())).size() == 1, "child saved within parent transaction");
+            check(db.list(ItOrderLine.class, WItOrderLine.itOrderLine.orderId.eq(order.getId())).size() == 1, "child saved within parent transaction");
             ItOrder fromJoin=db.find(ItOrder.class,order.getId());
             check(fromJoin.getLines().size()==1 && fromJoin.getNotes().size()==1, "single SQL graph JOIN loads siblings");
             check(db.find(ItOrderInner.class,order.getId()).getNotes().size()==1,
@@ -701,20 +701,20 @@ public final class PostgresIntegrationTest {
             check(db.find(ItOrderOuter.class,order.getId()).getLines().size()==1,
                 "@Children RIGHT/FULL JOIN on PostgreSQL");
             var explicit=db.select(ItOrder.class).as("o")
-                .join(ItOrderLine.class,"l").on(ItOrder_.id.as("o").sameAs(ItOrderLine_.orderId.as("l")))
+                .join(ItOrderLine.class,"l").on(WItOrder.itOrder.as("o").id.sameAs(WItOrderLine.itOrderLine.as("l").orderId))
                 .fetch();
             check(explicit.size()==1 && explicit.getFirst().getNotes().size()==1,
                 "explicit JOIN with eager children in one SQL");
             check(db.select(ItUser.class).as("u").fullJoin(ItProduct.class,"p")
-                .on(ItUser_.id.as("u").sameAs(ItProduct_.id.as("p"))).fetch().size()>=1,
+                .on(WItUser.itUser.as("u").id.sameAs(WItProduct.itProduct.as("p").id)).fetch().size()>=1,
                 "real PostgreSQL FULL OUTER JOIN");
             check(fromJoin.getLines().getFirst().getId().equals(line.getId()) &&
                   fromJoin.getNotes().getFirst().getId().equals(note.getId()), "joined children mapped without duplicates");
-            check(db.select(ItOrder.class).orderBy(ItOrder_.description.asc()).limit(1).fetch().getFirst().getNotes().size()==1,
+            check(db.select(ItOrder.class).orderBy(WItOrder.itOrder.description.asc()).limit(1).fetch().getFirst().getNotes().size()==1,
                   "paginated graph joins children AFTER paging root");
-            check(db.list(ItOrder.class,ItOrder_.description.eq("First order")).getFirst().getNotes().size()==1,
+            check(db.list(ItOrder.class,WItOrder.itOrder.description.eq("First order")).getFirst().getNotes().size()==1,
                   "list loads child graphs eagerly");
-            check(db.findOne(ItOrder.class,ItOrder_.description.eq("First order")).orElseThrow().getLines().size()==1,
+            check(db.findOne(ItOrder.class,WItOrder.itOrder.description.eq("First order")).orElseThrow().getLines().size()==1,
                   "first loads child graphs eagerly");
             order.setDescription("Updated order");
             line.setSku("SKU-2");
@@ -723,8 +723,8 @@ public final class PostgresIntegrationTest {
             check(db.find(ItOrderLine.class, line.getId()).getSku().equals("SKU-2"), "upsert updates child");
             // The loaded parent has no in-memory child collection. Deletion discovers children in the DB.
             check(db.delete(db.find(ItOrder.class, order.getId())) == 1, "delete parent graph");
-            check(db.list(ItOrderLine.class, ItOrderLine_.orderId.eq(order.getId())).isEmpty(), "cascade deletion from DB, not in-memory list");
-            check(db.list(ItOrderNote.class,ItOrderNote_.orderId.eq(order.getId())).isEmpty(), "versioned child cascade deletion");
+            check(db.list(ItOrderLine.class, WItOrderLine.itOrderLine.orderId.eq(order.getId())).isEmpty(), "cascade deletion from DB, not in-memory list");
+            check(db.list(ItOrderNote.class,WItOrderNote.itOrderNote.orderId.eq(order.getId())).isEmpty(), "versioned child cascade deletion");
             ItOrder bad = new ItOrder();
             bad.setDescription("Must roll back");
             ItOrderLine conflict = new ItOrderLine();
@@ -733,7 +733,7 @@ public final class PostgresIntegrationTest {
             bad.getLines().add(conflict);
             try { db.insert(bad); throw new AssertionError("Expected foreign key rejection"); }
             catch(IllegalArgumentException expected) { }
-            check(db.list(ItOrder.class, ItOrder_.description.eq("Must roll back")).isEmpty(), "cascade insert failure rolled back root");
+            check(db.list(ItOrder.class, WItOrder.itOrder.description.eq("Must roll back")).isEmpty(), "cascade insert failure rolled back root");
             ItUser nestedUser=db.insertReturning(new ItUser(null,"Nested child customer PostgreSQL",29));
             ItOrderWithNestedReference nestedOrder=db.insertReturning(
                 new ItOrderWithNestedReference(UUID.randomUUID(),"nested to-one PostgreSQL",null,
@@ -745,7 +745,7 @@ public final class PostgresIntegrationTest {
             });
             ItOrderWithNestedReference nestedLoaded=observedNested
                 .select(ItOrderWithNestedReference.class)
-                .where(ItOrderWithNestedReference_.id.eq(nestedOrder.id()))
+                .where(WItOrderWithNestedReference.itOrderWithNestedReference.id.eq(nestedOrder.id()))
                 .limit(1).fetch().getFirst();
             check(nestedLoaded.lines().size()==2 &&
                 nestedLoaded.lines().stream().anyMatch(item->
@@ -770,17 +770,17 @@ public final class PostgresIntegrationTest {
                 }
                 for(LockMode mode:List.of(LockMode.UPDATE_SKIP_LOCKED,LockMode.SHARE_SKIP_LOCKED)) {
                     List<ItUser> rows=db.txResult(tx->tx.lockRows(ItUser.class,
-                        ItUser_.id.eq(invoiceCustomer.id()),mode,1));
+                        WItUser.itUser.id.eq(invoiceCustomer.id()),mode,1));
                     check(rows.isEmpty(),"PostgreSQL "+mode+" lockRows must skip a row held by another transaction");
                 }
                 for(LockMode mode:List.of(LockMode.UPDATE_SKIP_LOCKED,LockMode.SHARE_SKIP_LOCKED)) {
                     boolean selected=db.txResult(tx->
-                        tx.lockOne(ItUser.class,ItUser_.id.eq(invoiceCustomer.id()),mode));
+                        tx.lockOne(ItUser.class,WItUser.itUser.id.eq(invoiceCustomer.id()),mode));
                     check(!selected,"PostgreSQL "+mode+" must skip an exclusively locked row");
                 }
                 for(LockMode mode:List.of(LockMode.UPDATE_NOWAIT,LockMode.SHARE_NOWAIT)) {
                     try {
-                        db.tx(tx->tx.lockOne(ItUser.class,ItUser_.id.eq(invoiceCustomer.id()),mode));
+                        db.tx(tx->tx.lockOne(ItUser.class,WItUser.itUser.id.eq(invoiceCustomer.id()),mode));
                         throw new AssertionError("PostgreSQL NOWAIT unexpectedly acquired a blocked row");
                     } catch(BjormException refused) {
                         Throwable error=refused.getCause();
@@ -792,11 +792,11 @@ public final class PostgresIntegrationTest {
             }
             db.tx(tx->{
                 List<ItUser> rows=tx.lockRows(ItUser.class,
-                    ItUser_.id.eq(invoiceCustomer.id()),LockMode.UPDATE_SKIP_LOCKED,1);
+                    WItUser.itUser.id.eq(invoiceCustomer.id()),LockMode.UPDATE_SKIP_LOCKED,1);
                 check(rows.size()==1 && invoiceCustomer.id().equals(rows.getFirst().id()),
                     "PostgreSQL lockRows must return bounded, primary-key-ordered mapped rows");
                 try {
-                    tx.lockRows(ItUser.class,ItUser_.id.eq(invoiceCustomer.id()),LockMode.UPDATE,0);
+                    tx.lockRows(ItUser.class,WItUser.itUser.id.eq(invoiceCustomer.id()),LockMode.UPDATE,0);
                     throw new AssertionError("lockRows accepted zero row limit");
                 } catch(IllegalArgumentException expected) {}
             });
