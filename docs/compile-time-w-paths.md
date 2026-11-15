@@ -101,3 +101,14 @@ In tenant-required mode, compiled `@Query` methods still use native SQL.
 They require an explicitly authorized, tenant-scoped context with
 `permitReviewedTenantNativeSql()` and database permissions that prevent
 cross-tenant access. SQL compilation alone does not constitute authorization.
+
+
+## Root-only reads for expensive entity graphs
+
+Mapped `@Children` and `@ManyToOne` relations are eagerly hydrated by default.
+When only root columns are required, use `.withoutRelations()` on a typed
+`Select<T>`: `WOrder.find(db).withoutRelations().where(WOrder.order.id.eq(id)).fetch()`.
+This uses one flat SELECT and skips graph `JOIN`/`UNION ALL` expansion.
+The returned entity's relation properties are not hydrated; avoid depending
+on them until explicitly fetched. Root-only selections also support
+`withStream`, whose cursor must be consumed inside its callback.

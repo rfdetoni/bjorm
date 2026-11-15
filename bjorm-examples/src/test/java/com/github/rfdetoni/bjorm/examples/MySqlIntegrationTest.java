@@ -565,6 +565,11 @@ public final class MySqlIntegrationTest {
             db.insert(parent);
             ItOrder loaded=db.find(ItOrder.class,parent.getId());
             check(loaded!=null&&loaded.getLines().size()==1,"MySQL automatic relation JOIN");
+            ItOrder rootOnly=db.select(ItOrder.class)
+                .where(WItOrder.itOrder.id.eq(parent.getId()))
+                .withoutRelations().fetch().getFirst();
+            check(rootOnly.getLines().isEmpty() && rootOnly.getNotes().isEmpty(),
+                  "MySQL root-only query skips child hydration");
             db.delete(parent);
             check(db.find(ItOrder.class,parent.getId())==null,"MySQL cascade delete");
             ItUser nestedUser=db.insertReturning(new ItUser(null,"Nested child customer MySQL",29));

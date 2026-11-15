@@ -518,7 +518,7 @@ public final class Bjorm implements Operations {
         return mapper(entity.getClass()).id(entity);
     }
     public <T> List<T> list(Select<T> query) {return withConnection(c->list(c,query));}
-    public <T> Optional<T> first(Select<T> query) {query.limit(1);return withConnection(c->{if(!mapper(query.type()).children().isEmpty() || !mapper(query.type()).parents().isEmpty()){List<T> values=list(c,query);return values.stream().findFirst();}return first(c,query,null,mapper(query.type()));});}
+    public <T> Optional<T> first(Select<T> query) {query.limit(1);return withConnection(c->{if(query.hydrateRelations() && (!mapper(query.type()).children().isEmpty() || !mapper(query.type()).parents().isEmpty())){List<T> values=list(c,query);return values.stream().findFirst();}return first(c,query,null,mapper(query.type()));});}
     public <T> List<Map<String,Object>> fieldRows(Select<T> query,String[] properties) {
         return withConnection(c->{EntityMapper<T> m=mapper(query.type());return project(c,query,properties,rowProperties(m,properties));});
     }
@@ -986,7 +986,7 @@ public final class Bjorm implements Operations {
     }
     private <T> List<T> list(Connection c,Select<T> query) throws SQLException {
         EntityMapper<T> m=mapper(query.type());
-        if (!m.children().isEmpty() || !m.parents().isEmpty()) {
+        if (query.hydrateRelations() && (!m.children().isEmpty() || !m.parents().isEmpty())) {
             ArrayList<T> rows=new ArrayList<>();
             if(!m.children().isEmpty())readGraph(c,query,rows::add,true);
             else readParents(c,query,rows::add,true);
@@ -1462,8 +1462,8 @@ public final class Bjorm implements Operations {
     private <T> void forEach(Connection c,Select<T> query,Consumer<T> consumer) throws SQLException {
         Objects.requireNonNull(consumer);
         EntityMapper<T> m=mapper(query.type());
-        if (!m.children().isEmpty()) {readGraph(c,query,consumer,false);return;}
-        if (!m.parents().isEmpty()) {readParents(c,query,consumer,false);return;}
+        if (query.hydrateRelations() && !m.children().isEmpty()) {readGraph(c,query,consumer,false);return;}
+        if (query.hydrateRelations() && !m.parents().isEmpty()) {readParents(c,query,consumer,false);return;}
         try(PreparedStatement ps=prepareRead(c,query.sql(m,type->mapper(type),dialect))) {
             query.bind(ps,dialect);
             try(ResultSet rs=executeQueryObserved(ps)){while(rs.next())consumer.accept(m.read(rs));}
@@ -1479,8 +1479,8 @@ public final class Bjorm implements Operations {
         Objects.requireNonNull(query,"query");
         Objects.requireNonNull(work,"work");
         EntityMapper<T> mapper=mapper(query.type());
-        if(!mapper.children().isEmpty() || !mapper.parents().isEmpty())
-            throw new UnsupportedOperationException("Stream cursor supports flat entities only; use forEach for graphs");
+        if(query.hydrateRelations() && (!mapper.children().isEmpty() || !mapper.parents().isEmpty()))
+            throw new UnsupportedOperationException("Stream cursor supports flat entities only; call withoutRelations() or use forEach for graphs");
         String sql=query.sql(mapper,type->mapper(type),dialect);
         Thread owner=Thread.currentThread();
         try(PreparedStatement ps=prepareRead(c,sql)) {
@@ -1635,7 +1635,7 @@ public final class Bjorm implements Operations {
             return useWrite(c->Bjorm.this.lockRows(c,type,where,mode,limit));
         }
         public <T> List<T> list(Select<T> query) {return use(c->Bjorm.this.list(c,query));}
-        public <T> Optional<T> first(Select<T> query) {query.limit(1);return use(c->{if(!mapper(query.type()).children().isEmpty() || !mapper(query.type()).parents().isEmpty()){List<T> values=Bjorm.this.list(c,query);return values.stream().findFirst();}return Bjorm.this.first(c,query,null,mapper(query.type()));});}
+        public <T> Optional<T> first(Select<T> query) {query.limit(1);return use(c->{if(query.hydrateRelations() && (!mapper(query.type()).children().isEmpty() || !mapper(query.type()).parents().isEmpty())){List<T> values=Bjorm.this.list(c,query);return values.stream().findFirst();}return Bjorm.this.first(c,query,null,mapper(query.type()));});}
         public <T> List<Map<String,Object>> fieldRows(Select<T> query,String[] properties) {
             return use(c->{EntityMapper<T> m=mapper(query.type());return Bjorm.this.project(c,query,properties,rowProperties(m,properties));});
         }

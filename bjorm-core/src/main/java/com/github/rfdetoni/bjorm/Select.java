@@ -28,6 +28,7 @@ public final class Select<T> {
     private final List<SqlOrder> orders=new ArrayList<>();
     private Integer limit;
     private Long offset;
+    private boolean hydrateRelations = true;
     Select(Operations db,Class<T> type){this.db=Objects.requireNonNull(db);this.type=Objects.requireNonNull(type);}
     public Select<T> as(String value){this.alias=SqlAliases.explicit(value);return this;}
     public JoinOnStep<T> join(Class<?> type,String alias) {return new JoinOnStep<>(this,type,alias,JoinType.INNER);}
@@ -93,6 +94,9 @@ public final class Select<T> {
     public Select<T> orderBy(SqlOrder... values){orders.addAll(Arrays.asList(values));return this;}
     public Select<T> limit(int value){if(value<1)throw new IllegalArgumentException("limit must be positive");limit=value;return this;}
     public Select<T> offset(long value){if(value<0)throw new IllegalArgumentException("offset must be non-negative");offset=value;return this;}
+    /** Explicit root-only query: no @Children or @ManyToOne eager hydration. */
+    public Select<T> withoutRelations(){hydrateRelations=false;return this;}
+    boolean hydrateRelations(){return hydrateRelations;}
     public List<T> fetch(){return db.list(this);}
     /** Restrict SELECT to named Java properties. Does not materialize a partial entity. */
     public FieldSelect<T> fields(String... properties){return new FieldSelect<>(this, properties);}

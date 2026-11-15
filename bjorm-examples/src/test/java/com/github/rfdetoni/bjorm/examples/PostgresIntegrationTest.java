@@ -696,6 +696,17 @@ public final class PostgresIntegrationTest {
             check(db.list(ItOrderLine.class, WItOrderLine.itOrderLine.orderId.eq(order.getId())).size() == 1, "child saved within parent transaction");
             ItOrder fromJoin=db.find(ItOrder.class,order.getId());
             check(fromJoin.getLines().size()==1 && fromJoin.getNotes().size()==1, "single SQL graph JOIN loads siblings");
+            ItOrder rootOnly=db.select(ItOrder.class)
+                .where(WItOrder.itOrder.id.eq(order.getId()))
+                .withoutRelations().fetch().getFirst();
+            check(rootOnly.getId().equals(order.getId()) &&
+                  rootOnly.getLines().isEmpty() && rootOnly.getNotes().isEmpty(),
+                  "root-only query must not hydrate @Children");
+            var streamedRoot=db.withStream(db.select(ItOrder.class)
+                .where(WItOrder.itOrder.id.eq(order.getId()))
+                .withoutRelations(), rows -> rows.findFirst());
+            check(streamedRoot.isPresent() && streamedRoot.get().getLines().isEmpty(),
+                  "root-only graph entity may use a bounded JDBC streaming cursor");
             check(db.find(ItOrderInner.class,order.getId()).getNotes().size()==1,
                 "@Children INNER JOIN on PostgreSQL");
             check(db.find(ItOrderOuter.class,order.getId()).getLines().size()==1,
