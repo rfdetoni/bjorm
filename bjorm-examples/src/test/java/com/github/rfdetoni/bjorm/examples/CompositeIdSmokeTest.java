@@ -21,7 +21,7 @@ public final class CompositeIdSmokeTest {
             "UPDATE does not modify either key component");
         check(mapper.isIdProperty("tenantId")&&mapper.isIdProperty("sku") &&
             !mapper.isIdProperty("label"),"bulk write guards both key parts");
-        check(ItCompositeRecord_.tenantId!=null&&ItCompositeRecord_.sku!=null,
+        check(WItCompositeRecord.itCompositeRecord.tenantId!=null&&WItCompositeRecord.itCompositeRecord.sku!=null,
             "typed predicate DSL for both key components");
         check(ItCompositeRecord_BjormMapper.INSTANCE.idProperties().equals(
             java.util.List.of("tenantId","sku")),"ordered composite key metadata");
